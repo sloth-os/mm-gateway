@@ -41,21 +41,32 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Import check (every provider module imports)
+        # Import each provider adapter module (which transitively imports its
+        # upstream SDK) plus the gateway's own core deps. A backend whose SDK
+        # fails to install/import here is also unimportable in the built image,
+        # so the registry would skip it at runtime — catch that now rather than
+        # in the e2e. Iterates the providers package dynamically so a new
+        # provider module is covered without touching this list.
         run: |
           python - <<'PY'
-          import importlib
-          mods = ["openai", "google.genai", "dashscope", "stability_sdk",
-                  "volcengine", "xai_sdk", "runapi_flux_2", "openrouter",
-                  "mcp", "fastapi", "uvicorn", "httpx"]
+          import importlib, pkgutil
+          import mm_gateway.providers as pkg
           missing = []
-          for m in mods:
+          for mod in pkgutil.iter_modules(pkg.__path__):
+              if mod.name.startswith("_"):
+                  continue
               try:
-                  importlib.import_module(m)
+                  importlib.import_module(f"{pkg.__name__}.{mod.name}")
               except Exception as exc:  # noqa: BLE001
-                  missing.append(f"{m}: {exc}")
+                  missing.append(f"provider {mod.name}: {exc}")
+          for core in ("fastapi", "uvicorn", "httpx", "yaml", "mcp"):
+              try:
+                  importlib.import_module(core)
+              except Exception as exc:  # noqa: BLE001
+                  missing.append(f"{core}: {exc}")
           if missing:
               raise SystemExit("missing/failed imports:\n" + "\n".join(missing))
-          print("all provider/import check modules OK")
+          print("all provider + core import check modules OK")
           PY
 
       - name: Run unit tests
