@@ -11,7 +11,6 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from mm_gateway.config import ProviderCredentials
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.logging import get_logger
@@ -34,13 +33,13 @@ class OpenRouterProvider(ImageProvider, VideoProvider):
     image_models = []  # OpenRouter's catalogue is dynamic; resolved at request time.
     video_models = []
 
-    def __init__(self, credentials: ProviderCredentials):
-        super().__init__(credentials)
-        if not credentials.api_key:
+    def __init__(self, backend):
+        super().__init__(backend)
+        if not backend.api_key:
             raise ProviderNotConfiguredError("openrouter")
         self._client = make_client(
-            credentials.base_url or _BASE, timeout=120,
-            headers={"Authorization": f"Bearer {credentials.api_key}"},
+            backend.base_url or _BASE, timeout=120,
+            headers={"Authorization": f"Bearer {backend.api_key}"},
         )
 
     async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
@@ -114,10 +113,11 @@ def _image_body(request: UnifiedImageRequest) -> dict[str, Any]:
 
 def _video_body(request: UnifiedVideoRequest) -> dict[str, Any]:
     body: dict[str, Any] = {"model": request.model}
-    if request.prompt:
-        body["prompt"] = request.prompt
-    if request.aspect_ratio:
-        body["aspect_ratio"] = request.aspect_ratio
+    prompt = request.prompt()
+    if prompt:
+        body["prompt"] = prompt
+    if request.ratio:
+        body["aspect_ratio"] = request.ratio
     if request.resolution:
         body["resolution"] = request.resolution
     if request.size:
@@ -131,11 +131,18 @@ def _video_body(request: UnifiedVideoRequest) -> dict[str, Any]:
     if request.callback_url:
         body["callback_url"] = request.callback_url
     frames: list[dict[str, Any]] = []
-    if request.image:
-        frames.append({"type": "image_url", "image_url": {"url": request.image}, "frame_type": "first_frame"})
-    if request.last_frame_image:
-        frames.append({"type": "image_url", "image_url": {"url": request.last_frame_image}, "frame_type": "last_frame"})
+    first = request.first_image()
+    if first:
+        frames.append({"type": "image_url", "image_url": {"url": first}, "frame_type": "first_frame"})
+    last = request.last_image()
+    if last:
+        frames.append({"type": "image_url", "image_url": {"url": last}, "frame_type": "last_frame"})
     if frames:
         body["frame_images"] = frames
+    refs = request.reference_images()
+    if refs:
+        body["input_references"] = [
+            {"type": "image_url", "image_url": {"url": u}} for u in refs
+        ]
     body.update(request.extra)
     return body

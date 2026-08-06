@@ -9,7 +9,6 @@ import dashscope
 from dashscope.aigc.image_synthesis import AioImageSynthesis
 from dashscope.aigc.video_synthesis import AioVideoSynthesis
 
-from mm_gateway.config import ProviderCredentials
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
 from mm_gateway.observability.logging import get_logger
@@ -29,13 +28,13 @@ class DashScopeProvider(ImageProvider, VideoProvider):
     image_models = ["wanx2.1-t2i-turbo", "wanx2.1-t2i-plus", "wanx2.1-t2i-flash"]
     video_models = ["wanx2.1-t2v-turbo", "wanx2.1-i2v-turbo", "wanx2.1-t2v-plus", "wanx2.1-i2v-plus"]
 
-    def __init__(self, credentials: ProviderCredentials):
-        super().__init__(credentials)
-        if not credentials.api_key:
+    def __init__(self, backend):
+        super().__init__(backend)
+        if not backend.api_key:
             raise ProviderNotConfiguredError("dashscope")
-        dashscope.api_key = credentials.api_key
-        if credentials.base_url:
-            dashscope.base_http_api_url = credentials.base_url
+        dashscope.api_key = backend.api_key
+        if backend.base_url:
+            dashscope.base_http_api_url = backend.base_url
 
     async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt}
@@ -69,19 +68,19 @@ class DashScopeProvider(ImageProvider, VideoProvider):
         )
 
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
-        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt or ""}
+        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
         if request.size:
             kwargs["size"] = request.size.replace("x", "*")
-        if request.aspect_ratio:
-            kwargs["ratio"] = request.aspect_ratio
+        if request.ratio:
+            kwargs["ratio"] = request.ratio
         if request.duration is not None:
             kwargs["duration"] = int(request.duration)
         if request.seed is not None:
             kwargs["seed"] = request.seed
         if request.prompt_extend is not None:
             kwargs["prompt_extend"] = request.prompt_extend
-        if request.image:
-            kwargs["img_url"] = request.image
+        if request.first_image():
+            kwargs["img_url"] = request.first_image()
         kwargs.update(request.extra)
 
         try:

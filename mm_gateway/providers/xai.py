@@ -7,7 +7,6 @@ from typing import Any
 
 from xai_sdk import AsyncClient
 
-from mm_gateway.config import ProviderCredentials
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.logging import get_logger
@@ -22,12 +21,12 @@ class XAIProvider(ImageProvider, VideoProvider):
     image_models = ["grok-imagine-image", "grok-imagine-image-pro", "grok-imagine-image-quality"]
     video_models = ["grok-imagine-video", "grok-imagine-video-1.5-preview"]
 
-    def __init__(self, credentials: ProviderCredentials):
-        super().__init__(credentials)
-        if not credentials.api_key:
+    def __init__(self, backend):
+        super().__init__(backend)
+        if not backend.api_key:
             raise ProviderNotConfiguredError("xai")
         # The SDK reads XAI_API_KEY; we pass it explicitly for determinism.
-        self._client = AsyncClient(api_key=credentials.api_key)
+        self._client = AsyncClient(api_key=backend.api_key)
 
     async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         kwargs: dict[str, Any] = {"prompt": request.prompt, "model": request.model}
@@ -57,17 +56,17 @@ class XAIProvider(ImageProvider, VideoProvider):
         )
 
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
-        kwargs: dict[str, Any] = {"prompt": request.prompt or "", "model": request.model}
+        kwargs: dict[str, Any] = {"prompt": request.prompt() or "", "model": request.model}
         if request.duration is not None:
             kwargs["duration"] = int(request.duration)
-        if request.aspect_ratio:
-            kwargs["aspect_ratio"] = request.aspect_ratio
+        if request.ratio:
+            kwargs["aspect_ratio"] = request.ratio
         if request.resolution:
             kwargs["resolution"] = request.resolution
-        if request.image:
-            kwargs["image_url"] = request.image
-        if request.reference_images:
-            kwargs["reference_image_urls"] = request.reference_images
+        if request.first_image():
+            kwargs["image_url"] = request.first_image()
+        if request.reference_images():
+            kwargs["reference_image_urls"] = request.reference_images()
         kwargs.update(request.extra)
 
         try:

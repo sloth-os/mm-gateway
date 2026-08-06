@@ -28,10 +28,10 @@ def test_seedance_request_text_and_first_frame():
         "duration": 5,
         "ratio": "16:9",
     })
-    assert unified.prompt == "a cat playing"
-    assert unified.image == "https://x.test/first.png"
+    assert unified.prompt() == "a cat playing"
+    assert unified.first_image() == "https://x.test/first.png"
     assert unified.duration == 5
-    assert unified.aspect_ratio == "16:9"
+    assert unified.ratio == "16:9"
 
 
 def test_seedance_request_last_frame_role():
@@ -40,7 +40,12 @@ def test_seedance_request_last_frame_role():
             {"type": "image_url", "image_url": {"url": "https://x.test/last.png"}, "role": "last_frame"},
         ],
     })
-    assert unified.last_frame_image == "https://x.test/last.png"
+    assert unified.last_image() == "https://x.test/last.png"
+
+
+def test_seedance_aspect_ratio_maps_to_ratio():
+    unified = seedance_compat.from_seedance({"model": "m", "aspect_ratio": "9:16"})
+    assert unified.ratio == "9:16"
 
 
 def test_seedance_create_response_is_just_id():
@@ -60,7 +65,7 @@ def test_seedance_task_response_has_content():
 def test_openrouter_request_known_fields():
     unified = openrouter_compat.from_openrouter({"model": "m", "prompt": "x", "duration": 4, "aspect_ratio": "1:1"})
     assert unified.duration == 4
-    assert unified.aspect_ratio == "1:1"
+    assert unified.ratio == "1:1"
 
 
 def test_openrouter_request_frame_images():
@@ -71,8 +76,8 @@ def test_openrouter_request_frame_images():
             {"image_url": {"url": "https://x.test/b.png"}, "frame_type": "last_frame"},
         ],
     })
-    assert unified.image == "https://x.test/a.png"
-    assert unified.last_frame_image == "https://x.test/b.png"
+    assert unified.first_image() == "https://x.test/a.png"
+    assert unified.last_image() == "https://x.test/b.png"
 
 
 def test_openrouter_response_polling_url_and_unsigned():

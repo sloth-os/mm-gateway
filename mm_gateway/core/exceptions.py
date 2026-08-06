@@ -101,3 +101,17 @@ class TaskNotFoundError(GatewayError):
 class TaskFailedError(GatewayError):
     status_code = 422
     code = "task_failed"
+
+
+class UnauthorizedError(GatewayError):
+    """No or unknown API key presented on a request that requires auth."""
+
+    status_code = 401
+    code = "unauthorized"
+
+
+class ForbiddenError(GatewayError):
+    """The authenticated key is not allowed to use the requested backend/model."""
+
+    status_code = 403
+    code = "forbidden"

@@ -77,6 +77,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(image_routes.router)
     app.include_router(video_routes.router)
 
+    # Optionally mount the HTTP MCP endpoint (no-op when mcp_enabled is false).
+    from mm_gateway.server.mcp import mount_mcp
+    mount_mcp(app, settings)
+
     return app
 
 

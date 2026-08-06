@@ -26,6 +26,8 @@ dependencies = [
     "openrouter>=1.0",
     "pillow>=10.0",
     "structlog>=24.1",
+    "pyyaml>=6.0",
+    "mcp>=2.0",
 ]
 
 [project.optional-dependencies]

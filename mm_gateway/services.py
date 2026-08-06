@@ -2,10 +2,10 @@
 
 This is the seam between the HTTP front-end and the provider back-end. Routes
 hand it a unified request (already translated from whichever front-end shape
-arrived); the service resolves the provider via the registry, calls it, and
-returns a unified response. Keeping this logic out of the route handler keeps
-the route testable (just translator + service) and lets a CLI or worker reuse
-the same path.
+arrived); the service resolves the backend via the registry (scoped to the
+authenticated key), calls it, and returns a unified response. Keeping this
+logic out of the route handler keeps the route testable and lets a CLI or
+worker reuse the same path.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from mm_gateway.config import KeyConfig
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import GatewayError, TaskFailedError
 from mm_gateway.observability.logging import get_logger
@@ -28,26 +29,33 @@ class ImageService:
     def __init__(self, registry: Registry):
         self.registry = registry
 
-    async def generate(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
-        provider_obj, real_model = self.registry.resolve(
-            request.model, request.provider, modality="image"
+    async def generate(
+        self,
+        request: UnifiedImageRequest,
+        *,
+        key: KeyConfig | None = None,
+        tag: str | None = None,
+        backend_name: str | None = None,
+    ) -> UnifiedImageResponse:
+        provider_obj, real_model, backend = self.registry.resolve(
+            request.model, key, modality="image", tag=tag, backend_name=backend_name
         )
         if not isinstance(provider_obj, ImageProvider):
             raise GatewayError(
-                f"Provider '{provider_obj.name}' does not support image generation.",
+                f"Backend '{backend}' does not support image generation.",
                 code="unsupported_feature", status_code=400,
             )
-        routed = request.model_copy(update={"model": real_model, "provider": provider_obj.name})
-        with timed(provider_obj.name, "image"):
+        routed = request.model_copy(update={"model": real_model, "provider": backend})
+        with timed(backend, "image"):
             try:
                 resp = await provider_obj.generate_image(routed)
             except GatewayError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                raise GatewayError(f"image generation failed: {exc}", provider=provider_obj.name,
+                raise GatewayError(f"image generation failed: {exc}", provider=backend,
                                    code="provider_error", status_code=502) from exc
         if not resp.data:
-            raise GatewayError("provider returned no images", provider=provider_obj.name,
+            raise GatewayError("provider returned no images", provider=backend,
                                code="provider_error", status_code=502)
         return resp
 
@@ -60,30 +68,40 @@ class VideoService:
         self.poll_interval = poll_interval
         self.sync_default = sync_default
 
-    async def create(self, request: UnifiedVideoRequest, *, wait: bool | None = None) -> UnifiedVideoTask:
-        provider_obj, real_model = self.registry.resolve(
-            request.model, request.provider, modality="video"
+    async def create(
+        self,
+        request: UnifiedVideoRequest,
+        *,
+        wait: bool | None = None,
+        key: KeyConfig | None = None,
+        tag: str | None = None,
+        backend_name: str | None = None,
+    ) -> UnifiedVideoTask:
+        provider_obj, real_model, backend = self.registry.resolve(
+            request.model, key, modality="video", tag=tag, backend_name=backend_name
         )
         if not isinstance(provider_obj, VideoProvider):
             raise GatewayError(
-                f"Provider '{provider_obj.name}' does not support video generation.",
+                f"Backend '{backend}' does not support video generation.",
                 code="unsupported_feature", status_code=400,
             )
-        routed = request.model_copy(update={"model": real_model, "provider": provider_obj.name})
-        with timed(provider_obj.name, "video"):
+        routed = request.model_copy(update={"model": real_model, "provider": backend})
+        with timed(backend, "video"):
             try:
                 task = await provider_obj.create_video_task(routed)
             except GatewayError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                raise GatewayError(f"video create failed: {exc}", provider=provider_obj.name,
+                raise GatewayError(f"video create failed: {exc}", provider=backend,
                                    code="provider_error", status_code=502) from exc
+        # Stamp the owning backend so the poll route can route correctly.
+        task.provider = backend
         if (wait if wait is not None else self.sync_default):
             task = await self._await_or_timeout(provider_obj, task)
         return task
 
-    async def get(self, task_id: str, provider_name: str | None = None) -> UnifiedVideoTask:
-        provider_obj = self._find_provider_for(task_id, provider_name)
+    async def get(self, task_id: str, backend_name: str | None = None) -> UnifiedVideoTask:
+        provider_obj = self._find_provider_for(task_id, backend_name)
         with timed(provider_obj.name, "video"):
             try:
                 task = await provider_obj.get_video_task(task_id)
@@ -107,15 +125,10 @@ class VideoService:
         log.info("video_sync_wait_timeout", task_id=task.task_id, provider=provider.name)
         return task
 
-    def _find_provider_for(self, task_id: str, provider_name: str | None) -> VideoProvider:
-        if provider_name:
-            return self.registry.video_provider(provider_name)
-        # Without a hint, try each configured video provider. Task ids are
-        # opaque, so a real deployment would record the provider when the task
-        # is created (see tasks/store.py). For the single-process case we accept
-        # the provider explicitly via the ?provider= query or the X-Provider header.
+    def _find_provider_for(self, task_id: str, backend_name: str | None) -> VideoProvider:
+        if backend_name:
+            return self.registry.video_provider(backend_name)
         providers = [p for p in self.registry.providers.values() if isinstance(p, VideoProvider)]
         if len(providers) == 1:
             return providers[0]
-        # Fall back to the default video provider if exactly one is configured.
         return self.registry.video_provider(self.registry.settings.default_video_provider)

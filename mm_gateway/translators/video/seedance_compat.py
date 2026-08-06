@@ -1,9 +1,11 @@
 """Seedance-compatible video translator.
 
-Maps the Volcengine Ark ``/contents/generations/tasks`` (Seedance) shape to/from
-the unified video schema. The create body uses a ``content`` array of typed
-parts (text / image_url with a role), and a flat ``parameters``-ish set of
-fields (duration, resolution, ratio, camera_fixed, seed, watermark).
+The unified video schema **is** the Seedance (Volcengine Ark
+``/contents/generations/tasks``) shape: a ``content`` array of typed parts
+(text / image_url with a role / video_url / audio_url / draft_task) plus a flat
+set of generation knobs. So the request translator is essentially a passthrough
+into ``UnifiedVideoRequest(content=[...], ratio=..., ...)``, and the response
+translators map the unified task back to the Seedance create/poll envelopes.
 """
 
 from __future__ import annotations
@@ -11,78 +13,67 @@ from __future__ import annotations
 from typing import Any
 
 from mm_gateway.core.exceptions import ValidationError
-from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
+from mm_gateway.schemas.video import (
+    UnifiedVideoRequest,
+    UnifiedVideoTask,
+    audio_part,
+    draft_part,
+    image_part,
+    text_part,
+    video_part,
+)
+
+# Top-level fields the unified model owns; everything else -> extra.
+_KNOWN = {
+    "model", "content", "negative_prompt", "duration", "ratio", "resolution",
+    "size", "width", "height", "fps", "seed", "generate_audio", "camera_fixed",
+    "watermark", "prompt_extend", "callback_url", "return_last_frame",
+}
 
 
 def from_seedance(body: dict[str, Any]) -> UnifiedVideoRequest:
     if "model" not in body:
         raise ValidationError("`model` is required for video generation.")
-    prompt = None
-    image = None
-    last_frame = None
-    reference_images: list[str] = []
-    reference_videos: list[str] = []
-    reference_audios: list[str] = []
+    kwargs: dict[str, Any] = {"model": body["model"]}
+
+    # Build typed content parts from the raw content array (if present).
+    parts = []
     for part in body.get("content") or []:
         ptype = part.get("type")
         if ptype == "text":
-            prompt = part.get("text")
+            parts.append(text_part(part.get("text") or ""))
         elif ptype == "image_url":
             url = (part.get("image_url") or {}).get("url")
-            role = part.get("role")
-            if role == "last_frame":
-                last_frame = url
-            elif role == "reference_image" and url:
-                reference_images.append(url)
-            else:
-                # "first_frame" (or unspecified) — the leading input frame.
-                image = url
+            if url:
+                parts.append(image_part(url, part.get("role") or "first_frame"))
         elif ptype == "video_url":
             url = (part.get("video_url") or {}).get("url")
             if url:
-                reference_videos.append(url)
+                parts.append(video_part(url, part.get("role") or "reference_video"))
         elif ptype == "audio_url":
             url = (part.get("audio_url") or {}).get("url")
             if url:
-                reference_audios.append(url)
+                parts.append(audio_part(url, part.get("role") or "reference_audio"))
+        elif ptype == "draft_task":
+            if isinstance(part.get("draft_task"), dict):
+                parts.append(draft_part(part["draft_task"]))
+    if parts:
+        kwargs["content"] = parts
 
-    kwargs: dict[str, Any] = {"model": body["model"]}
-    if prompt:
-        kwargs["prompt"] = prompt
-    if image:
-        kwargs["image"] = image
-    if last_frame:
-        kwargs["last_frame_image"] = last_frame
-    if reference_images:
-        kwargs["reference_images"] = reference_images
-    if (v := body.get("duration")) is not None:
-        kwargs["duration"] = v
-    if (v := body.get("resolution")) is not None:
-        kwargs["resolution"] = v
-    if (v := body.get("ratio")) is not None:
-        kwargs["aspect_ratio"] = v
-    if (v := body.get("camera_fixed")) is not None:
-        kwargs["camera_fixed"] = v
-    if (v := body.get("seed")) is not None:
-        kwargs["seed"] = v
-    if (v := body.get("watermark")) is not None:
-        kwargs["watermark"] = v
-    if (v := body.get("generate_audio")) is not None:
-        kwargs["generate_audio"] = v
-    if (v := body.get("callback_url")) is not None:
-        kwargs["callback_url"] = v
+    # Flat generation knobs.
+    for k in ("negative_prompt", "duration", "ratio", "resolution", "size",
+              "width", "height", "fps", "seed", "generate_audio", "camera_fixed",
+              "watermark", "prompt_extend", "callback_url", "return_last_frame"):
+        if (v := body.get(k)) is not None:
+            kwargs[k] = v
+
+    # Seedance accepts ``aspect_ratio`` as a synonym for ``ratio``.
+    if "ratio" not in kwargs and (v := body.get("aspect_ratio")) is not None:
+        kwargs["ratio"] = v
 
     extra: dict[str, Any] = {}
-    if reference_videos:
-        extra["reference_videos"] = reference_videos
-    if reference_audios:
-        extra["reference_audios"] = reference_audios
-    if (v := body.get("return_last_frame")) is not None:
-        extra["return_last_frame"] = v
     for k, v in body.items():
-        if k not in {"model", "content", "duration", "resolution", "ratio",
-                     "camera_fixed", "seed", "watermark", "generate_audio",
-                     "callback_url", "return_last_frame"}:
+        if k not in _KNOWN and k != "aspect_ratio":
             extra[k] = v
     if extra:
         kwargs["extra"] = extra

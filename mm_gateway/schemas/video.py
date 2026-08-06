@@ -1,30 +1,121 @@
 """Unified video schemas — the canonical internal representation.
 
-Video generation is async on every provider, so the unified model centres on a
-*task* with a lifecycle: ``pending -> running -> succeeded | failed``. The
-gateway may optionally block until completion (sync-style) for clients that
-prefer a one-shot call, then fall back to returning a task handle.
+The unified request shape **is** the Volcengine Seedance
+``/contents/generations/tasks`` shape: a ``content`` array of typed parts
+(text / image_url with a role / video_url / audio_url / draft_task) plus a flat
+set of generation knobs (duration, ratio, resolution, seed, ...). Every
+front-end shape (OpenAI Sora, OpenRouter unified, Seedance native) is translated
+into this one model, and every provider pulls the bits it cares about out of
+``content``.
+
+Video generation is async on every provider, so the lifecycle centres on a
+*task*: ``pending -> running -> succeeded | failed``. The gateway may
+optionally block until completion (sync-style) for clients that prefer a
+one-shot call, then fall back to returning a task handle.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 
-class VideoFrameImage(BaseModel):
-    url: str | None = None
-    b64_json: str | None = None
-    frame_type: Literal["first_frame", "last_frame"] | None = None
+# --------------------------------------------------------------------------- #
+# Content parts
+# --------------------------------------------------------------------------- #
+
+ImageRole = Literal["first_frame", "last_frame", "reference_image"]
+VideoRole = Literal["reference_video"]
+AudioRole = Literal["reference_audio"]
+
+
+class _Url(BaseModel):
+    url: str
+
+
+class VideoTextPart(BaseModel):
+    """The prompt. Required for text-to-video."""
+
+    type: Literal["text"]
+    text: str
+
+
+class VideoImagePart(BaseModel):
+    """An input image. ``role`` picks first/last frame or reference image."""
+
+    type: Literal["image_url"]
+    image_url: _Url
+    role: ImageRole = "first_frame"
+
+
+class VideoVideoPart(BaseModel):
+    """A reference video (Seedance 2.0 multi-modal reference)."""
+
+    type: Literal["video_url"]
+    video_url: _Url
+    role: VideoRole = "reference_video"
+
+
+class VideoAudioPart(BaseModel):
+    """A reference audio (Seedance 2.0 multi-modal reference)."""
+
+    type: Literal["audio_url"]
+    audio_url: _Url
+    role: AudioRole = "reference_audio"
+
+
+class VideoDraftPart(BaseModel):
+    """Resume a draft task by id (Seedance draft workflow)."""
+
+    type: Literal["draft_task"]
+    draft_task: dict[str, Any]
+
+
+class VideoContentPart(RootModel[VideoTextPart | VideoImagePart | VideoVideoPart
+                                 | VideoAudioPart | VideoDraftPart]):
+    """Discriminated union over the ``type`` field of a content part."""
+
+
+def text_part(text: str) -> VideoTextPart:
+    return VideoTextPart(type="text", text=text)
+
+
+def image_part(url: str, role: ImageRole = "first_frame") -> VideoImagePart:
+    return VideoImagePart(type="image_url", image_url=_Url(url=url), role=role)
+
+
+def video_part(url: str, role: VideoRole = "reference_video") -> VideoVideoPart:
+    return VideoVideoPart(type="video_url", video_url=_Url(url=url), role=role)
+
+
+def audio_part(url: str, role: AudioRole = "reference_audio") -> VideoAudioPart:
+    return VideoAudioPart(type="audio_url", audio_url=_Url(url=url), role=role)
+
+
+def draft_part(draft: dict[str, Any]) -> VideoDraftPart:
+    return VideoDraftPart(type="draft_task", draft_task=draft)
+
+
+# --------------------------------------------------------------------------- #
+# Request / response
+# --------------------------------------------------------------------------- #
 
 
 class UnifiedVideoRequest(BaseModel):
+    """The Seedance-shape video request, used as the canonical internal model.
+
+    ``content`` carries the typed parts (prompt text, first/last-frame and
+    reference images, reference videos/audios, draft resumes). The flat fields
+    are the generation knobs Seedance exposes; providers read whichever subset
+    they support.
+    """
+
     model: str
-    prompt: str | None = None
+    content: list[VideoContentPart] = Field(default_factory=list)
     negative_prompt: str | None = None
     duration: float | None = None
-    aspect_ratio: str | None = None
+    ratio: str | None = Field(None, description="Aspect ratio, e.g. '16:9'.")
     resolution: str | None = None
     size: str | None = None
     width: int | None = None
@@ -35,13 +126,55 @@ class UnifiedVideoRequest(BaseModel):
     camera_fixed: bool | None = None
     watermark: bool | None = None
     prompt_extend: bool | None = None
-    # For image-to-video / first-frame:
-    image: str | None = Field(None, description="URL or data: URI of an input image")
-    last_frame_image: str | None = None
-    reference_images: list[str] | None = None
     callback_url: str | None = None
+    return_last_frame: bool | None = None
     provider: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+
+    # -- convenience accessors for providers that don't speak content[] natively #
+
+    def prompt(self) -> str | None:
+        """Concatenated text parts, or None if there are none."""
+        texts = [p.root.text for p in self.content
+                 if isinstance(p.root, VideoTextPart)]
+        return "\n".join(texts) if texts else None
+
+    def first_image(self) -> str | None:
+        """URL of the first image_url part whose role is first_frame (or the
+        first image_url part if none is tagged)."""
+        fallback = None
+        for p in self.content:
+            if isinstance(p.root, VideoImagePart):
+                if p.root.role == "first_frame":
+                    return p.root.image_url.url
+                if fallback is None:
+                    fallback = p.root.image_url.url
+        return fallback
+
+    def last_image(self) -> str | None:
+        for p in self.content:
+            if isinstance(p.root, VideoImagePart) and p.root.role == "last_frame":
+                return p.root.image_url.url
+        return None
+
+    def reference_images(self) -> list[str]:
+        return [p.root.image_url.url for p in self.content
+                if isinstance(p.root, VideoImagePart)
+                and p.root.role == "reference_image"]
+
+    def reference_videos(self) -> list[str]:
+        return [p.root.video_url.url for p in self.content
+                if isinstance(p.root, VideoVideoPart)]
+
+    def reference_audios(self) -> list[str]:
+        return [p.root.audio_url.url for p in self.content
+                if isinstance(p.root, VideoAudioPart)]
+
+    def draft(self) -> dict[str, Any] | None:
+        for p in self.content:
+            if isinstance(p.root, VideoDraftPart):
+                return p.root.draft_task
+        return None
 
 
 TaskStatus = Literal["pending", "running", "succeeded", "failed", "cancelled", "expired"]

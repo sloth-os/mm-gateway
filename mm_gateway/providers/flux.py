@@ -13,7 +13,6 @@ from typing import Any
 
 from runapi.flux_2 import Flux2Client
 
-from mm_gateway.config import ProviderCredentials
 from mm_gateway.core.base import ImageProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
 from mm_gateway.observability.logging import get_logger
@@ -30,16 +29,16 @@ class FluxProvider(ImageProvider):
         ["flux-2-flex-remix-image", "flux-2-max-remix-image", "flux-2-pro-remix-image"]
     )
 
-    def __init__(self, credentials: ProviderCredentials):
-        super().__init__(credentials)
-        if not credentials.api_key:
+    def __init__(self, backend):
+        super().__init__(backend)
+        if not backend.api_key:
             raise ProviderNotConfiguredError("flux")
-        kwargs: dict[str, Any] = {"api_key": credentials.api_key}
-        if credentials.base_url:
+        kwargs: dict[str, Any] = {"api_key": backend.api_key}
+        if backend.base_url:
             # runapi uses a global configure; set via core if a base url override is provided.
             try:
                 from runapi.core import configure
-                configure(base_url=credentials.base_url)
+                configure(base_url=backend.base_url)
             except Exception:  # noqa: BLE001
                 pass
         self._client = Flux2Client(**kwargs)

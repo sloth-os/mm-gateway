@@ -21,7 +21,7 @@ class Provider(ABC):
 
     Subclasses declare ``name`` and the model ids they support, and implement
     whichever capability protocols apply. Construction receives the resolved
-    ``ProviderCredentials``; a provider should raise ``ProviderNotConfiguredError``
+    ``BackendConfig``; a provider should raise ``ProviderNotConfiguredError``
     in ``__init__`` if it cannot operate with the given credentials, so the
     registry can skip it.
     """
@@ -31,8 +31,8 @@ class Provider(ABC):
     image_models: ClassVar[list[str]] = []
     video_models: ClassVar[list[str]] = []
 
-    def __init__(self, credentials: Any):
-        self.credentials = credentials
+    def __init__(self, backend: Any):
+        self.backend = backend
 
     @property
     def supports_image(self) -> bool:

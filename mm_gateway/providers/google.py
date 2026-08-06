@@ -10,7 +10,6 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-from mm_gateway.config import ProviderCredentials
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.logging import get_logger
@@ -25,13 +24,13 @@ class GoogleProvider(ImageProvider, VideoProvider):
     image_models = ["imagen-4.0-generate-001", "imagen-3.0-generate-001", "gemini-2.5-flash-image"]
     video_models = ["veo-2.0-generate-001", "veo-3.0-generate-001", "veo-3.1-generate-preview"]
 
-    def __init__(self, credentials: ProviderCredentials):
-        super().__init__(credentials)
-        if not credentials.api_key:
+    def __init__(self, backend):
+        super().__init__(backend)
+        if not backend.api_key:
             raise ProviderNotConfiguredError("google")
-        kwargs: dict[str, Any] = {"api_key": credentials.api_key}
-        if credentials.base_url:
-            kwargs["http_options"] = types.HttpOptions(base_url=credentials.base_url)
+        kwargs: dict[str, Any] = {"api_key": backend.api_key}
+        if backend.base_url:
+            kwargs["http_options"] = types.HttpOptions(base_url=backend.base_url)
         self._client = genai.Client(**kwargs)
 
     async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
@@ -94,15 +93,15 @@ class GoogleProvider(ImageProvider, VideoProvider):
 
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
         source_fields: dict[str, Any] = {}
-        if request.prompt:
-            source_fields["prompt"] = request.prompt
-        if request.image:
-            source_fields["image"] = types.Image(image_uri=request.image)
+        if request.prompt():
+            source_fields["prompt"] = request.prompt()
+        if request.first_image():
+            source_fields["image"] = types.Image(image_uri=request.first_image())
         source = types.GenerateVideosSource(**source_fields)
 
         cfg: dict[str, Any] = {}
-        if request.aspect_ratio:
-            cfg["aspect_ratio"] = request.aspect_ratio
+        if request.ratio:
+            cfg["aspect_ratio"] = request.ratio
         if request.resolution:
             cfg["resolution"] = request.resolution
         if request.duration is not None:
@@ -113,8 +112,8 @@ class GoogleProvider(ImageProvider, VideoProvider):
             cfg["generate_audio"] = request.generate_audio
         if request.negative_prompt:
             cfg["negative_prompt"] = request.negative_prompt
-        if request.last_frame_image:
-            cfg["last_frame"] = types.Image(image_uri=request.last_frame_image)
+        if request.last_image():
+            cfg["last_frame"] = types.Image(image_uri=request.last_image())
         cfg.update(request.extra)
         config = types.GenerateVideosConfig(**cfg)
 

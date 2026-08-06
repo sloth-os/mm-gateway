@@ -20,6 +20,7 @@ class TaskRecord:
     task_id: str
     provider: str
     model: str
+    backend: str | None = None
     modality: str = "video"
     created_at: int = field(default_factory=lambda: int(time.time()))
     metadata: dict[str, Any] = field(default_factory=dict)

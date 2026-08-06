@@ -1,0 +1,72 @@
+# Example mm-gateway configuration.
+#
+# Copy to ./mm-gateway.yaml (or set MM_GATEWAY_CONFIG to this path) and fill in
+# the ${ENV} values via environment variables. ${ENV:default} supplies a default
+# when the env var is unset/empty.
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  log_level: INFO
+  log_format: json
+  request_timeout: 120
+
+video:
+  sync_default: true
+  max_sync_wait: 300
+  poll_interval: 2.0
+
+defaults:
+  enable_metrics: true
+
+# Expose the gateway as an MCP Streamable-HTTP server. Disabled by default — set
+# enabled: true to mount the four gateway tools (list_models, generate_image,
+# create_video, get_video) at `path` (default /mcp). The `mcp` package is a core
+# dependency of the gateway; if it fails to import, the gateway starts and logs
+# a warning instead of mounting the endpoint. The same bearer-token keys govern
+# the MCP surface as the HTTP routes.
+mcp:
+  enabled: true
+  path: /mcp
+  # Reap a stateful MCP session after this many seconds of inactivity, so a
+  # client that initialises and vanishes without DELETE cannot accumulate
+  # sessions indefinitely. Default 1800 (30 min).
+  session_idle_timeout: 1800
+
+# Named, typed provider instances. Two backends of the same type are distinct
+# instances (e.g. a prod and a staging Volcengine account).
+backends:
+  - name: volcengine-prod
+    type: volcengine
+    api_key: ${ARK_API_KEY}
+    tags: [prod, video-primary]
+  - name: openai-default
+    type: openai
+    api_key: ${OPENAI_API_KEY}
+    tags: [prod, image-primary]
+  - name: openrouter-fallback
+    type: openrouter
+    api_key: ${OPENROUTER_API_KEY:}
+    tags: [fallback]
+  - name: google-default
+    type: google
+    api_key: ${GOOGLE_API_KEY:}
+    tags: [prod]
+
+# Front-end API keys. A request authenticated with a key may use any backend
+# whose tags intersect allow_tags OR whose name is in allow_backends (hybrid),
+# and never any backend named in deny_tags.
+keys:
+  - id: alice
+    key: ${FRONTEND_KEY_ALICE}
+    allow_tags: [prod]                 # any prod backend
+    default_image_backend: openai-default
+    default_video_backend: volcengine-prod
+  - id: bob
+    key: ${FRONTEND_KEY_BOB}
+    allow_backends: [openai-default]   # pinned to one backend by name
+  - id: carol
+    key: ${FRONTEND_KEY_CAROL}
+    allow_tags: [prod]
+    deny_tags: [video-primary]         # prod, but never the primary video backend
+    default_image_tag: image-primary

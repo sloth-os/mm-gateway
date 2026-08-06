@@ -17,7 +17,6 @@ from typing import Any
 
 import httpx
 
-from mm_gateway.config import ProviderCredentials
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
@@ -43,13 +42,13 @@ class StabilityProvider(ImageProvider, VideoProvider):
     image_models = ["sd3.5-large", "sd3.5-medium", "sdxl", "stable-image-core", "stable-image-ultra"]
     video_models = ["stable-video-1-1", "stable-video-1-0", "stable-video-diffusion"]
 
-    def __init__(self, credentials: ProviderCredentials):
-        super().__init__(credentials)
-        if not credentials.api_key:
+    def __init__(self, backend):
+        super().__init__(backend)
+        if not backend.api_key:
             raise ProviderNotConfiguredError("stability")
-        self._api_key = credentials.api_key
+        self._api_key = backend.api_key
         self._client = httpx.AsyncClient(
-            base_url=credentials.base_url or _BASE, timeout=300,
+            base_url=backend.base_url or _BASE, timeout=300,
             headers={"Authorization": f"Bearer {self._api_key}"},
         )
 
@@ -113,13 +112,14 @@ class StabilityProvider(ImageProvider, VideoProvider):
 
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
         # SVD requires an init image; the unified request may carry a data: URI.
-        if not request.image:
+        first_image = request.first_image()
+        if not first_image:
             raise ProviderRequestError("stability SVD requires an input image", provider="stability",
                                        status_code=400)
-        image_bytes, mime = _decode_image_input(request.image)
+        image_bytes, mime = _decode_image_input(first_image)
         task_id = f"svd-{uuid.uuid4().hex}"
         _VIDEO_TASKS[task_id] = {
-            "model": request.model, "prompt": request.prompt or "",
+            "model": request.model, "prompt": request.prompt() or "",
             "image_bytes": image_bytes, "mime": mime,
             "fps": request.fps, "seed": request.seed,
             "motion_bucket_id": request.extra.get("motion_bucket_id", 127),

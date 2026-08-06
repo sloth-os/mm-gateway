@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from mm_gateway.config import ProviderCredentials, Settings
+from mm_gateway.config import BackendConfig, KeyConfig, Settings
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.schemas.image import ImageData, UnifiedImageRequest, UnifiedImageResponse
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask, VideoUsage
@@ -22,17 +22,24 @@ from mm_gateway.server.app import create_app
 class FakeProvider(ImageProvider, VideoProvider):
     """In-memory provider that records calls and returns deterministic output."""
 
-    name = "fake"
     image_models = ["fake-image-1"]
     video_models = ["fake-video-1"]
 
-    def __init__(self, credentials: Any):
-        super().__init__(credentials)
+    def __init__(self, backend: Any):
+        super().__init__(backend)
         self.image_calls: list[UnifiedImageRequest] = []
         self.video_calls: list[UnifiedVideoRequest] = []
         # task_id -> status (transitions pending -> running -> succeeded on poll)
         self._tasks: dict[str, str] = {}
         self._polls: dict[str, int] = {}
+
+    @property
+    def name(self) -> str:  # type: ignore[override]
+        # ``Provider.name`` is a class attribute ("fake" on this class); instances
+        # built for differently-named backends (fake-img, fake-vid, ...) must
+        # report the backend name they were constructed with so the gateway's
+        # routing/store layers can look the owning backend up by it.
+        return self.backend.name
 
     async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         self.image_calls.append(request)
@@ -73,14 +80,17 @@ class FakeProvider(ImageProvider, VideoProvider):
 
 @pytest.fixture
 def fake_provider() -> FakeProvider:
-    return FakeProvider(ProviderCredentials(name="fake", api_key="test"))
+    return FakeProvider(BackendConfig(name="fake", type="fake", api_key="test"))
 
 
 @pytest.fixture
 def settings() -> Settings:
+    # An open key (no allow_tags/allow_backends) may use every backend, and an
+    # empty token means no Authorization header is required.
+    key = KeyConfig(id="test", key="")
     return Settings(
-        default_image_provider="fake",
-        default_video_provider="fake",
+        backends=[BackendConfig(name="fake", type="fake", api_key="test")],
+        keys=[key],
         video_sync_default=True,
         max_sync_wait=5.0,
         poll_interval=0.01,
@@ -92,7 +102,8 @@ def app(settings, fake_provider):
     app = create_app(settings)
     # Inject the fake provider directly, bypassing the registry's constructor
     # logic (which would try to import a real provider module).
-    app.state.registry._providers["fake"] = fake_provider
+    app.state.registry._backends["fake"] = fake_provider
+    app.state.registry._configs["fake"] = settings.backends[0]
     return app
 
 

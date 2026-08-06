@@ -8,7 +8,6 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from mm_gateway.config import ProviderCredentials
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.logging import get_logger
@@ -23,13 +22,13 @@ class OpenAIProvider(ImageProvider, VideoProvider):
     image_models = ["gpt-image-1", "gpt-image-1-mini", "gpt-image-2", "dall-e-2", "dall-e-3"]
     video_models = ["sora-2", "sora-2-pro"]
 
-    def __init__(self, credentials: ProviderCredentials):
-        super().__init__(credentials)
-        if not credentials.api_key:
+    def __init__(self, backend):
+        super().__init__(backend)
+        if not backend.api_key:
             raise ProviderNotConfiguredError("openai")
         self._client = AsyncOpenAI(
-            api_key=credentials.api_key,
-            base_url=credentials.base_url or None,
+            api_key=backend.api_key,
+            base_url=backend.base_url or None,
         )
 
     async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
@@ -78,14 +77,14 @@ class OpenAIProvider(ImageProvider, VideoProvider):
         )
 
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
-        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt or ""}
+        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
         if request.duration is not None:
             # Sora accepts "4" | "8" | "12"
             kwargs["seconds"] = str(int(request.duration))
         if request.size:
             kwargs["size"] = request.size
-        if request.image:
-            kwargs["input_reference"] = {"image_url": request.image}
+        if request.first_image():
+            kwargs["input_reference"] = {"image_url": request.first_image()}
         kwargs.update(request.extra)
 
         try:

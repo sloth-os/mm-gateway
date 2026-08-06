@@ -19,7 +19,6 @@ from typing import Any
 
 from volcenginesdkarkruntime import AsyncArk
 
-from mm_gateway.config import ProviderCredentials
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.logging import get_logger
@@ -53,12 +52,12 @@ class VolcengineProvider(ImageProvider, VideoProvider):
         "doubao-seedance-2-0-260128",
     ]
 
-    def __init__(self, credentials: ProviderCredentials):
-        super().__init__(credentials)
-        if not credentials.api_key:
+    def __init__(self, backend):
+        super().__init__(backend)
+        if not backend.api_key:
             raise ProviderNotConfiguredError("volcengine")
-        base = credentials.base_url or _BASE
-        self._ark = AsyncArk(api_key=credentials.api_key, base_url=base)
+        base = backend.base_url or _BASE
+        self._ark = AsyncArk(api_key=backend.api_key, base_url=base)
 
     async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt}
@@ -93,38 +92,17 @@ class VolcengineProvider(ImageProvider, VideoProvider):
 
     # -- Seedance video --------------------------------------------------- #
 
-    def _build_content(self, request: UnifiedVideoRequest) -> list[dict[str, Any]]:
-        """Translate the unified request into Ark content parts.
-
-        Seedance is content-driven: a ``text`` part is the prompt, ``image_url``
-        parts carry first/last frame and reference images (by role), and
-        ``video_url`` / ``audio_url`` parts carry Seedance 2.0 multi-modal
-        references (read from ``request.extra`` since the unified model has no
-        first-class field for them).
-        """
-        content: list[dict[str, Any]] = []
-        if request.prompt:
-            content.append({"type": "text", "text": request.prompt})
-        if request.image:
-            content.append({"type": "image_url", "image_url": {"url": request.image}, "role": "first_frame"})
-        if request.last_frame_image:
-            content.append({"type": "image_url", "image_url": {"url": request.last_frame_image}, "role": "last_frame"})
-        for img in request.reference_images or []:
-            content.append({"type": "image_url", "image_url": {"url": img}, "role": "reference_image"})
-        for vid in (request.extra.get("reference_videos") or []):
-            content.append({"type": "video_url", "video_url": {"url": vid}, "role": "reference_video"})
-        for aud in (request.extra.get("reference_audios") or []):
-            content.append({"type": "audio_url", "audio_url": {"url": aud}, "role": "reference_audio"})
-        return content
-
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
-        kwargs: dict[str, Any] = {"model": request.model, "content": self._build_content(request)}
+        # The unified request *is* the Seedance content-array shape, so the
+        # content parts pass straight through (as dicts the Ark SDK accepts).
+        content = [p.model_dump(exclude_none=True) for p in request.content]
+        kwargs: dict[str, Any] = {"model": request.model, "content": content}
         if request.duration is not None:
             kwargs["duration"] = int(request.duration)
         if request.resolution:
             kwargs["resolution"] = request.resolution
-        if request.aspect_ratio:
-            kwargs["ratio"] = request.aspect_ratio
+        if request.ratio:
+            kwargs["ratio"] = request.ratio
         if request.camera_fixed is not None:
             kwargs["camera_fixed"] = request.camera_fixed
         if request.seed is not None:
@@ -135,9 +113,9 @@ class VolcengineProvider(ImageProvider, VideoProvider):
             kwargs["generate_audio"] = request.generate_audio
         if request.callback_url:
             kwargs["callback_url"] = request.callback_url
+        if request.return_last_frame is not None:
+            kwargs["return_last_frame"] = request.return_last_frame
         # Seedance-specific knobs the unified model doesn't name.
-        if (v := request.extra.get("return_last_frame")) is not None:
-            kwargs["return_last_frame"] = v
         if (v := request.extra.get("frames")) is not None:
             kwargs["frames"] = v
         if (v := request.extra.get("draft")) is not None:

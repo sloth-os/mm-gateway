@@ -13,11 +13,11 @@ from typing import Any
 
 import pytest
 
-from mm_gateway.config import ProviderCredentials
+from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.providers.volcengine import VolcengineProvider
 from mm_gateway.schemas.image import UnifiedImageRequest
-from mm_gateway.schemas.video import UnifiedVideoRequest
+from mm_gateway.schemas.video import UnifiedVideoRequest, audio_part, image_part, text_part, video_part
 
 
 class FakeTasks:
@@ -57,14 +57,14 @@ class FakeArk:
 
 @pytest.fixture
 def provider() -> VolcengineProvider:
-    p = VolcengineProvider(ProviderCredentials(name="volcengine", api_key="ark-key"))
+    p = VolcengineProvider(BackendConfig(name="volcengine", type="volcengine", api_key="ark-key"))
     p._ark = FakeArk()
     return p
 
 
 def test_provider_requires_api_key() -> None:
     with pytest.raises(ProviderNotConfiguredError):
-        VolcengineProvider(ProviderCredentials(name="volcengine"))
+        VolcengineProvider(BackendConfig(name="volcengine", type="volcengine"))
 
 
 # -- image --------------------------------------------------------------- #
@@ -94,8 +94,10 @@ def test_image_propagates_sdk_error(provider: VolcengineProvider) -> None:
 # -- video create -------------------------------------------------------- #
 
 def test_video_create_t2v_content(provider: VolcengineProvider) -> None:
-    req = UnifiedVideoRequest(model="doubao-seedance-2-0-260128", prompt="a cat playing",
-                              duration=11, aspect_ratio="16:9", generate_audio=True, watermark=True)
+    req = UnifiedVideoRequest(
+        model="doubao-seedance-2-0-260128", content=[text_part("a cat playing")],
+        duration=11, ratio="16:9", generate_audio=True, watermark=True,
+    )
     task = asyncio.run(provider.create_video_task(req))
     assert task.task_id == "ark-task-1" and task.status == "pending"
     kw = provider._ark.content_generation.tasks.create_calls[0]
@@ -106,8 +108,14 @@ def test_video_create_t2v_content(provider: VolcengineProvider) -> None:
 
 
 def test_video_create_i2v_first_and_last_frame(provider: VolcengineProvider) -> None:
-    req = UnifiedVideoRequest(model="doubao-seedance-2-0-260128", prompt="animate",
-                              image="https://x.test/first.png", last_frame_image="https://x.test/last.png")
+    req = UnifiedVideoRequest(
+        model="doubao-seedance-2-0-260128",
+        content=[
+            text_part("animate"),
+            image_part("https://x.test/first.png", "first_frame"),
+            image_part("https://x.test/last.png", "last_frame"),
+        ],
+    )
     asyncio.run(provider.create_video_task(req))
     content = provider._ark.content_generation.tasks.create_calls[0]["content"]
     types = [c["type"] for c in content]
@@ -118,10 +126,14 @@ def test_video_create_i2v_first_and_last_frame(provider: VolcengineProvider) -> 
 
 def test_video_create_reference_images_videos_audios(provider: VolcengineProvider) -> None:
     req = UnifiedVideoRequest(
-        model="doubao-seedance-2-0-260128", prompt="follow the ref",
-        reference_images=["https://x.test/r1.png", "https://x.test/r2.png"],
-        extra={"reference_videos": ["https://x.test/rv.mp4"],
-               "reference_audios": ["https://x.test/ra.mp3"]},
+        model="doubao-seedance-2-0-260128",
+        content=[
+            text_part("follow the ref"),
+            image_part("https://x.test/r1.png", "reference_image"),
+            image_part("https://x.test/r2.png", "reference_image"),
+            video_part("https://x.test/rv.mp4"),
+            audio_part("https://x.test/ra.mp3"),
+        ],
     )
     asyncio.run(provider.create_video_task(req))
     content = provider._ark.content_generation.tasks.create_calls[0]["content"]
@@ -134,9 +146,9 @@ def test_video_create_reference_images_videos_audios(provider: VolcengineProvide
 
 def test_video_create_passes_seedance_knobs(provider: VolcengineProvider) -> None:
     req = UnifiedVideoRequest(
-        model="doubao-seedance-2-0-260128", prompt="x", seed=42, camera_fixed=True,
-        resolution="1080p", callback_url="https://x.test/cb",
-        extra={"return_last_frame": True, "service_tier": "default", "priority": 5},
+        model="doubao-seedance-2-0-260128", content=[text_part("x")], seed=42, camera_fixed=True,
+        resolution="1080p", callback_url="https://x.test/cb", return_last_frame=True,
+        extra={"service_tier": "default", "priority": 5},
     )
     asyncio.run(provider.create_video_task(req))
     kw = provider._ark.content_generation.tasks.create_calls[0]
@@ -150,7 +162,7 @@ def test_video_create_propagates_sdk_error(provider: VolcengineProvider) -> None
         raise RuntimeError("ark 500")
     provider._ark.content_generation.tasks.create = boom
     with pytest.raises(ProviderRequestError):
-        asyncio.run(provider.create_video_task(UnifiedVideoRequest(model="m", prompt="x")))
+        asyncio.run(provider.create_video_task(UnifiedVideoRequest(model="m", content=[text_part("x")])))
 
 
 # -- video poll ---------------------------------------------------------- #
