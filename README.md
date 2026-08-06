@@ -280,8 +280,9 @@ dispatch:
 1. **Lint & unit tests** — installs the package with dev deps, import-checks
    every provider SDK, then runs `pytest`.
 2. **Build & publish Docker image** — multi-stage build from `Dockerfile`,
-   pushes to **GHCR** (`ghcr.io/<owner>/<repo>`) and Docker Hub
-   (`<owner>/<repo>`). Tags: `latest` (on `main`), branch name, semver
+   pushes to **GHCR** (`ghcr.io/<owner>/<repo>`) always, and to **Docker Hub**
+   (`<username>/<repo>`) only when `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN`
+   secrets are set. Tags: `latest` (on `main`), branch name, semver
    `{{version}}/{{major}}/{{major}}.{{minor}}` (on `v*` tags), and `sha-<short>`.
    The built image is also saved as an artifact for the e2e job.
 3. **E2E (real provider)** — loads the *just-built* image, starts it with the
@@ -316,9 +317,13 @@ are all set):
 | `STABILITY_BASE_URL` / `STABILITY_MODEL` | Stability | endpoint + model id |
 | `OPENROUTER_API_KEY` | OpenRouter | router (no first-class image alias) |
 | `OPENROUTER_BASE_URL` / `OPENROUTER_MODEL` | OpenRouter | endpoint + model id |
-| `GATEWAY_API_KEY` | — | front-end Bearer token; if unset the gateway is open | |
+| `GATEWAY_API_KEY` | — | front-end Bearer token; if unset the gateway is open |
+| `DOCKERHUB_USERNAME` | — | opt-in: also publish to Docker Hub as `<username>/<repo>` |
+| `DOCKERHUB_TOKEN` | — | opt-in: Docker Hub access token (paired with `DOCKERHUB_USERNAME`) |
 
 `GITHUB_TOKEN` (for pushing to GHCR) is provided automatically — no setup needed.
+Without `DOCKERHUB_*` the image is published to GHCR only, so the workflow stays
+green before any secrets are configured.
 
 ## License
 

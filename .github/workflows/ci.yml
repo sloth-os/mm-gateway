@@ -143,10 +143,16 @@ jobs:
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
+        env:
+          # Publish to Docker Hub (<username>/<repo>) ONLY when DOCKERHUB_USERNAME
+          # is set; otherwise this line is empty and metadata-action drops it,
+          # so only GHCR is targeted. Keeps the build green before Docker Hub
+          # creds exist (the "stay green before secrets are set" contract).
+          DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME && format('{0}/{1}', secrets.DOCKERHUB_USERNAME, github.event.repository.name) || '' }}
         with:
           images: |
-            ${{ github.repository }}
             ghcr.io/${{ github.repository }}
+            ${{ env.DOCKERHUB_IMAGE }}
           # Latest on the default branch; a semver tag on release.
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
@@ -163,6 +169,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        # Opt-in: only log in (and only the Docker Hub image is in `images`)
+        # when both DOCKERHUB creds are set as secrets. Without them the build
+        # still pushes to GHCR and stays green.
+        if: github.event_name != 'pull_request' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build & push image
         id: build
