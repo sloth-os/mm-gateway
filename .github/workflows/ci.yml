@@ -21,6 +21,11 @@ jobs:
   lint-and-test:
     name: Lint & unit tests
     runs-on: ubuntu-latest
+    # Provider credentials live in the `ci` environment: *_API_KEY as secrets and
+    # *_BASE_URL / *_MODEL as variables (they are not sensitive). A job only
+    # receives environment-scoped secrets/vars when it declares the environment,
+    # so attach it here (and on e2e) — otherwise the gate below sees nothing.
+    environment: ci
     timeout-minutes: 15
     outputs:
       # Whether at least one provider is *fully* configured (its *_API_KEY,
@@ -83,29 +88,29 @@ jobs:
         id: secret_gate
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
-          ARK_BASE_URL: ${{ secrets.ARK_BASE_URL }}
-          ARK_MODEL: ${{ secrets.ARK_MODEL }}
+          ARK_BASE_URL: ${{ vars.ARK_BASE_URL }}
+          ARK_MODEL: ${{ vars.ARK_MODEL }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_BASE_URL: ${{ secrets.GOOGLE_BASE_URL }}
-          GOOGLE_MODEL: ${{ secrets.GOOGLE_MODEL }}
+          GOOGLE_BASE_URL: ${{ vars.GOOGLE_BASE_URL }}
+          GOOGLE_MODEL: ${{ vars.GOOGLE_MODEL }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-          XAI_BASE_URL: ${{ secrets.XAI_BASE_URL }}
-          XAI_MODEL: ${{ secrets.XAI_MODEL }}
+          XAI_BASE_URL: ${{ vars.XAI_BASE_URL }}
+          XAI_MODEL: ${{ vars.XAI_MODEL }}
           RUNAPI_API_KEY: ${{ secrets.RUNAPI_API_KEY }}
-          FLUX_BASE_URL: ${{ secrets.FLUX_BASE_URL }}
-          FLUX_MODEL: ${{ secrets.FLUX_MODEL }}
+          FLUX_BASE_URL: ${{ vars.FLUX_BASE_URL }}
+          FLUX_MODEL: ${{ vars.FLUX_MODEL }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
-          DASHSCOPE_MODEL: ${{ secrets.DASHSCOPE_MODEL }}
+          DASHSCOPE_BASE_URL: ${{ vars.DASHSCOPE_BASE_URL }}
+          DASHSCOPE_MODEL: ${{ vars.DASHSCOPE_MODEL }}
           STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
-          STABILITY_BASE_URL: ${{ secrets.STABILITY_BASE_URL }}
-          STABILITY_MODEL: ${{ secrets.STABILITY_MODEL }}
+          STABILITY_BASE_URL: ${{ vars.STABILITY_BASE_URL }}
+          STABILITY_MODEL: ${{ vars.STABILITY_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_BASE_URL: ${{ secrets.OPENROUTER_BASE_URL }}
-          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          OPENROUTER_BASE_URL: ${{ vars.OPENROUTER_BASE_URL }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
         run: |
           set=0
           # A provider is "fully configured" iff all three of its triple are set.
@@ -231,6 +236,10 @@ jobs:
     # secrets_present output is in the `needs` context for the gate below.
     needs: [lint-and-test, build]
     runs-on: ubuntu-latest
+    # Same `ci` environment as lint-and-test — the provider *_API_KEY secrets and
+    # *_BASE_URL / *_MODEL variables are environment-scoped, so the container and
+    # the smoke script only see them when the environment is declared here.
+    environment: ci
     timeout-minutes: 15
     if: |
       github.event_name != 'pull_request' && (
@@ -261,29 +270,29 @@ jobs:
         # GitHub, they flow straight into the image 1:1.
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
-          ARK_BASE_URL: ${{ secrets.ARK_BASE_URL }}
-          ARK_MODEL: ${{ secrets.ARK_MODEL }}
+          ARK_BASE_URL: ${{ vars.ARK_BASE_URL }}
+          ARK_MODEL: ${{ vars.ARK_MODEL }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_BASE_URL: ${{ secrets.GOOGLE_BASE_URL }}
-          GOOGLE_MODEL: ${{ secrets.GOOGLE_MODEL }}
+          GOOGLE_BASE_URL: ${{ vars.GOOGLE_BASE_URL }}
+          GOOGLE_MODEL: ${{ vars.GOOGLE_MODEL }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-          XAI_BASE_URL: ${{ secrets.XAI_BASE_URL }}
-          XAI_MODEL: ${{ secrets.XAI_MODEL }}
+          XAI_BASE_URL: ${{ vars.XAI_BASE_URL }}
+          XAI_MODEL: ${{ vars.XAI_MODEL }}
           RUNAPI_API_KEY: ${{ secrets.RUNAPI_API_KEY }}
-          FLUX_BASE_URL: ${{ secrets.FLUX_BASE_URL }}
-          FLUX_MODEL: ${{ secrets.FLUX_MODEL }}
+          FLUX_BASE_URL: ${{ vars.FLUX_BASE_URL }}
+          FLUX_MODEL: ${{ vars.FLUX_MODEL }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
-          DASHSCOPE_MODEL: ${{ secrets.DASHSCOPE_MODEL }}
+          DASHSCOPE_BASE_URL: ${{ vars.DASHSCOPE_BASE_URL }}
+          DASHSCOPE_MODEL: ${{ vars.DASHSCOPE_MODEL }}
           STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
-          STABILITY_BASE_URL: ${{ secrets.STABILITY_BASE_URL }}
-          STABILITY_MODEL: ${{ secrets.STABILITY_MODEL }}
+          STABILITY_BASE_URL: ${{ vars.STABILITY_BASE_URL }}
+          STABILITY_MODEL: ${{ vars.STABILITY_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_BASE_URL: ${{ secrets.OPENROUTER_BASE_URL }}
-          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          OPENROUTER_BASE_URL: ${{ vars.OPENROUTER_BASE_URL }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
         run: |
           docker run -d --name gateway --restart=no \
@@ -304,32 +313,35 @@ jobs:
 
       - name: Run e2e smoke
         env:
+          # *_API_KEY are secrets; *_BASE_URL / *_MODEL are variables (not
+          # sensitive), matching the gate and the container-start step — so the
+          # smoke script sees the same triple each provider was gated on.
           MM_GATEWAY: http://127.0.0.1:8000
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
-          ARK_BASE_URL: ${{ secrets.ARK_BASE_URL }}
-          ARK_MODEL: ${{ secrets.ARK_MODEL }}
+          ARK_BASE_URL: ${{ vars.ARK_BASE_URL }}
+          ARK_MODEL: ${{ vars.ARK_MODEL }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_BASE_URL: ${{ secrets.GOOGLE_BASE_URL }}
-          GOOGLE_MODEL: ${{ secrets.GOOGLE_MODEL }}
+          GOOGLE_BASE_URL: ${{ vars.GOOGLE_BASE_URL }}
+          GOOGLE_MODEL: ${{ vars.GOOGLE_MODEL }}
           XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-          XAI_BASE_URL: ${{ secrets.XAI_BASE_URL }}
-          XAI_MODEL: ${{ secrets.XAI_MODEL }}
+          XAI_BASE_URL: ${{ vars.XAI_BASE_URL }}
+          XAI_MODEL: ${{ vars.XAI_MODEL }}
           RUNAPI_API_KEY: ${{ secrets.RUNAPI_API_KEY }}
-          FLUX_BASE_URL: ${{ secrets.FLUX_BASE_URL }}
-          FLUX_MODEL: ${{ secrets.FLUX_MODEL }}
+          FLUX_BASE_URL: ${{ vars.FLUX_BASE_URL }}
+          FLUX_MODEL: ${{ vars.FLUX_MODEL }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
-          DASHSCOPE_MODEL: ${{ secrets.DASHSCOPE_MODEL }}
+          DASHSCOPE_BASE_URL: ${{ vars.DASHSCOPE_BASE_URL }}
+          DASHSCOPE_MODEL: ${{ vars.DASHSCOPE_MODEL }}
           STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
-          STABILITY_BASE_URL: ${{ secrets.STABILITY_BASE_URL }}
-          STABILITY_MODEL: ${{ secrets.STABILITY_MODEL }}
+          STABILITY_BASE_URL: ${{ vars.STABILITY_BASE_URL }}
+          STABILITY_MODEL: ${{ vars.STABILITY_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_BASE_URL: ${{ secrets.OPENROUTER_BASE_URL }}
-          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          OPENROUTER_BASE_URL: ${{ vars.OPENROUTER_BASE_URL }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
         run: python tests/e2e/smoke.py
 
       - name: Dump gateway logs on failure
