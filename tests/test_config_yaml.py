@@ -344,3 +344,32 @@ def test_from_env_legacy_no_keys_configured(monkeypatch, tmp_path):
     # The implicit key still exists (open), authorised for zero backends.
     assert [k.id for k in s.keys] == ["env"]
     assert s.keys[0].allow_backends == []
+
+
+def test_from_env_legacy_model_env_recorded_in_extra(monkeypatch, tmp_path):
+    # The *_MODEL env var pins/extends a backend's served image model. It must
+    # be carried on BackendConfig.extra["image_model"] so the registry can
+    # append it to the provider's image_models at build time.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MM_GATEWAY_CONFIG", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.test")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-image-custom")
+    for v in ("ARK_API_KEY", "GOOGLE_API_KEY", "GATEWAY_API_KEY"):
+        monkeypatch.delenv(v, raising=False)
+    s = Settings.from_env()
+    openai = s.backend("openai")
+    assert openai.extra.get("image_model") == "gpt-image-custom"
+
+
+def test_from_env_legacy_model_env_absent_leaves_no_extra(monkeypatch, tmp_path):
+    # With no *_MODEL set, extra must not carry an image_model (so the registry
+    # doesn't append None to the provider's model list).
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MM_GATEWAY_CONFIG", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    for v in ("OPENAI_MODEL", "ARK_API_KEY", "GOOGLE_API_KEY", "GATEWAY_API_KEY"):
+        monkeypatch.delenv(v, raising=False)
+    s = Settings.from_env()
+    assert "image_model" not in s.backend("openai").extra
+

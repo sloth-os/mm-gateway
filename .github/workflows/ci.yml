@@ -1,0 +1,297 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run-e2e:
+        description: "Run the real-provider e2e against the built image"
+        type: boolean
+        default: false
+
+# Prefer a single, sequential flow: build once, then run lint + unit tests +
+# image-build on that build, then (optionally) e2e against the built image.
+# This avoids rebuilding the image for e2e and keeps the run cheap when secrets
+# are absent (which is the "I will set secrets later" case).
+jobs:
+  lint-and-test:
+    name: Lint & unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      # Whether at least one provider is *fully* configured (its *_API_KEY,
+      # *_BASE_URL, and *_MODEL secrets all set). The e2e job gates on this OR on
+      # the manual run-e2e flag, so it only fires when there is a real,
+      # operator-pinned model to exercise — not merely when a stray key exists.
+      secrets_present: ${{ steps.secret_gate.outputs.secrets_present }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package (with dev deps)
+        run: pip install -e ".[dev]"
+
+      - name: Import check (every provider module imports)
+        run: |
+          python - <<'PY'
+          import importlib
+          mods = ["openai", "google.genai", "dashscope", "stability_sdk",
+                  "volcengine", "xai_sdk", "runapi_flux_2", "openrouter",
+                  "mcp", "fastapi", "uvicorn", "httpx"]
+          missing = []
+          for m in mods:
+              try:
+                  importlib.import_module(m)
+              except Exception as exc:  # noqa: BLE001
+                  missing.append(f"{m}: {exc}")
+          if missing:
+              raise SystemExit("missing/failed imports:\n" + "\n".join(missing))
+          print("all provider/import check modules OK")
+          PY
+
+      - name: Run unit tests
+        run: pytest -q
+
+      # Detect whether at least one provider is *fully* configured — all three of
+      # its *_API_KEY, *_BASE_URL, and *_MODEL set — *without* printing any of
+      # them. `secrets.*` references are silently absent (empty) when the secret
+      # is not defined, so this only flips true once you wire a real provider in
+      # Settings. "Fully configured" matches the e2e's own gate (a backend runs
+      # the e2e iff all three are set), so the job fires only when there's a
+      # real, operator-pinned model to call.
+      - name: Detect fully-configured provider
+        id: secret_gate
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
+          ARK_BASE_URL: ${{ secrets.ARK_BASE_URL }}
+          ARK_MODEL: ${{ secrets.ARK_MODEL }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_BASE_URL: ${{ secrets.GOOGLE_BASE_URL }}
+          GOOGLE_MODEL: ${{ secrets.GOOGLE_MODEL }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          XAI_BASE_URL: ${{ secrets.XAI_BASE_URL }}
+          XAI_MODEL: ${{ secrets.XAI_MODEL }}
+          RUNAPI_API_KEY: ${{ secrets.RUNAPI_API_KEY }}
+          FLUX_BASE_URL: ${{ secrets.FLUX_BASE_URL }}
+          FLUX_MODEL: ${{ secrets.FLUX_MODEL }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
+          DASHSCOPE_MODEL: ${{ secrets.DASHSCOPE_MODEL }}
+          STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
+          STABILITY_BASE_URL: ${{ secrets.STABILITY_BASE_URL }}
+          STABILITY_MODEL: ${{ secrets.STABILITY_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_BASE_URL: ${{ secrets.OPENROUTER_BASE_URL }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+        run: |
+          set=0
+          # A provider is "fully configured" iff all three of its triple are set.
+          for triple in \
+            "${OPENAI_API_KEY}:${OPENAI_BASE_URL}:${OPENAI_MODEL}" \
+            "${ARK_API_KEY}:${ARK_BASE_URL}:${ARK_MODEL}" \
+            "${GOOGLE_API_KEY}:${GOOGLE_BASE_URL}:${GOOGLE_MODEL}" \
+            "${XAI_API_KEY}:${XAI_BASE_URL}:${XAI_MODEL}" \
+            "${RUNAPI_API_KEY}:${FLUX_BASE_URL}:${FLUX_MODEL}" \
+            "${DASHSCOPE_API_KEY}:${DASHSCOPE_BASE_URL}:${DASHSCOPE_MODEL}" \
+            "${STABILITY_API_KEY}:${STABILITY_BASE_URL}:${STABILITY_MODEL}" \
+            "${OPENROUTER_API_KEY}:${OPENROUTER_BASE_URL}:${OPENROUTER_MODEL}" \
+          ; do
+            # Split on ':' — all three fields must be non-empty.
+            IFS=':' read -r k u m <<< "$triple"
+            if [ -n "$k" ] && [ -n "$u" ] && [ -n "$m" ]; then set=1; break; fi
+          done
+          echo "secrets_present=$set" >> "$GITHUB_OUTPUT"
+          echo "secrets_present=$set"
+
+  build:
+    name: Build & publish Docker image
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ github.repository }}
+            ghcr.io/${{ github.repository }}
+          # Latest on the default branch; a semver tag on release.
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            PYTHON_VERSION=3.12
+          outputs: |
+            type=docker,dest=image.tar
+
+      - name: Upload image artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mm-gateway-image
+          path: image.tar
+          retention-days: 7
+
+  # Load the *just-built* image and run a real provider call against it. Skips
+  # (exit 0) when no provider is fully configured (all three of *_API_KEY +
+  # *_BASE_URL + *_MODEL set) AND the manual run-e2e flag is off — so the
+  # workflow is green before secrets exist and only spends real provider calls
+  # once one is fully wired.
+  e2e:
+    name: E2E (real provider)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: |
+      github.event_name != 'pull_request' && (
+        needs.lint-and-test.outputs.secrets_present == '1' ||
+        (github.event_name == 'workflow_dispatch' && inputs.run-e2e)
+      )
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mm-gateway-image
+          path: .
+
+      - name: Load image
+        run: docker load --input image.tar
+
+      - name: Start gateway
+        # Pass provider keys + base URLs + pinned models through to the container
+        # using the gateway's legacy env-var layout (one backend per *_API_KEY,
+        # an implicit front-end key of GATEWAY_API_KEY). Only the secrets you've
+        # actually set are injected — the others stay unset and the gateway just
+        # doesn't register those backends. *_BASE_URL points a backend at its
+        # real endpoint; *_MODEL pins/extends the backend's served image model
+        # (the registry appends it to the provider's model list at build time).
+        # This is the "preserve the envs" contract: whatever secrets you add in
+        # GitHub, they flow straight into the image 1:1.
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
+          ARK_BASE_URL: ${{ secrets.ARK_BASE_URL }}
+          ARK_MODEL: ${{ secrets.ARK_MODEL }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_BASE_URL: ${{ secrets.GOOGLE_BASE_URL }}
+          GOOGLE_MODEL: ${{ secrets.GOOGLE_MODEL }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          XAI_BASE_URL: ${{ secrets.XAI_BASE_URL }}
+          XAI_MODEL: ${{ secrets.XAI_MODEL }}
+          RUNAPI_API_KEY: ${{ secrets.RUNAPI_API_KEY }}
+          FLUX_BASE_URL: ${{ secrets.FLUX_BASE_URL }}
+          FLUX_MODEL: ${{ secrets.FLUX_MODEL }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
+          DASHSCOPE_MODEL: ${{ secrets.DASHSCOPE_MODEL }}
+          STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
+          STABILITY_BASE_URL: ${{ secrets.STABILITY_BASE_URL }}
+          STABILITY_MODEL: ${{ secrets.STABILITY_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_BASE_URL: ${{ secrets.OPENROUTER_BASE_URL }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+        run: |
+          docker run -d --name gateway --restart=no \
+            -p 8000:8000 \
+            -e OPENAI_API_KEY -e OPENAI_BASE_URL -e OPENAI_MODEL \
+            -e ARK_API_KEY -e ARK_BASE_URL -e ARK_MODEL \
+            -e GOOGLE_API_KEY -e GOOGLE_BASE_URL -e GOOGLE_MODEL \
+            -e XAI_API_KEY -e XAI_BASE_URL -e XAI_MODEL \
+            -e RUNAPI_API_KEY -e FLUX_BASE_URL -e FLUX_MODEL \
+            -e DASHSCOPE_API_KEY -e DASHSCOPE_BASE_URL -e DASHSCOPE_MODEL \
+            -e STABILITY_API_KEY -e STABILITY_BASE_URL -e STABILITY_MODEL \
+            -e OPENROUTER_API_KEY -e OPENROUTER_BASE_URL -e OPENROUTER_MODEL \
+            -e GATEWAY_API_KEY \
+            ghcr.io/${{ github.repository }}:sha-${GITHUB_SHA::7}
+
+      - name: Install e2e runner deps
+        run: pip install --quiet httpx
+
+      - name: Run e2e smoke
+        env:
+          MM_GATEWAY: http://127.0.0.1:8000
+          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
+          ARK_BASE_URL: ${{ secrets.ARK_BASE_URL }}
+          ARK_MODEL: ${{ secrets.ARK_MODEL }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_BASE_URL: ${{ secrets.GOOGLE_BASE_URL }}
+          GOOGLE_MODEL: ${{ secrets.GOOGLE_MODEL }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          XAI_BASE_URL: ${{ secrets.XAI_BASE_URL }}
+          XAI_MODEL: ${{ secrets.XAI_MODEL }}
+          RUNAPI_API_KEY: ${{ secrets.RUNAPI_API_KEY }}
+          FLUX_BASE_URL: ${{ secrets.FLUX_BASE_URL }}
+          FLUX_MODEL: ${{ secrets.FLUX_MODEL }}
+          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+          DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
+          DASHSCOPE_MODEL: ${{ secrets.DASHSCOPE_MODEL }}
+          STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
+          STABILITY_BASE_URL: ${{ secrets.STABILITY_BASE_URL }}
+          STABILITY_MODEL: ${{ secrets.STABILITY_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_BASE_URL: ${{ secrets.OPENROUTER_BASE_URL }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+        run: python tests/e2e/smoke.py
+
+      - name: Dump gateway logs on failure
+        if: failure()
+        run: docker logs gateway || true
+
+      - name: Stop gateway
+        if: always()
+        run: docker rm -f gateway || true

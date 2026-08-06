@@ -1,0 +1,24 @@
+# Keep the build context lean and, importantly, keep a local mm-gateway.yaml
+# (which may contain interpolated secrets or real keys) out of the image.
+.git/
+.github/
+.venv/
+.pytest_cache/
+.vscode/
+.idea/
+
+__pycache__/
+**/__pycache__/
+*.py[codz]
+*.egg-info/
+
+# Local config / secrets never belong in the published image.
+mm-gateway.yaml
+mm-gateway.yml
+.env
+.envrc
+
+# Dev-only trees.
+tests/
+docs/
+examples/

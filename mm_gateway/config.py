@@ -220,24 +220,30 @@ class Settings:
         One backend per known provider type, enabled iff its ``*_API_KEY`` is
         set; a single implicit key (``env``) allows every configured backend.
         """
+        # (type, api_key env, base_url env, image_model env). The model env lets
+        # an operator pin/extend a backend's served image model (e.g. a brand-new
+        # id not yet in the provider's hardcoded list) without editing code; the
+        # registry appends it to the backend's image_models at build time.
         specs = [
-            ("openai", "OPENAI_API_KEY", "OPENAI_BASE_URL"),
-            ("google", "GOOGLE_API_KEY", "GOOGLE_BASE_URL"),
-            ("xai", "XAI_API_KEY", "XAI_BASE_URL"),
-            ("volcengine", "ARK_API_KEY", "ARK_BASE_URL"),
-            ("flux", "RUNAPI_API_KEY", "FLUX_BASE_URL"),
-            ("openrouter", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"),
-            ("dashscope", "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL"),
-            ("stability", "STABILITY_API_KEY", "STABILITY_BASE_URL"),
+            ("openai", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"),
+            ("google", "GOOGLE_API_KEY", "GOOGLE_BASE_URL", "GOOGLE_MODEL"),
+            ("xai", "XAI_API_KEY", "XAI_BASE_URL", "XAI_MODEL"),
+            ("volcengine", "ARK_API_KEY", "ARK_BASE_URL", "ARK_MODEL"),
+            ("flux", "RUNAPI_API_KEY", "FLUX_BASE_URL", "FLUX_MODEL"),
+            ("openrouter", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL"),
+            ("dashscope", "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASHSCOPE_MODEL"),
+            ("stability", "STABILITY_API_KEY", "STABILITY_BASE_URL", "STABILITY_MODEL"),
         ]
         backends: list[BackendConfig] = []
-        for type_, key_env, url_env in specs:
+        for type_, key_env, url_env, model_env in specs:
             api_key = _env(key_env)
             if not api_key:
                 continue
+            model = _env(model_env)
             backends.append(BackendConfig(
                 name=type_, type=type_, api_key=api_key,
                 base_url=_env(url_env), tags=[],
+                extra={"image_model": model} if model else {},
             ))
         # An implicit key authorises all configured backends. If the operator
         # sets GATEWAY_API_KEY, that becomes the required token; otherwise the

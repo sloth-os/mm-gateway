@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import importlib
+import types
+
 import pytest
 
 from mm_gateway.config import BackendConfig, KeyConfig, Settings
+from mm_gateway.core.base import ImageProvider
 from mm_gateway.core.exceptions import (
     ForbiddenError,
     ModelNotFoundError,
@@ -92,3 +96,79 @@ def test_key_with_no_usable_backend_is_forbidden(settings):
     reg._configs["fake"] = cfg
     with pytest.raises(ForbiddenError):
         reg.resolve("fake-image-1", deny_key)
+
+
+def test_build_appends_pinned_image_model(monkeypatch):
+    # The legacy env layout records a *_MODEL as BackendConfig.extra[
+    # "image_model"]; _build must append it to that backend's image_models so an
+    # operator can reach a model id not in the provider's hardcoded catalogue.
+    class StubImageProvider(ImageProvider):
+        name = "stub"
+        image_models = ["stub-image-1"]
+        video_models = []
+
+        def __init__(self, backend):
+            self.backend = backend
+
+        async def generate_image(self, request):  # pragma: no cover - not called
+            raise NotImplementedError
+
+    stub_module = types.ModuleType("mm_gateway.providers.stub")
+    stub_module.StubProvider = StubImageProvider
+
+    def fake_import(name):
+        return stub_module if name == "mm_gateway.providers.stub" else _real_import_module(name)
+    monkeypatch.setattr(importlib, "import_module", fake_import)
+    import mm_gateway.registry as registry_mod
+    monkeypatch.setattr(registry_mod, "_PROVIDER_CLASSES", {"stub": "StubProvider"})
+
+    settings = Settings(
+        backends=[BackendConfig(name="stub", type="stub", api_key="k",
+                                 extra={"image_model": "brand-new-model"})],
+        keys=[KeyConfig(id="test", key="")],
+    )
+    reg = Registry(settings)
+    prov = reg.get("stub")
+    # The pinned model is appended without disturbing the hardcoded list, and
+    # video_models is untouched.
+    assert prov.image_models == ["stub-image-1", "brand-new-model"]
+    assert prov.video_models == []
+    # The pinned model is now resolvable and listed.
+    p, real_model, backend = reg.resolve("brand-new-model", KeyConfig(id="test", key=""))
+    assert backend == "stub" and real_model == "brand-new-model"
+    assert "brand-new-model" in {m["id"] for m in reg.list_models()}
+
+
+def test_build_no_extra_model_leaves_list_unchanged(monkeypatch):
+    # Without extra["image_model"], _build must not touch the provider's list.
+    class StubImageProvider(ImageProvider):
+        name = "stub"
+        image_models = ["stub-image-1"]
+        video_models = []
+
+        def __init__(self, backend):
+            self.backend = backend
+
+        async def generate_image(self, request):  # pragma: no cover - not called
+            raise NotImplementedError
+
+    stub_module = types.ModuleType("mm_gateway.providers.stub")
+    stub_module.StubProvider = StubImageProvider
+
+    def fake_import(name):
+        return stub_module if name == "mm_gateway.providers.stub" else _real_import_module(name)
+    monkeypatch.setattr(importlib, "import_module", fake_import)
+    import mm_gateway.registry as registry_mod
+    monkeypatch.setattr(registry_mod, "_PROVIDER_CLASSES", {"stub": "StubProvider"})
+
+    settings = Settings(
+        backends=[BackendConfig(name="stub", type="stub", api_key="k")],
+        keys=[KeyConfig(id="test", key="")],
+    )
+    reg = Registry(settings)
+    assert reg.get("stub").image_models == ["stub-image-1"]
+
+
+# Capture the real import so the monkeypatch only reroutes the stub path and
+# leaves every other import (pytest internals, etc.) intact.
+_real_import_module = importlib.import_module

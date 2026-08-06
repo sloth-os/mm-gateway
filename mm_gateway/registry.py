@@ -90,6 +90,16 @@ class Registry:
                 module = importlib.import_module(f"mm_gateway.providers.{cfg.type}")
                 cls = getattr(module, cls_name)
                 provider = cls(cfg)
+                # Honor an operator-pinned image model (BackendConfig.extra[
+                # "image_model"], set by the legacy env-var layout's *_MODEL).
+                # Append it to this instance's served list so resolve() and
+                # /v1/models accept it even if it isn't in the provider's
+                # hardcoded catalogue (e.g. a freshly released model id). The
+                # instance attribute shadows the ClassVar, so other backends of
+                # the same type are unaffected.
+                extra_model = cfg.extra.get("image_model")
+                if extra_model and provider.supports_image and extra_model not in provider.image_models:
+                    provider.image_models = [*provider.image_models, extra_model]
                 self._backends[cfg.name] = provider
                 self._configs[cfg.name] = cfg
                 log.info("backend_registered", backend=cfg.name, type=cfg.type,

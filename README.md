@@ -251,6 +251,75 @@ shape funnels through the one unified schema.
 pytest -q        # no network calls — a fake in-memory provider
 ```
 
+A real-provider end-to-end smoke test lives at `tests/e2e/smoke.py`. It talks to
+a **live** gateway and a **real** upstream provider, so unlike `pytest` it does
+spend real API calls. A backend is exercised only when it is **fully configured**
+— all three of its `*_API_KEY`, `*_BASE_URL`, and `*_MODEL` are set. The
+`*_BASE_URL` proves the operator pointed at a real endpoint and flows into the
+gateway container; `*_MODEL` pins the exact upstream model id to request (rather
+than a hard-coded alias) and is also published to the gateway so the registry
+serves it. The script collects every fully-configured backend, confirms the
+chosen model is actually served by `GET /v1/models`, then generates one image
+through the OpenAI-shape front-end and asserts real image data comes back. When
+*no* backend has all three set it **exits 0** (skips), so it is safe to wire
+into CI before secrets exist.
+
+```bash
+mm-gateway &                          # or: docker run -p 8000:8000 ghcr.io/<owner>/<repo>:latest
+OPENAI_API_KEY=sk-... OPENAI_BASE_URL=https://api.openai.com OPENAI_MODEL=gpt-image-1 \
+  GATEWAY_API_KEY=... python tests/e2e/smoke.py
+# pin a single backend / model instead of collecting all configured ones:
+E2E_BACKEND=volcengine E2E_IMAGE_MODEL=gateway-image-seedream python tests/e2e/smoke.py
+```
+
+## CI / Docker
+
+`.github/workflows/ci.yml` runs on every push, PR, and `v*` tag, and on manual
+dispatch:
+
+1. **Lint & unit tests** — installs the package with dev deps, import-checks
+   every provider SDK, then runs `pytest`.
+2. **Build & publish Docker image** — multi-stage build from `Dockerfile`,
+   pushes to **GHCR** (`ghcr.io/<owner>/<repo>`) and Docker Hub
+   (`<owner>/<repo>`). Tags: `latest` (on `main`), branch name, semver
+   `{{version}}/{{major}}/{{major}}.{{minor}}` (on `v*` tags), and `sha-<short>`.
+   The built image is also saved as an artifact for the e2e job.
+3. **E2E (real provider)** — loads the *just-built* image, starts it with the
+   provider `*_API_KEY`, `*_BASE_URL`, and `*_MODEL` secrets (plus
+   `GATEWAY_API_KEY`) passed straight through to the container — whatever
+   secrets you configure in GitHub flow into the image 1:1, no hard-coding —
+   and runs `tests/e2e/smoke.py`. This job **only runs** when at least one
+   provider is fully configured (all three of `*_API_KEY` + `*_BASE_URL` +
+   `*_MODEL` set) *or* the manual `run-e2e` flag is checked, so the workflow
+   stays green before secrets exist.
+
+Secrets to set in **Settings → Secrets and variables → Actions** (all optional;
+the e2e runs for a provider only when its `*_API_KEY` + `*_BASE_URL` + `*_MODEL`
+are all set):
+
+| Secret | Provider | Notes |
+|--------|----------|-------|
+| `OPENAI_API_KEY` | OpenAI | image (gpt-image) + video (sora) |
+| `OPENAI_BASE_URL` | OpenAI | upstream endpoint, flows into the container |
+| `OPENAI_MODEL` | OpenAI | model id to request + serve via the registry |
+| `ARK_API_KEY` | Volcengine | seedream image + seedance video |
+| `ARK_BASE_URL` / `ARK_MODEL` | Volcengine | endpoint + model id |
+| `GOOGLE_API_KEY` | Google | imagen + veo |
+| `GOOGLE_BASE_URL` / `GOOGLE_MODEL` | Google | endpoint + model id |
+| `XAI_API_KEY` | xAI | grok-imagine |
+| `XAI_BASE_URL` / `XAI_MODEL` | xAI | endpoint + model id |
+| `RUNAPI_API_KEY` | FLUX | image only (key env is `RUNAPI_*`) |
+| `FLUX_BASE_URL` / `FLUX_MODEL` | FLUX | endpoint + model id (env is `FLUX_*`) |
+| `DASHSCOPE_API_KEY` | DashScope | wanx + wan |
+| `DASHSCOPE_BASE_URL` / `DASHSCOPE_MODEL` | DashScope | endpoint + model id |
+| `STABILITY_API_KEY` | Stability | sd + svd |
+| `STABILITY_BASE_URL` / `STABILITY_MODEL` | Stability | endpoint + model id |
+| `OPENROUTER_API_KEY` | OpenRouter | router (no first-class image alias) |
+| `OPENROUTER_BASE_URL` / `OPENROUTER_MODEL` | OpenRouter | endpoint + model id |
+| `GATEWAY_API_KEY` | — | front-end Bearer token; if unset the gateway is open | |
+
+`GITHUB_TOKEN` (for pushing to GHCR) is provided automatically — no setup needed.
+
 ## License
 
 Apache-2.0.
