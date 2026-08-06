@@ -170,11 +170,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Detect Docker Hub credentials
+        # `secrets` is not allowed in a step `if`, so surface presence as an
+        # output here (env may reference secrets) and gate the login below on it.
+        id: dockerhub
+        if: github.event_name != 'pull_request'
+        env:
+          USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Log in to Docker Hub
         # Opt-in: only log in (and only the Docker Hub image is in `images`)
         # when both DOCKERHUB creds are set as secrets. Without them the build
         # still pushes to GHCR and stays green.
-        if: github.event_name != 'pull_request' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != ''
+        if: steps.dockerhub.outputs.configured == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -212,7 +227,9 @@ jobs:
   # once one is fully wired.
   e2e:
     name: E2E (real provider)
-    needs: build
+    # Depend on both jobs so build's artifact is available AND lint-and-test's
+    # secrets_present output is in the `needs` context for the gate below.
+    needs: [lint-and-test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     if: |
