@@ -46,3 +46,8 @@ include = ["mm_gateway*"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Put the project root on sys.path so test modules can do
+# `from tests.conftest import ...` and `mm_gateway` is importable even when
+# pytest is invoked as a console script (CI runs `pytest -q`, not
+# `python -m pytest -q`, so cwd is not otherwise on sys.path).
+pythonpath = ["."]
