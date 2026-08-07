@@ -1,9 +1,9 @@
 # mm-gateway
 
-A unified **image / video / AI gateway** written in Python 3.11+. It exposes
-OpenAI- and OpenRouter-compatible front-ends and routes to multiple provider
-back-ends, translating each provider's native SDK shape into one canonical
-internal schema.
+A unified **image / video / music / AI gateway** written in Python 3.11+. It
+exposes OpenAI-, OpenRouter-, and Gemini Lyria 3-compatible front-ends and routes
+to multiple provider back-ends, translating each provider's native SDK shape into
+one canonical internal schema.
 
 ```
             ┌─────────────────────────── mm-gateway ───────────────────────────┐
@@ -11,18 +11,21 @@ internal schema.
  shape  ───▶│  POST /api/v1/images          GET  /v1/videos/{id}               │
             │  POST /api/v1/videos          GET  /api/v1/videos/{id}           │
  OpenRouter │                               GET  /api/v1/videos/{id}/content   │
+ shape  ───▶│                               POST /v1/music                     │
+ Lyria 3    │                               GET  /v1/music/{id}               │
  shape  ───▶│       translators → unified schema → services → registry         │
             │                          → provider adapters → SDKs              │
             └──────────────────────────────────────────────────────────────────┘
    providers: openai · google · xai · volcengine(seedream+seedance) · flux · openrouter · dashscope · stability
+              elevenlabs · minimax · udioapi · mureka · acestep · google(lyria)
 ```
 
 ## Why
 
 Every provider SDK speaks a different dialect. `mm-gateway` collapses them into
-two stable, well-documented front-end shapes so clients don't learn eight APIs,
-and adding a ninth provider never touches the HTTP layer. The design rationale
-(commonalities, differences, the unified spine) is in
+three stable, well-documented front-end shapes so clients don't learn thirteen
+APIs, and adding a fourteenth provider never touches the HTTP layer. The design
+rationale (commonalities, differences, the unified spine) is in
 [`docs/design/unification.md`](docs/design/unification.md); per-provider
 code-verified facts are in [`docs/providers/reference.md`](docs/providers/reference.md).
 
@@ -32,14 +35,31 @@ code-verified facts are in [`docs/providers/reference.md`](docs/providers/refere
 |----------|-------------------|-----------------------|
 | Image    | `POST /v1/images/generations` | `POST /api/v1/images` |
 | Video    | `POST /v1/videos` + `GET /v1/videos/{id}` (Seedance shape) | `POST /api/v1/videos` + `GET /api/v1/videos/{id}` + `GET /api/v1/videos/{id}/content` |
+| Music    | — | — (Gemini Lyria 3 shape: `POST /v1/music` + `GET /v1/music/{id}`) |
 
 Plus `GET /health`, `GET /v1/models` (and `/api/v1/models`), `GET /metrics`
-(Prometheus text). Override the response shape of any endpoint with
-`X-Response-Format: openai|openrouter|seedance`.
+(Prometheus text). Override the response shape of any image or video endpoint
+with `X-Response-Format: openai|openrouter|seedance` (music has a single Lyria
+shape, so the header is ignored on `POST /v1/music` / `GET /v1/music/{id}`).
 
 Video sync vs async: by default the create call blocks until the task completes
 (`VIDEO_SYNC_DEFAULT=true`). Send `Prefer: respond-async` or `?wait=false` to
 get a polling handle back immediately.
+
+Music sync vs async: the same trade-off, governed by `MUSIC_SYNC_DEFAULT=true`.
+Send `Prefer: respond-async` or `?wait=false` to get the interaction id back
+immediately and poll `GET /v1/music/{id}`; `?wait=true` forces blocking.
+
+Music responses: `GET /v1/music/{id}` returns the Gemini Lyria `steps[].content[]`
+envelope — `{type:"audio",data|url,mime_type}` blocks plus `{type:"text",text}`
+lyrics — with `output_audio` / `output_audio_url` / `output_text` helpers (full
+shape in [`docs/design/unification.md`](docs/design/unification.md)). Audio
+arrives inline as base64 (`audio_b64`) or as a fetchable URL (`audio_urls`); each
+provider normalizes its upstream form (streamed bytes, hex, file-path bytes, or
+URL). Three providers (ElevenLabs, MiniMax, Google Lyria) are synchronous
+upstream and wrapped as single-process synthetic in-memory tasks, so in-flight
+task state is lost on a restart; udioapi / Mureka / ACE-Step are genuine
+two-phase async.
 
 Every generation or model-listing endpoint requires a front-end API key, sent as
 `Authorization: Bearer <token>`. Keys are configured in `mm-gateway.yaml` (or,
@@ -48,10 +68,11 @@ for backward compatibility, the gateway is open if no key is set).
 ## MCP
 
 The gateway also exposes an **MCP** (Model Context Protocol) server over the
-Streamable-HTTP transport. When the `mcp` config section is enabled, four tools
+Streamable-HTTP transport. When the `mcp` config section is enabled, six tools
 mirror the HTTP API — `list_models`, `generate_image`, `create_video`,
-`get_video` — so any MCP client (an IDE, agent, or the `mcp` CLI) can drive the
-gateway with the same bearer-token auth and backend routing as the HTTP routes.
+`get_video`, `create_music`, `get_music` — so any MCP client (an IDE, agent, or
+the `mcp` CLI) can drive the gateway with the same bearer-token auth and backend
+routing as the HTTP routes.
 A `GatewayError` raised by a tool surfaces as a structured MCP/JSON-RPC error
 (code `-32000`, the gateway's `code`/`status_code` in `data`), so an MCP client
 can branch on it exactly like an HTTP client branches on status.
@@ -92,6 +113,8 @@ server:
 video:
   sync_default: true
   max_sync_wait: 300
+music:
+  sync_default: true        # block on create until the task completes (up to max_sync_wait)
 mcp:
   enabled: true        # expose the gateway as an MCP Streamable-HTTP server
   path: /mcp           # default /mcp
@@ -106,6 +129,10 @@ backends:
     type: openai
     api_key: ${OPENAI_API_KEY}
     tags: [prod, image-primary]
+  - name: mureka-prod
+    type: mureka
+    api_key: ${MUREKA_MUSIC_API_KEY} # music-only provider
+    tags: [prod, music-primary]
 
 keys:
   - id: alice
@@ -113,6 +140,7 @@ keys:
     allow_tags: [prod]              # may use any backend tagged "prod"
     default_video_backend: volcengine-prod
     default_image_backend: openai-default
+    default_music_backend: mureka-prod
   - id: bob
     key: ${FRONTEND_KEY_BOB}
     allow_backends: [openai-default] # pinned to one backend by name
@@ -134,21 +162,28 @@ A request routes, in priority order: an explicit `X-Backend` header or
 
 ### Supported providers
 
-| Provider    | `type`       | Image | Video |
-|-------------|--------------|:-----:|:-----:|
-| OpenAI      | `openai`     | ✅ | ✅ (sora) |
-| Google      | `google`     | ✅ (imagen) | ✅ (veo) |
-| xAI         | `xai`        | ✅ (grok-imagine) | ✅ |
-| Volcengine  | `volcengine` | ✅ (seedream) | ✅ (seedance 1.0 + 2.0) |
-| FLUX        | `flux`       | ✅ | — |
-| OpenRouter  | `openrouter` | ✅ | ✅ |
-| DashScope   | `dashscope`  | ✅ (wanx) | ✅ (wan) |
-| Stability   | `stability`  | ✅ (sd) | ✅ (svd) |
+| Provider    | `type`       | Image | Video | Music |
+|-------------|--------------|:-----:|:-----:|:-----:|
+| OpenAI      | `openai`     | ✅ | ✅ (sora) | — |
+| Google      | `google`     | ✅ (imagen) | ✅ (veo) | ✅ (lyria) |
+| xAI         | `xai`        | ✅ (grok-imagine) | ✅ | — |
+| Volcengine  | `volcengine` | ✅ (seedream) | ✅ (seedance 1.0 + 2.0) | — |
+| FLUX        | `flux`       | ✅ | — | — |
+| OpenRouter  | `openrouter` | ✅ | ✅ | — |
+| DashScope   | `dashscope`  | ✅ (wanx) | ✅ (wan) | — |
+| Stability   | `stability`  | ✅ (sd) | ✅ (svd) | — |
+| ElevenLabs  | `elevenlabs` | — | — | ✅ (music_v1, music_v2) |
+| MiniMax     | `minimax`    | — | — | ✅ (music-3.0, music-2.6, music-cover) |
+| udioapi.pro | `udioapi`    | — | — | ✅ (chirp-v4-0, chirp-v4-5, chirp-v4-5-plus, chirp-v5, chirp-v5-5) |
+| Mureka      | `mureka`     | — | — | ✅ (mureka-song-1, mureka-song-1.5) |
+| ACE-Step    | `acestep`    | — | — | ✅ (acestep-v15-turbo, acestep-v15-base, ace-step-1.5) |
 
 Gateway model aliases (stable across providers): `gateway-image-pro`,
 `gateway-image-flux`, `gateway-image-imagen`, `gateway-video-pro` (seedance),
 `gateway-video-seedance-2` (seedance 2.0), `gateway-video-veo`,
-`gateway-video-sora`, … — see `mm_gateway/registry.py`.
+`gateway-video-sora`, … — and the music aliases `gateway-music-lyria`,
+`gateway-music-elevenlabs`, `gateway-music-minimax`, `gateway-music-udio`,
+`gateway-music-mureka`, `gateway-music-acestep` — see `mm_gateway/registry.py`.
 
 ## Quickstart
 
@@ -159,6 +194,7 @@ pip install -e ".[dev]"
 # write mm-gateway.yaml (see above), then:
 export OPENAI_API_KEY=sk-...
 export ARK_API_KEY=...            # volcengine seedance
+export MUREKA_MUSIC_API_KEY=...   # mureka music
 export FRONTEND_KEY_ALICE=...     # the token you will send as Bearer
 
 # run
@@ -196,6 +232,18 @@ curl -s localhost:8000/api/v1/videos \
   -d '{"model":"gateway-video-pro","prompt":"a cat playing"}'
 ```
 
+### Music (Lyria shape, async then poll)
+
+```bash
+T=$(curl -s localhost:8000/v1/music \
+  -H "authorization: Bearer $FRONTEND_KEY_ALICE" \
+  -H 'content-type: application/json' \
+  -H 'prefer: respond-async' \
+  -d '{"model":"gateway-music-mureka","input":"a cat playing piano, jazz"}' \
+  | jq -r .id)
+curl -s -H "authorization: Bearer $FRONTEND_KEY_ALICE" localhost:8000/v1/music/$T
+```
+
 See [`examples/client.py`](examples/client.py) for a Python client.
 
 ### MCP
@@ -218,25 +266,29 @@ async with streamable_http_client(
 ) as (read, write):
     async with ClientSession(read, write) as session:
         await session.initialize()
-        tools = await session.list_tools()                 # the four gateway tools
+        tools = await session.list_tools()                 # the six gateway tools
         img = await session.call_tool("generate_image",
                                       {"model": "gateway-image-pro",
                                        "prompt": "a cat in a spacesuit"})
+        mus = await session.call_tool("create_music",
+                                      {"model": "gateway-music-mureka",
+                                       "input": "a cat playing piano, jazz",
+                                       "wait": True})
 ```
 
 ## Architecture
 
 ```
 mm_gateway/
-  schemas/        # unified canonical request/response models
-  translators/    # front-end shape <-> unified schema (image, video)
+  schemas/        # unified canonical request/response models (image, video, music)
+  translators/    # front-end shape <-> unified schema (image, video, music)
   providers/      # one adapter per upstream SDK
-  core/           # Provider/ImageProvider/VideoProvider ABCs + exceptions
+  core/           # Provider/ImageProvider/VideoProvider/MusicProvider ABCs + exceptions
   registry.py     # build providers from settings, resolve model -> provider
-  services.py     # ImageService / VideoService: resolve, call, map errors
+  services.py     # ImageService / VideoService / MusicService: resolve, call, map errors
   tasks/          # opaque task-id -> provider store (for polling)
   observability/  # structlog logging + prometheus-text metrics
-  server/         # FastAPI app + routes (image, video, meta) + auth
+  server/         # FastAPI app + routes (image, video, music, meta) + auth
   config.py       # YAML-driven Settings (backends + keys)
 ```
 
@@ -255,7 +307,9 @@ A real-provider end-to-end smoke test lives at `tests/e2e/smoke.py`. It talks to
 a **live** gateway and a **real** upstream provider, so unlike `pytest` it does
 spend real API calls. A backend modality is exercised only when it is **fully
 configured** — all three of its `*_IMAGE_API_KEY` + `*_IMAGE_BASE_URL` +
-`*_IMAGE_MODEL` (image) or `*_VIDEO_*` triple (video) are set. The `*_BASE_URL`
+`*_IMAGE_MODEL` (image) or `*_VIDEO_*` triple (video) are set. (Music backends
+register from the matching `*_MUSIC_*` triple the same way, but the e2e script
+currently drives only the image and video modalities.) The `*_BASE_URL`
 proves the operator pointed at a real endpoint and flows into the gateway
 container; `*_MODEL` pins the exact upstream model id to request (rather than a
 hard-coded alias) and is also published to the gateway so the registry serves
@@ -289,29 +343,34 @@ dispatch:
    `{{version}}/{{major}}/{{major}}.{{minor}}` (on `v*` tags), and `sha-<short>`.
    The built image is also saved as an artifact for the e2e job.
 3. **E2E (real provider)** — loads the *just-built* image, starts it with the
-   provider `*_IMAGE_API_KEY` / `*_VIDEO_API_KEY` (secrets) and the matching
-   `*_IMAGE_BASE_URL` / `*_IMAGE_MODEL` / `*_VIDEO_BASE_URL` / `*_VIDEO_MODEL`
-   (variables), plus `GATEWAY_API_KEY`, passed straight through to the container
-   — whatever you configure in GitHub flows into the image 1:1, no hard-coding —
-   and runs `tests/e2e/smoke.py`. This job **only runs** when at least one
-   provider modality is fully configured (all three of an `*_IMAGE_*` or
-   `*_VIDEO_*` triple set) *or* the manual `run-e2e` flag is checked, so the
-   workflow stays green before secrets exist.
+   provider `*_IMAGE_API_KEY` / `*_VIDEO_API_KEY` / `*_MUSIC_API_KEY` (secrets)
+   and the matching `*_IMAGE_BASE_URL` / `*_IMAGE_MODEL` / `*_VIDEO_BASE_URL` /
+   `*_VIDEO_MODEL` / `*_MUSIC_BASE_URL` / `*_MUSIC_MODEL` (variables), plus
+   `GATEWAY_API_KEY`, passed straight through to the container — whatever you
+   configure in GitHub flows into the image 1:1, no hard-coding — and runs
+   `tests/e2e/smoke.py`. This job **only runs** when at least one provider
+   modality is fully configured (all three of an `*_IMAGE_*` or `*_VIDEO_*`
+   triple set) *or* the manual `run-e2e` flag is checked, so the workflow stays
+   green before secrets exist. Music backends register from their `*_MUSIC_*`
+   triple the same way, so a wired music provider is live in the container even
+   though the e2e script currently drives image and video.
 
 Configure these in **Settings → Secrets and variables → Actions**, under the
-`ci` environment. Each provider's image and video credentials are **split**:
-`*_IMAGE_API_KEY` + `*_VIDEO_API_KEY` are sensitive, so store them as
-**secrets**; `*_IMAGE_BASE_URL` / `*_IMAGE_MODEL` / `*_VIDEO_BASE_URL` /
-`*_VIDEO_MODEL` are not sensitive, so store them as **variables** — the workflow
-reads them from the `vars.*` context, not `secrets.*`, so a `*_BASE_URL`/
-`*_MODEL` stored as a *secret* is invisible to the gate and the e2e silently
-skips. A provider modality runs only when **all three** of its `*_IMAGE_*` (or
-`*_VIDEO_*`) triple — `*_API_KEY` (secret) + `*_BASE_URL` (variable) +
-`*_MODEL` (variable) — are set. The legacy un-split `*_API_KEY` / `*_BASE_URL` /
-`*_MODEL` names still work as a per-modality fallback until you migrate to the
-split names.
+`ci` environment. Each provider's image, video, and music credentials are
+**split**: `*_IMAGE_API_KEY` + `*_VIDEO_API_KEY` + `*_MUSIC_API_KEY` are
+sensitive, so store them as **secrets**; `*_IMAGE_BASE_URL` / `*_IMAGE_MODEL` /
+`*_VIDEO_BASE_URL` / `*_VIDEO_MODEL` / `*_MUSIC_BASE_URL` / `*_MUSIC_MODEL` are
+not sensitive, so store them as **variables** — the workflow reads them from the
+`vars.*` context, not `secrets.*`, so a `*_BASE_URL`/`*_MODEL` stored as a
+*secret* is invisible to the gate and the e2e silently skips. A provider
+modality runs only when **all three** of its `*_IMAGE_*` (or `*_VIDEO_*`)
+triple — `*_API_KEY` (secret) + `*_BASE_URL` (variable) + `*_MODEL` (variable)
+— are set. The legacy un-split `*_API_KEY` / `*_BASE_URL` / `*_MODEL` names
+still work as a per-modality fallback until you migrate to the split names.
+ACE-Step is self-hosted, so `ACESTEP_MUSIC_BASE_URL` is **required** (there is
+no default cloud host).
 
-**Secrets** (`*_IMAGE_API_KEY` + `*_VIDEO_API_KEY` + gateway/publish creds):
+**Secrets** (`*_IMAGE_API_KEY` + `*_VIDEO_API_KEY` + `*_MUSIC_API_KEY` + gateway/publish creds):
 
 | Secret | Provider | Notes |
 |--------|----------|-------|
@@ -330,11 +389,17 @@ split names.
 | `STABILITY_VIDEO_API_KEY` | Stability | svd video |
 | `OPENROUTER_IMAGE_API_KEY` | OpenRouter | router image (no first-class alias) |
 | `OPENROUTER_VIDEO_API_KEY` | OpenRouter | router video (no first-class alias) |
+| `GOOGLE_MUSIC_API_KEY` | Google | lyria music (falls back to the un-split `GOOGLE_API_KEY`) |
+| `ELEVENLABS_MUSIC_API_KEY` | ElevenLabs | music_v2 |
+| `MINIMAX_MUSIC_API_KEY` | MiniMax | music-3.0 |
+| `UDIOAPI_MUSIC_API_KEY` | udioapi.pro | chirp-v5 |
+| `MUREKA_MUSIC_API_KEY` | Mureka | mureka-song-1 |
+| `ACESTEP_MUSIC_API_KEY` | ACE-Step | ace-step-1.5 (optional at the adapter, but a backend registers only when a key is set, so omitting it disables ACE-Step) |
 | `GATEWAY_API_KEY` | — | front-end Bearer token; if unset the gateway is open |
 | `DOCKERHUB_USERNAME` | — | opt-in: also publish to Docker Hub as `<username>/<repo>` |
 | `DOCKERHUB_TOKEN` | — | opt-in: Docker Hub access token (paired with `DOCKERHUB_USERNAME`) |
 
-**Variables** (`*_IMAGE_*` + `*_VIDEO_*`, one triple per provider modality you wire up):
+**Variables** (`*_IMAGE_*` + `*_VIDEO_*` + `*_MUSIC_*`, one triple per provider modality you wire up):
 
 | Variable | Provider | Notes |
 |----------|----------|-------|
@@ -353,6 +418,12 @@ split names.
 | `STABILITY_VIDEO_BASE_URL` / `STABILITY_VIDEO_MODEL` | Stability | svd endpoint + model id |
 | `OPENROUTER_IMAGE_BASE_URL` / `OPENROUTER_IMAGE_MODEL` | OpenRouter | image endpoint + model id |
 | `OPENROUTER_VIDEO_BASE_URL` / `OPENROUTER_VIDEO_MODEL` | OpenRouter | video endpoint + model id |
+| `GOOGLE_MUSIC_BASE_URL` / `GOOGLE_MUSIC_MODEL` | Google | lyria endpoint (defaults to `generativelanguage.googleapis.com`) + model id |
+| `ELEVENLABS_MUSIC_BASE_URL` / `ELEVENLABS_MUSIC_MODEL` | ElevenLabs | music endpoint (SDK default if unset) + model id |
+| `MINIMAX_MUSIC_BASE_URL` / `MINIMAX_MUSIC_MODEL` | MiniMax | music endpoint (defaults to `api.minimax.io`) + model id |
+| `UDIOAPI_MUSIC_BASE_URL` / `UDIOAPI_MUSIC_MODEL` | udioapi.pro | music endpoint (defaults to `udioapi.pro`) + model id |
+| `MUREKA_MUSIC_BASE_URL` / `MUREKA_MUSIC_MODEL` | Mureka | music endpoint (defaults to `platform.mureka.ai`) + model id |
+| `ACESTEP_MUSIC_BASE_URL` / `ACESTEP_MUSIC_MODEL` | ACE-Step | **required** — self-hosted, no default host + model id |
 
 For OpenAI (and OpenAI-compatible endpoints), the base URL should **include
 `/v1`** (the SDK uses it verbatim), e.g. `https://api.openai.com/v1`.

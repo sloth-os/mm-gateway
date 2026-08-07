@@ -26,6 +26,12 @@ Models/params marked *(docs)* are from official docs, not the installed SDK.
 - **Image (Gemini native)**: `generate_content(model="gemini-2.5-flash-image", contents=, config=GenerateContentConfig(response_modalities=["IMAGE"]))`. Image bytes in `part.inline_data.data`.
 - **Video (Veo)**: `client.aio.models.generate_videos(model, source=GenerateVideosSource(prompt=|image=), config=GenerateVideosConfig(...))` → long-running op. Poll `client.aio.operations.get(op)` until `op.done`. Result: `op.result.generated_videos[0].video.uri`; fetch bytes via `client.aio.files.download(file=video)`.
   - Models: `veo-2.0-generate-001`, `veo-3.0-generate-001`, `veo-3.1-generate-preview`.
+- **Music (Lyria 3)**: REST `POST {music_base}/v1beta/models/{model}:predictInteractions?key={api_key}` over a per-request `httpx.AsyncClient(timeout=240.0)` — the SDK does not yet expose Lyria ergonomically. Auth = api_key as a `?key=` query param. `music_base` = `backend.extra["music_base_url"]` or `backend.base_url` or `https://generativelanguage.googleapis.com`.
+  - Models: `lyria-3`.
+  - Body: `{model, input: parts[], config}`. `input` parts are `{type:"text", text}` (from request text parts) and `{type:"image", mime_type (default "image/jpeg"), data}` (from `extra["images"]`); if no parts, a single text part from `prompt()`. `config` = `{response_modalities:["AUDIO"]}` plus `response_format:{type:audio_format}` (if set), `negative_prompt`, `seed`, `guidance_scale`, `number_of_outputs` (= `n`), then `extra["lyria_config"]` merged in.
+  - Synchronous — a single call returns audio inline. Wrapped as a synthetic in-memory task (id `lyria-{uuid4.hex}`) that moves `pending -> running -> succeeded` on the first poll, like ElevenLabs/MiniMax.
+  - Response: `steps[].content[]` (or `model_output[].content[]`) blocks — `{type:"audio", data}` (base64) and `{type:"text", text}` (lyrics); top-level `output_audio`/`audio` and `output_text`/`text` fallbacks. `audio_media_type` hard-coded `audio/wav`. `usage = MusicUsage(duration=int(request.duration))` when duration set.
+  - Errors: `httpx.HTTPError` or HTTP ≥400 → `ProviderRequestError(502)`; no audio → `TaskFailedError`; unknown task id → 404.
 
 ## xai-sdk — `xai_sdk` v1.17.0 (gRPC)
 
@@ -81,3 +87,65 @@ Models/params marked *(docs)* are from official docs, not the installed SDK.
 - **Client**: prefer REST `https://api.stability.ai/v2beta/...` via httpx (env `STABILITY_API_KEY`).
 - **Image**: `POST /v2beta/stable-image/generate/sd3` (multipart: `prompt`, `model`, `seed`, `aspect_ratio`, `output_format`). Models: `sd3.5-large`, `sd3.5-medium`, `stable-image-core`, `sdxl`. Returns `image` (base64) + `finish_reason`.
 - **Video (SVD)**: `POST /v2beta/stable-video-generation` (multipart: `image`, `motion_bucket_id`, `fps`, `seed`). Async seed → poll for result (raw MP4 bytes).
+
+## elevenlabs — `elevenlabs` v2.62.0 (SDK)
+
+- **Client**: `from elevenlabs import AsyncElevenLabs; AsyncElevenLabs(api_key=, base_url=|None, timeout=240.0)` (env `ELEVENLABS_MUSIC_API_KEY`/`ELEVENLABS_MUSIC_BASE_URL`, legacy `ELEVENLABS_API_KEY`/`ELEVENLABS_BASE_URL`). Required: `backend.api_key` else `ProviderNotConfiguredError("elevenlabs")`. No default base_url — `None` falls back to the SDK default.
+- **Music**: `client.music.compose(...)` — an async generator that streams audio bytes from a single `POST /v1/music`. No task id to poll; the adapter mints a synthetic in-memory task (id `el-{uuid4.hex}`) that moves `pending -> running -> succeeded` as the stream completes on the first poll.
+  - Models: `music_v1`, `music_v2` (default `music_v2`).
+  - `compose` kwargs: `prompt` (from `request.prompt()`), `model_id`, `output_format` (built from `audio_quality`/`audio_format` — see below; omit if neither set), `music_length_ms` (= `duration * 1000` seconds→ms, clamped to `[3000, 600000]`), `seed`, `force_instrumental` (= `is_instrumental`).
+  - `output_format` mapping: if `audio_quality` is set → `{codec}_{audio_quality}` where codec comes from `_CODEC_BY_FORMAT` keyed by `audio_format` (default `mp3`); bare `audio_format` with no quality → `"auto"`; nothing → `None` (omitted).
+  - Forwarded extra knobs: `finetune_id`, `respect_sections_durations`, `store_for_inpainting`, `sign_with_c_2_pa`.
+  - Audio delivery = streamed bytes (`async for chunk in client.music.compose(**kwargs)` joined with `b"".join`), base64-encoded into `audio_b64`. `_media_type` maps `audio_format` → MIME (`mp3`→`audio/mpeg`, `wav`→`audio/wav`, `ogg`→`audio/ogg`, `aac`→`audio/aac`, default `audio/mpeg`). `usage = MusicUsage(duration=request.duration)`.
+  - Errors: any `Exception` from the stream → `ProviderRequestError(502)`; no audio bytes → `TaskFailedError`; unknown task id → 404; missing prompt (no text part) → `ProviderRequestError(400)`.
+
+## minimax — REST over `https://api.minimax.io`
+
+- **Client**: `httpx.AsyncClient(base_url=backend.base_url or "https://api.minimax.io", timeout=300, headers={Authorization: Bearer {api_key}, Content-Type: application/json})` (env `MINIMAX_MUSIC_API_KEY`/`MINIMAX_MUSIC_BASE_URL`, legacy `MINIMAX_API_KEY`/`MINIMAX_BASE_URL`). Required: `backend.api_key` else `ProviderNotConfiguredError("minimax")`.
+- **Music**: `POST /v1/music_generation` (synchronous — a single blocking call returns `data.status` 1 = in progress or 2 = completed with audio inline). No job id; the adapter mints a synthetic in-memory task (id `mm-{uuid4.hex}`) and runs the POST on the first poll — `pending -> running -> succeeded`/`failed`. A `data.status` of 1 leaves the task `running` so a later poll re-issues the call.
+  - Models: `music-3.0` (default), `music-2.6`, `music-cover`.
+  - Body (`_build_body`): `model`, `prompt` (= `request.prompt()`, when present), `lyrics` (= `extra["lyrics"]`, or the prompt itself when not instrumental and no separate lyrics — in which case `prompt` is popped), `is_instrumental`, `output_format` (`"url"` unless `audio_format == "hex"`), `audio_setting` (`sample_rate`/`bitrate` from `audio_quality` split on `_`, `format` from `audio_format` if `mp3`/`wav`/`pcm`), `audio_url` (= `request.reference_audios()[0]` if present).
+  - Forwarded extra knobs: `stream`, `lyrics_optimizer`, `audio_base64`, `cover_feature_id`.
+  - Status mapping: `data.status` 1 → `running`, 2 → `succeeded`; `base_resp.status_code != 0` → `failed` (error from `base_resp.status_msg`). `extra_info.music_duration` → `MusicUsage(duration)`.
+  - Audio delivery: `output_format == "url"` and `data.audio` starts with `http` → `audio_urls=[audio]`; else hex-decoded via `bytes.fromhex` and re-base64 into `audio_b64`. `_MIME_BY_FORMAT = {mp3:audio/mpeg, wav:audio/wav, pcm:audio/pcm}` (default `audio/mpeg`).
+  - Errors: `httpx.HTTPError` → `ProviderRequestError(502)`; HTTP ≥400 → `ProviderRequestError` via `_map_status`; `base_resp.status_code != 0` → `TaskFailedError`; no audio → `TaskFailedError`; unknown task id → 404.
+
+## udioapi — REST over `https://udioapi.pro`
+
+- **Client**: `make_client(backend.base_url or "https://udioapi.pro", timeout=180.0, headers={Authorization: Bearer {api_key}})` (env `UDIOAPI_MUSIC_API_KEY`/`UDIOAPI_MUSIC_BASE_URL`, legacy `UDIOAPI_API_KEY`/`UDIOAPI_BASE_URL`). Required: `backend.api_key` else `ProviderNotConfiguredError("udioapi")`.
+- **Music**: Genuine two-phase async REST mirroring Suno's shape.
+  - **Create**: `POST /api/v2/generate` body from `_build_body` → `{workId}` (or `data.task_id`); the upstream workId *is* the gateway task id (no synthetic store). Missing → `ProviderRequestError("udioapi create returned no workId")`.
+  - **Poll**: `GET /api/v2/feed?workId=...` → `data.response_data[]` tracks; picks the first `complete` track else the last track. No tracks yet → `running` (queued).
+  - Models: `chirp-v4-0`, `chirp-v4-5`, `chirp-v4-5-plus`, `chirp-v5`, `chirp-v5-5`.
+  - Body (`_build_body`): *custom mode* (when `extra["style"]`/`extra["title"]` or `negative_prompt` are present) → `prompt`, `style`, `title`, `tags` (= `negative_prompt`); else *inspiration mode* → `gpt_description_prompt` = prompt. Also `model`, `make_instrumental` (= `is_instrumental`).
+  - Forwarded extra knobs: `gender`, `style_weight`, `weirdness_constraint`, `audio_weight`.
+  - Status mapping (`_STAGE_TO_STATUS`): track `status` `text`/`first` → `running`, `complete` → `succeeded`; `data.type` upper `FAIL` → `failed`; `track.fail_message`/`error_message` → `failed`.
+  - Audio delivery = URL; on `complete` reads `track.audio_url` → `audio_urls=[url]`, `audio_media_type="audio/mpeg"`; `complete` with no URL → `failed` (moderation). `track.duration` → `MusicUsage(duration)`.
+  - Errors: `httpx.HTTPError` → `ProviderRequestError(502)`; HTTP ≥400 → `ProviderRequestError` via `_map_status`; create with no workId → `ProviderRequestError`.
+
+## mureka — REST over `https://platform.mureka.ai`
+
+- **Client**: `make_client(backend.base_url or "https://platform.mureka.ai", timeout=180.0, headers={Authorization: Bearer {api_key}})` (env `MUREKA_MUSIC_API_KEY`/`MUREKA_MUSIC_BASE_URL`, legacy `MUREKA_API_KEY`/`MUREKA_BASE_URL`). Required: `backend.api_key` else `ProviderNotConfiguredError("mureka")`.
+- **Music**: Genuine two-phase async REST. The official docs render schemas client-side, so the adapter is tolerant of response field names via candidate fallbacks.
+  - **Create**: `POST /v1/song/generate` body from `_build_body` → a task id read via `_first(data, _TASK_ID_FIELDS) or _first(data.data, _TASK_ID_FIELDS)` where `_TASK_ID_FIELDS = ("task_id", "taskId", "id")`; the upstream id is the gateway task id. Missing → `ProviderRequestError("mureka create returned no task_id")`.
+  - **Poll**: `GET /v1/song/query/{task_id}` → `{status, audio_url, ...}`. `status` read from `data.status` or `data.task_status` (default `running`).
+  - Models: `mureka-song-1`, `mureka-song-1.5`.
+  - Body (`_build_body`): `model`, `lyrics` (= `extra["lyrics"]` and `prompt` together; or the prompt itself when it contains a newline or starts with `[`) else `prompt`, `title` (= `extra["title"]`), `tags` (= `negative_prompt` elif `extra["style"]`), `instrumental` (= `is_instrumental`), `bpm`, `duration` (= `int(request.duration)`).
+  - Forwarded extra knobs: `model_name`, `audio_config`, `voice_id`, `seed`.
+  - Status mapping (`_STATUS_MAP`): `queued`/`pending` → `pending`, `running`/`processing` → `running`, `succeeded`/`success`/`completed` → `succeeded`, `failed`/`error` → `failed`.
+  - Audio delivery = URL; on `succeeded` reads audio via `_first(data, _AUDIO_FIELDS)` where `_AUDIO_FIELDS = ("audio_url", "audioUrl", "url")` → `audio_urls=[audio]`, `audio_media_type="audio/mpeg"`; no URL → `failed` (error from `fail_message` or `"mureka task completed with no audio URL"`). `duration` from `data.duration` or `data.extra.duration` → `MusicUsage(duration)`. On `failed`, error from `fail_message`/`error`/`"mureka task failed"`.
+  - Errors: `httpx.HTTPError` → `ProviderRequestError(502)`; HTTP ≥400 → `ProviderRequestError` via `_map_status`; create with no task_id → `ProviderRequestError`.
+
+## acestep — REST (self-hosted, no default host)
+
+- **Client**: `make_client(backend.base_url, timeout=300.0, headers={Authorization: Bearer {api_key}} if api_key else {})` (env `ACESTEP_MUSIC_API_KEY`/`ACESTEP_MUSIC_BASE_URL`, legacy `ACESTEP_API_KEY`/`ACESTEP_BASE_URL`). **Self-hosted — no default cloud host**: requires `ACESTEP_BASE_URL` (i.e. `backend.base_url`) else `ProviderNotConfiguredError("acestep", "ACE-Step requires ACESTEP_BASE_URL to be set.")`. `api_key` is optional (header sent only when set).
+- **Music**: Genuine two-phase async REST plus a binary download.
+  - **Create**: `POST /release_task` body from `_build_body` → `data.task_id`; the upstream id is the gateway task id. Missing → `ProviderRequestError("acestep create returned no task_id")`.
+  - **Poll**: `POST /query_result` body `{"task_id_list": [task_id]}` → `data[]`; finds the entry matching `task_id` (else `items[0]`), maps its integer `status` via `_STATUS_MAP = {0: running, 1: succeeded, 2: failed}` (default `running`). No entry → `running`.
+  - **Fetch audio**: on `succeeded` parses `entry.result` (a JSON string, or a list/dict) → `parsed[0].file` (a path like `/v1/audio?path=...`); `GET` that path → raw bytes → base64 into `audio_b64`. If the fetch raises `ProviderRequestError`, falls back to `audio_urls=[absolute path]`.
+  - Models: `acestep-v15-turbo`, `acestep-v15-base`, `ace-step-1.5`.
+  - Body (`_build_body`): `prompt`, `lyrics` (= `extra["lyrics"]`), `vocal_language`, `audio_format` (if in `flac`/`mp3`/`opus`/`aac`/`wav`/`wav32`), `audio_duration` (= `float(duration)`), `bpm`, `key_scale`, `time_signature`, `guidance_scale`, `seed` (and `use_random_seed=False`), `model`.
+  - Forwarded extra knobs: `thinking`, `sample_mode`, `sample_query`, `use_format`, `inference_steps`, `batch_size`, `task_type`, `reference_audio_path`.
+  - Audio delivery = inline base64 (bytes fetched via `_fetch_audio`, base64-encoded); fallback to `audio_urls=[absolute path]` on fetch failure. `_media_type` maps `flac`→`audio/flac`, `mp3`→`audio/mpeg`, `opus`→`audio/ogg`, `aac`→`audio/aac`, `wav`/`wav32`→`audio/wav`, default `audio/mpeg`. `parsed[0].metas.duration` → `MusicUsage(duration)`; `parsed[0].lyrics` → `task.lyrics`. No result → `failed`; no file → `failed`.
+  - Errors: `httpx.HTTPError` → `ProviderRequestError(502)`; HTTP ≥400 → `ProviderRequestError` via `_map_status`; create with no task_id → `ProviderRequestError`; audio-fetch HTTP ≥400 → `ProviderRequestError`.
+

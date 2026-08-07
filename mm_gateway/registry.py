@@ -75,7 +75,7 @@ _MODEL_ALIASES: dict[str, tuple[str, str]] = {
     "gateway-music-lyria": ("google", "lyria-3"),
     "gateway-music-elevenlabs": ("elevenlabs", "music_v2"),
     "gateway-music-minimax": ("minimax", "music-3.0"),
-    "gateway-music-udio": ("udioapi", "udio-v2"),
+    "gateway-music-udio": ("udioapi", "chirp-v5"),
     "gateway-music-mureka": ("mureka", "mureka-song-1"),
     "gateway-music-acestep": ("acestep", "ace-step-1.5"),
 }

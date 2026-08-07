@@ -7,7 +7,7 @@ When ``Settings.mcp_enabled`` is true, ``mount_mcp(app, settings)`` mounts a
 buffering its body into a single ``Response``. The session manager's lifespan
 is tied to the app lifespan so the MCP server starts/stops with the gateway.
 
-The MCP server registers four tools that mirror the HTTP API:
+The MCP server registers six tools that mirror the HTTP API:
 
 * ``list_models``        — list usable models for the calling key (image+video+music).
 * ``generate_image``     — generate an image (OpenAI unified request shape).

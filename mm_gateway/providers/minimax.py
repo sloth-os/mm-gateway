@@ -1,9 +1,9 @@
 """MiniMax music provider — REST API over ``https://api.minimax.io``.
 
 ``POST /v1/music_generation`` is synchronous: a single blocking call returns
-``data.status`` 1 (in progress) or 2 (completed) with the audio inline — hex
-encoded by default, or a 24h URL when ``output_format`` is ``url``. There is no
-job id to poll. As with the ElevenLabs / Stability-SVD adapters, we mint a
+``data.status`` 1 (in progress) or 2 (completed) with the audio inline — a
+24h URL by default (``output_format`` ``url``), or hex-encoded bytes when the
+caller passes ``audio_format == "hex"``. There is no job id to poll. As with the ElevenLabs / Stability-SVD adapters, we mint a
 gateway-local task id at create time, record the request in an in-memory store,
 and run the blocking call on the first poll — the synthetic task moves
 ``pending -> running -> succeeded`` as the call completes.
@@ -140,7 +140,7 @@ class MiniMaxProvider(MusicProvider):
         rec["completed_at"] = int(time.time())
         fmt = (request.audio_format or "mp3").lower()
         media_type = _MIME_BY_FORMAT.get(fmt, "audio/mpeg")
-        # output_format 'url' -> audio is a URL; 'hex' (default) -> hex-encoded bytes.
+        # output_format 'url' (default) -> audio is a URL; 'hex' (opt-in) -> hex-encoded bytes.
         if body.get("output_format") == "url" and audio.startswith("http"):
             rec["audio_urls"] = [audio]
             rec["audio_media_type"] = media_type
