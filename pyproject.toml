@@ -21,7 +21,6 @@ dependencies = [
     "dashscope>=1.20",
     "stability-sdk>=0.2",
     "volcengine-python-sdk>=5.0",
-    "xai-sdk>=1.0",
     "runapi-flux-2>=0.3",
     "openrouter>=1.0",
     "pillow>=10.0",

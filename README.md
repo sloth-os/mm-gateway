@@ -286,40 +286,51 @@ dispatch:
    `{{version}}/{{major}}/{{major}}.{{minor}}` (on `v*` tags), and `sha-<short>`.
    The built image is also saved as an artifact for the e2e job.
 3. **E2E (real provider)** — loads the *just-built* image, starts it with the
-   provider `*_API_KEY`, `*_BASE_URL`, and `*_MODEL` secrets (plus
-   `GATEWAY_API_KEY`) passed straight through to the container — whatever
-   secrets you configure in GitHub flow into the image 1:1, no hard-coding —
-   and runs `tests/e2e/smoke.py`. This job **only runs** when at least one
-   provider is fully configured (all three of `*_API_KEY` + `*_BASE_URL` +
-   `*_MODEL` set) *or* the manual `run-e2e` flag is checked, so the workflow
-   stays green before secrets exist.
+   provider `*_API_KEY` (secret) and `*_BASE_URL` / `*_MODEL` (variables), plus
+   `GATEWAY_API_KEY`, passed straight through to the container — whatever you
+   configure in GitHub flows into the image 1:1, no hard-coding — and runs
+   `tests/e2e/smoke.py`. This job **only runs** when at least one provider is
+   fully configured (all three of `*_API_KEY` + `*_BASE_URL` + `*_MODEL` set)
+   *or* the manual `run-e2e` flag is checked, so the workflow stays green
+   before secrets exist.
 
-Secrets to set in **Settings → Secrets and variables → Actions** (all optional;
-the e2e runs for a provider only when its `*_API_KEY` + `*_BASE_URL` + `*_MODEL`
-are all set):
+Configure these in **Settings → Secrets and variables → Actions**, under the
+`ci` environment. The `*_API_KEY` values are sensitive, so store them as
+**secrets**; `*_BASE_URL` and `*_MODEL` are not sensitive, so store them as
+**variables** — the workflow reads them from the `vars.*` context, not
+`secrets.*`, so a `*_BASE_URL`/`*_MODEL` stored as a *secret* is invisible to the
+gate and the e2e silently skips. A provider's e2e runs only when **all three** of
+its `*_API_KEY` (secret) + `*_BASE_URL` (variable) + `*_MODEL` (variable) are set.
+
+**Secrets** (`*_API_KEY` + gateway/publish creds):
 
 | Secret | Provider | Notes |
 |--------|----------|-------|
 | `OPENAI_API_KEY` | OpenAI | image (gpt-image) + video (sora) |
-| `OPENAI_BASE_URL` | OpenAI | upstream endpoint, flows into the container |
-| `OPENAI_MODEL` | OpenAI | model id to request + serve via the registry |
 | `ARK_API_KEY` | Volcengine | seedream image + seedance video |
-| `ARK_BASE_URL` / `ARK_MODEL` | Volcengine | endpoint + model id |
 | `GOOGLE_API_KEY` | Google | imagen + veo |
-| `GOOGLE_BASE_URL` / `GOOGLE_MODEL` | Google | endpoint + model id |
-| `XAI_API_KEY` | xAI | grok-imagine |
-| `XAI_BASE_URL` / `XAI_MODEL` | xAI | endpoint + model id |
+| `XAI_API_KEY` | xAI | grok-imagine image + video |
 | `RUNAPI_API_KEY` | FLUX | image only (key env is `RUNAPI_*`) |
-| `FLUX_BASE_URL` / `FLUX_MODEL` | FLUX | endpoint + model id (env is `FLUX_*`) |
 | `DASHSCOPE_API_KEY` | DashScope | wanx + wan |
-| `DASHSCOPE_BASE_URL` / `DASHSCOPE_MODEL` | DashScope | endpoint + model id |
 | `STABILITY_API_KEY` | Stability | sd + svd |
-| `STABILITY_BASE_URL` / `STABILITY_MODEL` | Stability | endpoint + model id |
 | `OPENROUTER_API_KEY` | OpenRouter | router (no first-class image alias) |
-| `OPENROUTER_BASE_URL` / `OPENROUTER_MODEL` | OpenRouter | endpoint + model id |
 | `GATEWAY_API_KEY` | — | front-end Bearer token; if unset the gateway is open |
 | `DOCKERHUB_USERNAME` | — | opt-in: also publish to Docker Hub as `<username>/<repo>` |
 | `DOCKERHUB_TOKEN` | — | opt-in: Docker Hub access token (paired with `DOCKERHUB_USERNAME`) |
+
+**Variables** (`*_BASE_URL` + `*_MODEL`, one pair per provider you wire up):
+
+| Variable | Provider | Notes |
+|----------|----------|-------|
+| `OPENAI_BASE_URL` | OpenAI | upstream endpoint; **include `/v1`** (the SDK uses it verbatim), e.g. `https://api.openai.com/v1` |
+| `OPENAI_MODEL` | OpenAI | model id to request + serve via the registry |
+| `ARK_BASE_URL` / `ARK_MODEL` | Volcengine | endpoint + model id |
+| `GOOGLE_BASE_URL` / `GOOGLE_MODEL` | Google | endpoint + model id |
+| `XAI_BASE_URL` / `XAI_MODEL` | xAI | endpoint (with or without `/v1` — the adapter normalises) + model id |
+| `FLUX_BASE_URL` / `FLUX_MODEL` | FLUX | endpoint + model id (env is `FLUX_*`) |
+| `DASHSCOPE_BASE_URL` / `DASHSCOPE_MODEL` | DashScope | endpoint + model id |
+| `STABILITY_BASE_URL` / `STABILITY_MODEL` | Stability | endpoint + model id |
+| `OPENROUTER_BASE_URL` / `OPENROUTER_MODEL` | OpenRouter | endpoint + model id |
 
 `GITHUB_TOKEN` (for pushing to GHCR) is provided automatically — no setup needed.
 Without `DOCKERHUB_*` the image is published to GHCR only, so the workflow stays
