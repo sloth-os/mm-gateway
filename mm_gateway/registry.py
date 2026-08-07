@@ -100,6 +100,11 @@ class Registry:
                 extra_model = cfg.extra.get("image_model")
                 if extra_model and provider.supports_image and extra_model not in provider.image_models:
                     provider.image_models = [*provider.image_models, extra_model]
+                # Same treatment for a video model pinned via the legacy env
+                # layout's *_VIDEO_MODEL (extra["video_model"]).
+                extra_video = cfg.extra.get("video_model")
+                if extra_video and provider.supports_video and extra_video not in provider.video_models:
+                    provider.video_models = [*provider.video_models, extra_video]
                 self._backends[cfg.name] = provider
                 self._configs[cfg.name] = cfg
                 log.info("backend_registered", backend=cfg.name, type=cfg.type,

@@ -21,17 +21,19 @@ jobs:
   lint-and-test:
     name: Lint & unit tests
     runs-on: ubuntu-latest
-    # Provider credentials live in the `ci` environment: *_API_KEY as secrets and
-    # *_BASE_URL / *_MODEL as variables (they are not sensitive). A job only
-    # receives environment-scoped secrets/vars when it declares the environment,
-    # so attach it here (and on e2e) — otherwise the gate below sees nothing.
+    # Provider credentials live in the `ci` environment: *_IMAGE_API_KEY /
+    # *_VIDEO_API_KEY as secrets and the matching *_BASE_URL / *_MODEL as
+    # variables (they are not sensitive). A job only receives environment-scoped
+    # secrets/vars when it declares the environment, so attach it here (and on
+    # e2e) — otherwise the gate below sees nothing.
     environment: ci
     timeout-minutes: 15
     outputs:
-      # Whether at least one provider is *fully* configured (its *_API_KEY,
-      # *_BASE_URL, and *_MODEL secrets all set). The e2e job gates on this OR on
-      # the manual run-e2e flag, so it only fires when there is a real,
-      # operator-pinned model to exercise — not merely when a stray key exists.
+      # Whether at least one provider modality is *fully* configured (its
+      # *_IMAGE_* or *_VIDEO_* triple of API_KEY + BASE_URL + MODEL all set). The
+      # e2e job gates on this OR on the manual run-e2e flag, so it only fires
+      # when there is a real, operator-pinned model to exercise — not merely when
+      # a stray key exists.
       secrets_present: ${{ steps.secret_gate.outputs.secrets_present }}
     steps:
       - uses: actions/checkout@v4
@@ -77,52 +79,87 @@ jobs:
       - name: Run unit tests
         run: pytest -q
 
-      # Detect whether at least one provider is *fully* configured — all three of
-      # its *_API_KEY, *_BASE_URL, and *_MODEL set — *without* printing any of
-      # them. `secrets.*` references are silently absent (empty) when the secret
-      # is not defined, so this only flips true once you wire a real provider in
-      # Settings. "Fully configured" matches the e2e's own gate (a backend runs
-      # the e2e iff all three are set), so the job fires only when there's a
-      # real, operator-pinned model to call.
+      # Detect whether at least one provider modality is *fully* configured — all
+      # three of its *_IMAGE_* or *_VIDEO_* triple (API_KEY + BASE_URL + MODEL)
+      # set — *without* printing any of them. `secrets.*` references are silently
+      # absent (empty) when the secret is not defined, so this only flips true
+      # once you wire a real provider modality in Settings. "Fully configured"
+      # matches the e2e's own gate (a backend modality runs the e2e iff all three
+      # are set), so the job fires only when there's a real, operator-pinned
+      # model to call.
       - name: Detect fully-configured provider
         id: secret_gate
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-          ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
-          ARK_BASE_URL: ${{ vars.ARK_BASE_URL }}
-          ARK_MODEL: ${{ vars.ARK_MODEL }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_BASE_URL: ${{ vars.GOOGLE_BASE_URL }}
-          GOOGLE_MODEL: ${{ vars.GOOGLE_MODEL }}
-          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-          XAI_BASE_URL: ${{ vars.XAI_BASE_URL }}
-          XAI_MODEL: ${{ vars.XAI_MODEL }}
-          RUNAPI_API_KEY: ${{ secrets.RUNAPI_API_KEY }}
-          FLUX_BASE_URL: ${{ vars.FLUX_BASE_URL }}
-          FLUX_MODEL: ${{ vars.FLUX_MODEL }}
-          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          DASHSCOPE_BASE_URL: ${{ vars.DASHSCOPE_BASE_URL }}
-          DASHSCOPE_MODEL: ${{ vars.DASHSCOPE_MODEL }}
-          STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
-          STABILITY_BASE_URL: ${{ vars.STABILITY_BASE_URL }}
-          STABILITY_MODEL: ${{ vars.STABILITY_MODEL }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_BASE_URL: ${{ vars.OPENROUTER_BASE_URL }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENAI_IMAGE_API_KEY: ${{ secrets.OPENAI_IMAGE_API_KEY }}
+          OPENAI_IMAGE_BASE_URL: ${{ vars.OPENAI_IMAGE_BASE_URL }}
+          OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }}
+          OPENAI_VIDEO_API_KEY: ${{ secrets.OPENAI_VIDEO_API_KEY }}
+          OPENAI_VIDEO_BASE_URL: ${{ vars.OPENAI_VIDEO_BASE_URL }}
+          OPENAI_VIDEO_MODEL: ${{ vars.OPENAI_VIDEO_MODEL }}
+          ARK_IMAGE_API_KEY: ${{ secrets.ARK_IMAGE_API_KEY }}
+          ARK_IMAGE_BASE_URL: ${{ vars.ARK_IMAGE_BASE_URL }}
+          ARK_IMAGE_MODEL: ${{ vars.ARK_IMAGE_MODEL }}
+          ARK_VIDEO_API_KEY: ${{ secrets.ARK_VIDEO_API_KEY }}
+          ARK_VIDEO_BASE_URL: ${{ vars.ARK_VIDEO_BASE_URL }}
+          ARK_VIDEO_MODEL: ${{ vars.ARK_VIDEO_MODEL }}
+          GOOGLE_IMAGE_API_KEY: ${{ secrets.GOOGLE_IMAGE_API_KEY }}
+          GOOGLE_IMAGE_BASE_URL: ${{ vars.GOOGLE_IMAGE_BASE_URL }}
+          GOOGLE_IMAGE_MODEL: ${{ vars.GOOGLE_IMAGE_MODEL }}
+          GOOGLE_VIDEO_API_KEY: ${{ secrets.GOOGLE_VIDEO_API_KEY }}
+          GOOGLE_VIDEO_BASE_URL: ${{ vars.GOOGLE_VIDEO_BASE_URL }}
+          GOOGLE_VIDEO_MODEL: ${{ vars.GOOGLE_VIDEO_MODEL }}
+          XAI_IMAGE_API_KEY: ${{ secrets.XAI_IMAGE_API_KEY }}
+          XAI_IMAGE_BASE_URL: ${{ vars.XAI_IMAGE_BASE_URL }}
+          XAI_IMAGE_MODEL: ${{ vars.XAI_IMAGE_MODEL }}
+          XAI_VIDEO_API_KEY: ${{ secrets.XAI_VIDEO_API_KEY }}
+          XAI_VIDEO_BASE_URL: ${{ vars.XAI_VIDEO_BASE_URL }}
+          XAI_VIDEO_MODEL: ${{ vars.XAI_VIDEO_MODEL }}
+          FLUX_IMAGE_API_KEY: ${{ secrets.FLUX_IMAGE_API_KEY }}
+          FLUX_IMAGE_BASE_URL: ${{ vars.FLUX_IMAGE_BASE_URL }}
+          FLUX_IMAGE_MODEL: ${{ vars.FLUX_IMAGE_MODEL }}
+          FLUX_VIDEO_API_KEY: ${{ secrets.FLUX_VIDEO_API_KEY }}
+          FLUX_VIDEO_BASE_URL: ${{ vars.FLUX_VIDEO_BASE_URL }}
+          FLUX_VIDEO_MODEL: ${{ vars.FLUX_VIDEO_MODEL }}
+          DASHSCOPE_IMAGE_API_KEY: ${{ secrets.DASHSCOPE_IMAGE_API_KEY }}
+          DASHSCOPE_IMAGE_BASE_URL: ${{ vars.DASHSCOPE_IMAGE_BASE_URL }}
+          DASHSCOPE_IMAGE_MODEL: ${{ vars.DASHSCOPE_IMAGE_MODEL }}
+          DASHSCOPE_VIDEO_API_KEY: ${{ secrets.DASHSCOPE_VIDEO_API_KEY }}
+          DASHSCOPE_VIDEO_BASE_URL: ${{ vars.DASHSCOPE_VIDEO_BASE_URL }}
+          DASHSCOPE_VIDEO_MODEL: ${{ vars.DASHSCOPE_VIDEO_MODEL }}
+          STABILITY_IMAGE_API_KEY: ${{ secrets.STABILITY_IMAGE_API_KEY }}
+          STABILITY_IMAGE_BASE_URL: ${{ vars.STABILITY_IMAGE_BASE_URL }}
+          STABILITY_IMAGE_MODEL: ${{ vars.STABILITY_IMAGE_MODEL }}
+          STABILITY_VIDEO_API_KEY: ${{ secrets.STABILITY_VIDEO_API_KEY }}
+          STABILITY_VIDEO_BASE_URL: ${{ vars.STABILITY_VIDEO_BASE_URL }}
+          STABILITY_VIDEO_MODEL: ${{ vars.STABILITY_VIDEO_MODEL }}
+          OPENROUTER_IMAGE_API_KEY: ${{ secrets.OPENROUTER_IMAGE_API_KEY }}
+          OPENROUTER_IMAGE_BASE_URL: ${{ vars.OPENROUTER_IMAGE_BASE_URL }}
+          OPENROUTER_IMAGE_MODEL: ${{ vars.OPENROUTER_IMAGE_MODEL }}
+          OPENROUTER_VIDEO_API_KEY: ${{ secrets.OPENROUTER_VIDEO_API_KEY }}
+          OPENROUTER_VIDEO_BASE_URL: ${{ vars.OPENROUTER_VIDEO_BASE_URL }}
+          OPENROUTER_VIDEO_MODEL: ${{ vars.OPENROUTER_VIDEO_MODEL }}
         run: |
           set=0
-          # A provider is "fully configured" iff all three of its triple are set.
+          # A provider modality is "fully configured" iff all three of its
+          # *_IMAGE_* or *_VIDEO_* triple are set. The e2e runs iff at least one
+          # modality of one provider is fully configured.
           for triple in \
-            "${OPENAI_API_KEY}:${OPENAI_BASE_URL}:${OPENAI_MODEL}" \
-            "${ARK_API_KEY}:${ARK_BASE_URL}:${ARK_MODEL}" \
-            "${GOOGLE_API_KEY}:${GOOGLE_BASE_URL}:${GOOGLE_MODEL}" \
-            "${XAI_API_KEY}:${XAI_BASE_URL}:${XAI_MODEL}" \
-            "${RUNAPI_API_KEY}:${FLUX_BASE_URL}:${FLUX_MODEL}" \
-            "${DASHSCOPE_API_KEY}:${DASHSCOPE_BASE_URL}:${DASHSCOPE_MODEL}" \
-            "${STABILITY_API_KEY}:${STABILITY_BASE_URL}:${STABILITY_MODEL}" \
-            "${OPENROUTER_API_KEY}:${OPENROUTER_BASE_URL}:${OPENROUTER_MODEL}" \
+            "${OPENAI_IMAGE_API_KEY}:${OPENAI_IMAGE_BASE_URL}:${OPENAI_IMAGE_MODEL}" \
+            "${OPENAI_VIDEO_API_KEY}:${OPENAI_VIDEO_BASE_URL}:${OPENAI_VIDEO_MODEL}" \
+            "${ARK_IMAGE_API_KEY}:${ARK_IMAGE_BASE_URL}:${ARK_IMAGE_MODEL}" \
+            "${ARK_VIDEO_API_KEY}:${ARK_VIDEO_BASE_URL}:${ARK_VIDEO_MODEL}" \
+            "${GOOGLE_IMAGE_API_KEY}:${GOOGLE_IMAGE_BASE_URL}:${GOOGLE_IMAGE_MODEL}" \
+            "${GOOGLE_VIDEO_API_KEY}:${GOOGLE_VIDEO_BASE_URL}:${GOOGLE_VIDEO_MODEL}" \
+            "${XAI_IMAGE_API_KEY}:${XAI_IMAGE_BASE_URL}:${XAI_IMAGE_MODEL}" \
+            "${XAI_VIDEO_API_KEY}:${XAI_VIDEO_BASE_URL}:${XAI_VIDEO_MODEL}" \
+            "${FLUX_IMAGE_API_KEY}:${FLUX_IMAGE_BASE_URL}:${FLUX_IMAGE_MODEL}" \
+            "${FLUX_VIDEO_API_KEY}:${FLUX_VIDEO_BASE_URL}:${FLUX_VIDEO_MODEL}" \
+            "${DASHSCOPE_IMAGE_API_KEY}:${DASHSCOPE_IMAGE_BASE_URL}:${DASHSCOPE_IMAGE_MODEL}" \
+            "${DASHSCOPE_VIDEO_API_KEY}:${DASHSCOPE_VIDEO_BASE_URL}:${DASHSCOPE_VIDEO_MODEL}" \
+            "${STABILITY_IMAGE_API_KEY}:${STABILITY_IMAGE_BASE_URL}:${STABILITY_IMAGE_MODEL}" \
+            "${STABILITY_VIDEO_API_KEY}:${STABILITY_VIDEO_BASE_URL}:${STABILITY_VIDEO_MODEL}" \
+            "${OPENROUTER_IMAGE_API_KEY}:${OPENROUTER_IMAGE_BASE_URL}:${OPENROUTER_IMAGE_MODEL}" \
+            "${OPENROUTER_VIDEO_API_KEY}:${OPENROUTER_VIDEO_BASE_URL}:${OPENROUTER_VIDEO_MODEL}" \
           ; do
             # Split on ':' — all three fields must be non-empty.
             IFS=':' read -r k u m <<< "$triple"
@@ -226,19 +263,20 @@ jobs:
           retention-days: 7
 
   # Load the *just-built* image and run a real provider call against it. Skips
-  # (exit 0) when no provider is fully configured (all three of *_API_KEY +
-  # *_BASE_URL + *_MODEL set) AND the manual run-e2e flag is off — so the
-  # workflow is green before secrets exist and only spends real provider calls
-  # once one is fully wired.
+  # (exit 0) when no provider modality is fully configured (all three of an
+  # *_IMAGE_* or *_VIDEO_* API_KEY + BASE_URL + MODEL set) AND the manual
+  # run-e2e flag is off — so the workflow is green before secrets exist and only
+  # spends real provider calls once one is fully wired.
   e2e:
     name: E2E (real provider)
     # Depend on both jobs so build's artifact is available AND lint-and-test's
     # secrets_present output is in the `needs` context for the gate below.
     needs: [lint-and-test, build]
     runs-on: ubuntu-latest
-    # Same `ci` environment as lint-and-test — the provider *_API_KEY secrets and
-    # *_BASE_URL / *_MODEL variables are environment-scoped, so the container and
-    # the smoke script only see them when the environment is declared here.
+    # Same `ci` environment as lint-and-test — the provider *_IMAGE_* /
+    # *_VIDEO_* API_KEY secrets and *_BASE_URL / *_MODEL variables are
+    # environment-scoped, so the container and the smoke script only see them
+    # when the environment is declared here.
     environment: ci
     timeout-minutes: 15
     if: |
@@ -260,51 +298,84 @@ jobs:
 
       - name: Start gateway
         # Pass provider keys + base URLs + pinned models through to the container
-        # using the gateway's legacy env-var layout (one backend per *_API_KEY,
-        # an implicit front-end key of GATEWAY_API_KEY). Only the secrets you've
-        # actually set are injected — the others stay unset and the gateway just
-        # doesn't register those backends. *_BASE_URL points a backend at its
-        # real endpoint; *_MODEL pins/extends the backend's served image model
+        # using the gateway's legacy env-var layout split by modality: a
+        # *_IMAGE_* triple and a *_VIDEO_* triple per provider, plus an implicit
+        # front-end key of GATEWAY_API_KEY. Only the secrets you've actually set
+        # are injected — the others stay unset and the gateway just doesn't
+        # register that modality. *_BASE_URL points a backend at its real
+        # endpoint; *_MODEL pins/extends the backend's served image/video model
         # (the registry appends it to the provider's model list at build time).
         # This is the "preserve the envs" contract: whatever secrets you add in
         # GitHub, they flow straight into the image 1:1.
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-          ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
-          ARK_BASE_URL: ${{ vars.ARK_BASE_URL }}
-          ARK_MODEL: ${{ vars.ARK_MODEL }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_BASE_URL: ${{ vars.GOOGLE_BASE_URL }}
-          GOOGLE_MODEL: ${{ vars.GOOGLE_MODEL }}
-          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-          XAI_BASE_URL: ${{ vars.XAI_BASE_URL }}
-          XAI_MODEL: ${{ vars.XAI_MODEL }}
-          RUNAPI_API_KEY: ${{ secrets.RUNAPI_API_KEY }}
-          FLUX_BASE_URL: ${{ vars.FLUX_BASE_URL }}
-          FLUX_MODEL: ${{ vars.FLUX_MODEL }}
-          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          DASHSCOPE_BASE_URL: ${{ vars.DASHSCOPE_BASE_URL }}
-          DASHSCOPE_MODEL: ${{ vars.DASHSCOPE_MODEL }}
-          STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
-          STABILITY_BASE_URL: ${{ vars.STABILITY_BASE_URL }}
-          STABILITY_MODEL: ${{ vars.STABILITY_MODEL }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_BASE_URL: ${{ vars.OPENROUTER_BASE_URL }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENAI_IMAGE_API_KEY: ${{ secrets.OPENAI_IMAGE_API_KEY }}
+          OPENAI_IMAGE_BASE_URL: ${{ vars.OPENAI_IMAGE_BASE_URL }}
+          OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }}
+          OPENAI_VIDEO_API_KEY: ${{ secrets.OPENAI_VIDEO_API_KEY }}
+          OPENAI_VIDEO_BASE_URL: ${{ vars.OPENAI_VIDEO_BASE_URL }}
+          OPENAI_VIDEO_MODEL: ${{ vars.OPENAI_VIDEO_MODEL }}
+          ARK_IMAGE_API_KEY: ${{ secrets.ARK_IMAGE_API_KEY }}
+          ARK_IMAGE_BASE_URL: ${{ vars.ARK_IMAGE_BASE_URL }}
+          ARK_IMAGE_MODEL: ${{ vars.ARK_IMAGE_MODEL }}
+          ARK_VIDEO_API_KEY: ${{ secrets.ARK_VIDEO_API_KEY }}
+          ARK_VIDEO_BASE_URL: ${{ vars.ARK_VIDEO_BASE_URL }}
+          ARK_VIDEO_MODEL: ${{ vars.ARK_VIDEO_MODEL }}
+          GOOGLE_IMAGE_API_KEY: ${{ secrets.GOOGLE_IMAGE_API_KEY }}
+          GOOGLE_IMAGE_BASE_URL: ${{ vars.GOOGLE_IMAGE_BASE_URL }}
+          GOOGLE_IMAGE_MODEL: ${{ vars.GOOGLE_IMAGE_MODEL }}
+          GOOGLE_VIDEO_API_KEY: ${{ secrets.GOOGLE_VIDEO_API_KEY }}
+          GOOGLE_VIDEO_BASE_URL: ${{ vars.GOOGLE_VIDEO_BASE_URL }}
+          GOOGLE_VIDEO_MODEL: ${{ vars.GOOGLE_VIDEO_MODEL }}
+          XAI_IMAGE_API_KEY: ${{ secrets.XAI_IMAGE_API_KEY }}
+          XAI_IMAGE_BASE_URL: ${{ vars.XAI_IMAGE_BASE_URL }}
+          XAI_IMAGE_MODEL: ${{ vars.XAI_IMAGE_MODEL }}
+          XAI_VIDEO_API_KEY: ${{ secrets.XAI_VIDEO_API_KEY }}
+          XAI_VIDEO_BASE_URL: ${{ vars.XAI_VIDEO_BASE_URL }}
+          XAI_VIDEO_MODEL: ${{ vars.XAI_VIDEO_MODEL }}
+          FLUX_IMAGE_API_KEY: ${{ secrets.FLUX_IMAGE_API_KEY }}
+          FLUX_IMAGE_BASE_URL: ${{ vars.FLUX_IMAGE_BASE_URL }}
+          FLUX_IMAGE_MODEL: ${{ vars.FLUX_IMAGE_MODEL }}
+          FLUX_VIDEO_API_KEY: ${{ secrets.FLUX_VIDEO_API_KEY }}
+          FLUX_VIDEO_BASE_URL: ${{ vars.FLUX_VIDEO_BASE_URL }}
+          FLUX_VIDEO_MODEL: ${{ vars.FLUX_VIDEO_MODEL }}
+          DASHSCOPE_IMAGE_API_KEY: ${{ secrets.DASHSCOPE_IMAGE_API_KEY }}
+          DASHSCOPE_IMAGE_BASE_URL: ${{ vars.DASHSCOPE_IMAGE_BASE_URL }}
+          DASHSCOPE_IMAGE_MODEL: ${{ vars.DASHSCOPE_IMAGE_MODEL }}
+          DASHSCOPE_VIDEO_API_KEY: ${{ secrets.DASHSCOPE_VIDEO_API_KEY }}
+          DASHSCOPE_VIDEO_BASE_URL: ${{ vars.DASHSCOPE_VIDEO_BASE_URL }}
+          DASHSCOPE_VIDEO_MODEL: ${{ vars.DASHSCOPE_VIDEO_MODEL }}
+          STABILITY_IMAGE_API_KEY: ${{ secrets.STABILITY_IMAGE_API_KEY }}
+          STABILITY_IMAGE_BASE_URL: ${{ vars.STABILITY_IMAGE_BASE_URL }}
+          STABILITY_IMAGE_MODEL: ${{ vars.STABILITY_IMAGE_MODEL }}
+          STABILITY_VIDEO_API_KEY: ${{ secrets.STABILITY_VIDEO_API_KEY }}
+          STABILITY_VIDEO_BASE_URL: ${{ vars.STABILITY_VIDEO_BASE_URL }}
+          STABILITY_VIDEO_MODEL: ${{ vars.STABILITY_VIDEO_MODEL }}
+          OPENROUTER_IMAGE_API_KEY: ${{ secrets.OPENROUTER_IMAGE_API_KEY }}
+          OPENROUTER_IMAGE_BASE_URL: ${{ vars.OPENROUTER_IMAGE_BASE_URL }}
+          OPENROUTER_IMAGE_MODEL: ${{ vars.OPENROUTER_IMAGE_MODEL }}
+          OPENROUTER_VIDEO_API_KEY: ${{ secrets.OPENROUTER_VIDEO_API_KEY }}
+          OPENROUTER_VIDEO_BASE_URL: ${{ vars.OPENROUTER_VIDEO_BASE_URL }}
+          OPENROUTER_VIDEO_MODEL: ${{ vars.OPENROUTER_VIDEO_MODEL }}
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
         run: |
           docker run -d --name gateway --restart=no \
             -p 8000:8000 \
-            -e OPENAI_API_KEY -e OPENAI_BASE_URL -e OPENAI_MODEL \
-            -e ARK_API_KEY -e ARK_BASE_URL -e ARK_MODEL \
-            -e GOOGLE_API_KEY -e GOOGLE_BASE_URL -e GOOGLE_MODEL \
-            -e XAI_API_KEY -e XAI_BASE_URL -e XAI_MODEL \
-            -e RUNAPI_API_KEY -e FLUX_BASE_URL -e FLUX_MODEL \
-            -e DASHSCOPE_API_KEY -e DASHSCOPE_BASE_URL -e DASHSCOPE_MODEL \
-            -e STABILITY_API_KEY -e STABILITY_BASE_URL -e STABILITY_MODEL \
-            -e OPENROUTER_API_KEY -e OPENROUTER_BASE_URL -e OPENROUTER_MODEL \
+            -e OPENAI_IMAGE_API_KEY -e OPENAI_IMAGE_BASE_URL -e OPENAI_IMAGE_MODEL \
+            -e OPENAI_VIDEO_API_KEY -e OPENAI_VIDEO_BASE_URL -e OPENAI_VIDEO_MODEL \
+            -e ARK_IMAGE_API_KEY -e ARK_IMAGE_BASE_URL -e ARK_IMAGE_MODEL \
+            -e ARK_VIDEO_API_KEY -e ARK_VIDEO_BASE_URL -e ARK_VIDEO_MODEL \
+            -e GOOGLE_IMAGE_API_KEY -e GOOGLE_IMAGE_BASE_URL -e GOOGLE_IMAGE_MODEL \
+            -e GOOGLE_VIDEO_API_KEY -e GOOGLE_VIDEO_BASE_URL -e GOOGLE_VIDEO_MODEL \
+            -e XAI_IMAGE_API_KEY -e XAI_IMAGE_BASE_URL -e XAI_IMAGE_MODEL \
+            -e XAI_VIDEO_API_KEY -e XAI_VIDEO_BASE_URL -e XAI_VIDEO_MODEL \
+            -e FLUX_IMAGE_API_KEY -e FLUX_IMAGE_BASE_URL -e FLUX_IMAGE_MODEL \
+            -e FLUX_VIDEO_API_KEY -e FLUX_VIDEO_BASE_URL -e FLUX_VIDEO_MODEL \
+            -e DASHSCOPE_IMAGE_API_KEY -e DASHSCOPE_IMAGE_BASE_URL -e DASHSCOPE_IMAGE_MODEL \
+            -e DASHSCOPE_VIDEO_API_KEY -e DASHSCOPE_VIDEO_BASE_URL -e DASHSCOPE_VIDEO_MODEL \
+            -e STABILITY_IMAGE_API_KEY -e STABILITY_IMAGE_BASE_URL -e STABILITY_IMAGE_MODEL \
+            -e STABILITY_VIDEO_API_KEY -e STABILITY_VIDEO_BASE_URL -e STABILITY_VIDEO_MODEL \
+            -e OPENROUTER_IMAGE_API_KEY -e OPENROUTER_IMAGE_BASE_URL -e OPENROUTER_IMAGE_MODEL \
+            -e OPENROUTER_VIDEO_API_KEY -e OPENROUTER_VIDEO_BASE_URL -e OPENROUTER_VIDEO_MODEL \
             -e GATEWAY_API_KEY \
             ghcr.io/${{ github.repository }}:sha-${GITHUB_SHA::7}
 
@@ -313,35 +384,60 @@ jobs:
 
       - name: Run e2e smoke
         env:
-          # *_API_KEY are secrets; *_BASE_URL / *_MODEL are variables (not
-          # sensitive), matching the gate and the container-start step — so the
-          # smoke script sees the same triple each provider was gated on.
+          # *_IMAGE_* / *_VIDEO_* API_KEY are secrets; the *_BASE_URL / *_MODEL
+          # in each triple are variables (not sensitive), matching the gate and
+          # the container-start step — so the smoke script sees the same triple
+          # each provider modality was gated on.
           MM_GATEWAY: http://127.0.0.1:8000
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-          ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
-          ARK_BASE_URL: ${{ vars.ARK_BASE_URL }}
-          ARK_MODEL: ${{ vars.ARK_MODEL }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_BASE_URL: ${{ vars.GOOGLE_BASE_URL }}
-          GOOGLE_MODEL: ${{ vars.GOOGLE_MODEL }}
-          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-          XAI_BASE_URL: ${{ vars.XAI_BASE_URL }}
-          XAI_MODEL: ${{ vars.XAI_MODEL }}
-          RUNAPI_API_KEY: ${{ secrets.RUNAPI_API_KEY }}
-          FLUX_BASE_URL: ${{ vars.FLUX_BASE_URL }}
-          FLUX_MODEL: ${{ vars.FLUX_MODEL }}
-          DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
-          DASHSCOPE_BASE_URL: ${{ vars.DASHSCOPE_BASE_URL }}
-          DASHSCOPE_MODEL: ${{ vars.DASHSCOPE_MODEL }}
-          STABILITY_API_KEY: ${{ secrets.STABILITY_API_KEY }}
-          STABILITY_BASE_URL: ${{ vars.STABILITY_BASE_URL }}
-          STABILITY_MODEL: ${{ vars.STABILITY_MODEL }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_BASE_URL: ${{ vars.OPENROUTER_BASE_URL }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENAI_IMAGE_API_KEY: ${{ secrets.OPENAI_IMAGE_API_KEY }}
+          OPENAI_IMAGE_BASE_URL: ${{ vars.OPENAI_IMAGE_BASE_URL }}
+          OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }}
+          OPENAI_VIDEO_API_KEY: ${{ secrets.OPENAI_VIDEO_API_KEY }}
+          OPENAI_VIDEO_BASE_URL: ${{ vars.OPENAI_VIDEO_BASE_URL }}
+          OPENAI_VIDEO_MODEL: ${{ vars.OPENAI_VIDEO_MODEL }}
+          ARK_IMAGE_API_KEY: ${{ secrets.ARK_IMAGE_API_KEY }}
+          ARK_IMAGE_BASE_URL: ${{ vars.ARK_IMAGE_BASE_URL }}
+          ARK_IMAGE_MODEL: ${{ vars.ARK_IMAGE_MODEL }}
+          ARK_VIDEO_API_KEY: ${{ secrets.ARK_VIDEO_API_KEY }}
+          ARK_VIDEO_BASE_URL: ${{ vars.ARK_VIDEO_BASE_URL }}
+          ARK_VIDEO_MODEL: ${{ vars.ARK_VIDEO_MODEL }}
+          GOOGLE_IMAGE_API_KEY: ${{ secrets.GOOGLE_IMAGE_API_KEY }}
+          GOOGLE_IMAGE_BASE_URL: ${{ vars.GOOGLE_IMAGE_BASE_URL }}
+          GOOGLE_IMAGE_MODEL: ${{ vars.GOOGLE_IMAGE_MODEL }}
+          GOOGLE_VIDEO_API_KEY: ${{ secrets.GOOGLE_VIDEO_API_KEY }}
+          GOOGLE_VIDEO_BASE_URL: ${{ vars.GOOGLE_VIDEO_BASE_URL }}
+          GOOGLE_VIDEO_MODEL: ${{ vars.GOOGLE_VIDEO_MODEL }}
+          XAI_IMAGE_API_KEY: ${{ secrets.XAI_IMAGE_API_KEY }}
+          XAI_IMAGE_BASE_URL: ${{ vars.XAI_IMAGE_BASE_URL }}
+          XAI_IMAGE_MODEL: ${{ vars.XAI_IMAGE_MODEL }}
+          XAI_VIDEO_API_KEY: ${{ secrets.XAI_VIDEO_API_KEY }}
+          XAI_VIDEO_BASE_URL: ${{ vars.XAI_VIDEO_BASE_URL }}
+          XAI_VIDEO_MODEL: ${{ vars.XAI_VIDEO_MODEL }}
+          FLUX_IMAGE_API_KEY: ${{ secrets.FLUX_IMAGE_API_KEY }}
+          FLUX_IMAGE_BASE_URL: ${{ vars.FLUX_IMAGE_BASE_URL }}
+          FLUX_IMAGE_MODEL: ${{ vars.FLUX_IMAGE_MODEL }}
+          FLUX_VIDEO_API_KEY: ${{ secrets.FLUX_VIDEO_API_KEY }}
+          FLUX_VIDEO_BASE_URL: ${{ vars.FLUX_VIDEO_BASE_URL }}
+          FLUX_VIDEO_MODEL: ${{ vars.FLUX_VIDEO_MODEL }}
+          DASHSCOPE_IMAGE_API_KEY: ${{ secrets.DASHSCOPE_IMAGE_API_KEY }}
+          DASHSCOPE_IMAGE_BASE_URL: ${{ vars.DASHSCOPE_IMAGE_BASE_URL }}
+          DASHSCOPE_IMAGE_MODEL: ${{ vars.DASHSCOPE_IMAGE_MODEL }}
+          DASHSCOPE_VIDEO_API_KEY: ${{ secrets.DASHSCOPE_VIDEO_API_KEY }}
+          DASHSCOPE_VIDEO_BASE_URL: ${{ vars.DASHSCOPE_VIDEO_BASE_URL }}
+          DASHSCOPE_VIDEO_MODEL: ${{ vars.DASHSCOPE_VIDEO_MODEL }}
+          STABILITY_IMAGE_API_KEY: ${{ secrets.STABILITY_IMAGE_API_KEY }}
+          STABILITY_IMAGE_BASE_URL: ${{ vars.STABILITY_IMAGE_BASE_URL }}
+          STABILITY_IMAGE_MODEL: ${{ vars.STABILITY_IMAGE_MODEL }}
+          STABILITY_VIDEO_API_KEY: ${{ secrets.STABILITY_VIDEO_API_KEY }}
+          STABILITY_VIDEO_BASE_URL: ${{ vars.STABILITY_VIDEO_BASE_URL }}
+          STABILITY_VIDEO_MODEL: ${{ vars.STABILITY_VIDEO_MODEL }}
+          OPENROUTER_IMAGE_API_KEY: ${{ secrets.OPENROUTER_IMAGE_API_KEY }}
+          OPENROUTER_IMAGE_BASE_URL: ${{ vars.OPENROUTER_IMAGE_BASE_URL }}
+          OPENROUTER_IMAGE_MODEL: ${{ vars.OPENROUTER_IMAGE_MODEL }}
+          OPENROUTER_VIDEO_API_KEY: ${{ secrets.OPENROUTER_VIDEO_API_KEY }}
+          OPENROUTER_VIDEO_BASE_URL: ${{ vars.OPENROUTER_VIDEO_BASE_URL }}
+          OPENROUTER_VIDEO_MODEL: ${{ vars.OPENROUTER_VIDEO_MODEL }}
         run: python tests/e2e/smoke.py
 
       - name: Dump gateway logs on failure

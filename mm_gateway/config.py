@@ -219,31 +219,84 @@ class Settings:
 
         One backend per known provider type, enabled iff its ``*_API_KEY`` is
         set; a single implicit key (``env``) allows every configured backend.
+
+        The env layout splits credentials and endpoints by modality —
+        ``*_IMAGE_API_KEY`` / ``*_IMAGE_BASE_URL`` / ``*_IMAGE_MODEL`` and the
+        matching ``*_VIDEO_*`` triple — so an operator can wire a provider for
+        image, video, or both independently. The legacy un-split ``*_API_KEY`` /
+        ``*_BASE_URL`` / ``*_MODEL`` names are still honoured as a fallback for
+        each modality, so an existing deployment keeps working until it migrates.
         """
-        # (type, api_key env, base_url env, image_model env). The model env lets
-        # an operator pin/extend a backend's served image model (e.g. a brand-new
-        # id not yet in the provider's hardcoded list) without editing code; the
-        # registry appends it to the backend's image_models at build time.
+        # (type, key env pair, base_url env pair, model env pair). Each pair is
+        # (image_env, video_env); the image triple registers/pins the served
+        # image model and the video triple the video model. The model env lets
+        # an operator pin/extend a backend's served models (e.g. a brand-new id
+        # not yet in the provider's hardcoded list) without editing code; the
+        # registry appends them to the backend's image/video model lists at build
+        # time.
         specs = [
-            ("openai", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"),
-            ("google", "GOOGLE_API_KEY", "GOOGLE_BASE_URL", "GOOGLE_MODEL"),
-            ("xai", "XAI_API_KEY", "XAI_BASE_URL", "XAI_MODEL"),
-            ("volcengine", "ARK_API_KEY", "ARK_BASE_URL", "ARK_MODEL"),
-            ("flux", "RUNAPI_API_KEY", "FLUX_BASE_URL", "FLUX_MODEL"),
-            ("openrouter", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL"),
-            ("dashscope", "DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASHSCOPE_MODEL"),
-            ("stability", "STABILITY_API_KEY", "STABILITY_BASE_URL", "STABILITY_MODEL"),
+            ("openai", ("OPENAI_IMAGE_API_KEY", "OPENAI_VIDEO_API_KEY"),
+             ("OPENAI_IMAGE_BASE_URL", "OPENAI_VIDEO_BASE_URL"),
+             ("OPENAI_IMAGE_MODEL", "OPENAI_VIDEO_MODEL"),
+             ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")),
+            ("google", ("GOOGLE_IMAGE_API_KEY", "GOOGLE_VIDEO_API_KEY"),
+             ("GOOGLE_IMAGE_BASE_URL", "GOOGLE_VIDEO_BASE_URL"),
+             ("GOOGLE_IMAGE_MODEL", "GOOGLE_VIDEO_MODEL"),
+             ("GOOGLE_API_KEY", "GOOGLE_BASE_URL", "GOOGLE_MODEL")),
+            ("xai", ("XAI_IMAGE_API_KEY", "XAI_VIDEO_API_KEY"),
+             ("XAI_IMAGE_BASE_URL", "XAI_VIDEO_BASE_URL"),
+             ("XAI_IMAGE_MODEL", "XAI_VIDEO_MODEL"),
+             ("XAI_API_KEY", "XAI_BASE_URL", "XAI_MODEL")),
+            ("volcengine", ("ARK_IMAGE_API_KEY", "ARK_VIDEO_API_KEY"),
+             ("ARK_IMAGE_BASE_URL", "ARK_VIDEO_BASE_URL"),
+             ("ARK_IMAGE_MODEL", "ARK_VIDEO_MODEL"),
+             ("ARK_API_KEY", "ARK_BASE_URL", "ARK_MODEL")),
+            ("flux", ("FLUX_IMAGE_API_KEY", "FLUX_VIDEO_API_KEY"),
+             ("FLUX_IMAGE_BASE_URL", "FLUX_VIDEO_BASE_URL"),
+             ("FLUX_IMAGE_MODEL", "FLUX_VIDEO_MODEL"),
+             ("RUNAPI_API_KEY", "FLUX_BASE_URL", "FLUX_MODEL")),
+            ("openrouter", ("OPENROUTER_IMAGE_API_KEY", "OPENROUTER_VIDEO_API_KEY"),
+             ("OPENROUTER_IMAGE_BASE_URL", "OPENROUTER_VIDEO_BASE_URL"),
+             ("OPENROUTER_IMAGE_MODEL", "OPENROUTER_VIDEO_MODEL"),
+             ("OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL")),
+            ("dashscope", ("DASHSCOPE_IMAGE_API_KEY", "DASHSCOPE_VIDEO_API_KEY"),
+             ("DASHSCOPE_IMAGE_BASE_URL", "DASHSCOPE_VIDEO_BASE_URL"),
+             ("DASHSCOPE_IMAGE_MODEL", "DASHSCOPE_VIDEO_MODEL"),
+             ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASHSCOPE_MODEL")),
+            ("stability", ("STABILITY_IMAGE_API_KEY", "STABILITY_VIDEO_API_KEY"),
+             ("STABILITY_IMAGE_BASE_URL", "STABILITY_VIDEO_BASE_URL"),
+             ("STABILITY_IMAGE_MODEL", "STABILITY_VIDEO_MODEL"),
+             ("STABILITY_API_KEY", "STABILITY_BASE_URL", "STABILITY_MODEL")),
         ]
         backends: list[BackendConfig] = []
-        for type_, key_env, url_env, model_env in specs:
-            api_key = _env(key_env)
+        for (type_, (img_key_env, vid_key_env), (img_url_env, vid_url_env),
+             (img_model_env, vid_model_env), (legacy_key, legacy_url, legacy_model)) in specs:
+            # Resolve each modality's key/url/model, preferring the split
+            # *_IMAGE_* / *_VIDEO_* env over the legacy un-split *_* name.
+            img_key = _env(img_key_env) or _env(legacy_key)
+            vid_key = _env(vid_key_env) or _env(legacy_key)
+            # A backend is registered iff at least one modality carries a key.
+            api_key = img_key or vid_key
             if not api_key:
                 continue
-            model = _env(model_env)
+            # When the two modalities point at different endpoints, prefer the
+            # image one (image is the primary gateway surface); a provider that
+            # genuinely needs separate image/video endpoints should use a YAML
+            # config with two backends of the same type. The split base_url is
+            # still recorded in extra so a future adapter could consult it.
+            base_url = _env(img_url_env) or _env(legacy_url) or _env(vid_url_env)
+            extra: dict[str, Any] = {}
+            img_model = _env(img_model_env) or _env(legacy_model)
+            vid_model = _env(vid_model_env)
+            if img_model:
+                extra["image_model"] = img_model
+            if vid_model:
+                extra["video_model"] = vid_model
+            if _env(vid_url_env) and _env(vid_url_env) != base_url:
+                extra["video_base_url"] = _env(vid_url_env)
             backends.append(BackendConfig(
                 name=type_, type=type_, api_key=api_key,
-                base_url=_env(url_env), tags=[],
-                extra={"image_model": model} if model else {},
+                base_url=base_url, tags=[], extra=extra,
             ))
         # An implicit key authorises all configured backends. If the operator
         # sets GATEWAY_API_KEY, that becomes the required token; otherwise the

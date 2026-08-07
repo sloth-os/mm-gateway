@@ -373,3 +373,100 @@ def test_from_env_legacy_model_env_absent_leaves_no_extra(monkeypatch, tmp_path)
     s = Settings.from_env()
     assert "image_model" not in s.backend("openai").extra
 
+
+# --------------------------------------------------------------------------- #
+# Split image/video env-var layout (the CI e2e contract): *_IMAGE_* / *_VIDEO_*
+# triples override the legacy un-split *_* names per modality.
+# --------------------------------------------------------------------------- #
+
+
+def _clear_provider_envs(monkeypatch) -> None:
+    """Unset every legacy and split provider env var for a clean baseline."""
+    names = ["OPENAI", "ARK", "GOOGLE", "XAI", "FLUX", "RUNAPI", "DASHSCOPE",
+             "STABILITY", "OPENROUTER"]
+    for n in names:
+        for suffix in ("API_KEY", "BASE_URL", "MODEL",
+                       "IMAGE_API_KEY", "IMAGE_BASE_URL", "IMAGE_MODEL",
+                       "VIDEO_API_KEY", "VIDEO_BASE_URL", "VIDEO_MODEL"):
+            monkeypatch.delenv(f"{n}_{suffix}", raising=False)
+    monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
+    monkeypatch.delenv("MM_GATEWAY_CONFIG", raising=False)
+
+
+def test_from_env_split_image_triple_registers_image_model(monkeypatch, tmp_path):
+    # A *_IMAGE_* triple pins the served image model into extra["image_model"].
+    monkeypatch.chdir(tmp_path)
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("OPENAI_IMAGE_API_KEY", "sk-img")
+    monkeypatch.setenv("OPENAI_IMAGE_BASE_URL", "https://api.openai.test")
+    monkeypatch.setenv("OPENAI_IMAGE_MODEL", "gpt-image-split")
+    s = Settings.from_env()
+    openai = s.backend("openai")
+    assert openai.api_key == "sk-img"
+    assert openai.base_url == "https://api.openai.test"
+    assert openai.extra.get("image_model") == "gpt-image-split"
+    # The split video triple was unset, so no video model is pinned.
+    assert "video_model" not in openai.extra
+
+
+def test_from_env_split_video_triple_pins_video_model(monkeypatch, tmp_path):
+    # A *_VIDEO_* triple pins the served video model into extra["video_model"].
+    monkeypatch.chdir(tmp_path)
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("ARK_VIDEO_API_KEY", "sk-vid")
+    monkeypatch.setenv("ARK_VIDEO_BASE_URL", "https://ark.test")
+    monkeypatch.setenv("ARK_VIDEO_MODEL", "doubao-seedance-split")
+    s = Settings.from_env()
+    volc = s.backend("volcengine")
+    assert volc.api_key == "sk-vid"
+    assert volc.extra.get("video_model") == "doubao-seedance-split"
+    assert "image_model" not in volc.extra
+
+
+def test_from_env_split_overrides_legacy_per_modality(monkeypatch, tmp_path):
+    # When both split and legacy names are set, the split *_IMAGE_* / *_VIDEO_*
+    # names win per modality; the legacy name is only a fallback.
+    monkeypatch.chdir(tmp_path)
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-legacy")          # legacy fallback
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-image-legacy")
+    monkeypatch.setenv("OPENAI_IMAGE_MODEL", "gpt-image-split")  # overrides legacy
+    monkeypatch.setenv("OPENAI_VIDEO_MODEL", "sora-split")      # video pinned
+    s = Settings.from_env()
+    openai = s.backend("openai")
+    assert openai.extra.get("image_model") == "gpt-image-split"
+    assert openai.extra.get("video_model") == "sora-split"
+
+
+def test_from_env_split_omits_unconfigured_modality(monkeypatch, tmp_path):
+    # Only the image triple set -> the backend still registers (image key),
+    # and no video model is pinned. A provider with only image is image-only.
+    monkeypatch.chdir(tmp_path)
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("FLUX_IMAGE_API_KEY", "sk-flux")
+    monkeypatch.setenv("FLUX_IMAGE_BASE_URL", "https://flux.test")
+    monkeypatch.setenv("FLUX_IMAGE_MODEL", "flux-2-pro")
+    s = Settings.from_env()
+    names = {b.name for b in s.backends}
+    assert "flux" in names
+    flux = s.backend("flux")
+    assert flux.api_key == "sk-flux"
+    assert flux.extra.get("image_model") == "flux-2-pro"
+    assert "video_model" not in flux.extra
+
+
+def test_from_env_video_only_key_registers_backend(monkeypatch, tmp_path):
+    # A backend can be wired for video only (no image triple). The video key
+    # registers it; the image triple stays unset.
+    monkeypatch.chdir(tmp_path)
+    _clear_provider_envs(monkeypatch)
+    monkeypatch.setenv("STABILITY_VIDEO_API_KEY", "sk-stab")
+    monkeypatch.setenv("STABILITY_VIDEO_BASE_URL", "https://api.stability.ai")
+    monkeypatch.setenv("STABILITY_VIDEO_MODEL", "stable-video-diffusion")
+    s = Settings.from_env()
+    stab = s.backend("stability")
+    assert stab.api_key == "sk-stab"
+    assert stab.extra.get("video_model") == "stable-video-diffusion"
+    assert "image_model" not in stab.extra
+
+

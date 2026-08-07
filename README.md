@@ -253,20 +253,23 @@ pytest -q        # no network calls — a fake in-memory provider
 
 A real-provider end-to-end smoke test lives at `tests/e2e/smoke.py`. It talks to
 a **live** gateway and a **real** upstream provider, so unlike `pytest` it does
-spend real API calls. A backend is exercised only when it is **fully configured**
-— all three of its `*_API_KEY`, `*_BASE_URL`, and `*_MODEL` are set. The
-`*_BASE_URL` proves the operator pointed at a real endpoint and flows into the
-gateway container; `*_MODEL` pins the exact upstream model id to request (rather
-than a hard-coded alias) and is also published to the gateway so the registry
-serves it. The script collects every fully-configured backend, confirms the
-chosen model is actually served by `GET /v1/models`, then generates one image
-through the OpenAI-shape front-end and asserts real image data comes back. When
-*no* backend has all three set it **exits 0** (skips), so it is safe to wire
-into CI before secrets exist.
+spend real API calls. A backend modality is exercised only when it is **fully
+configured** — all three of its `*_IMAGE_API_KEY` + `*_IMAGE_BASE_URL` +
+`*_IMAGE_MODEL` (image) or `*_VIDEO_*` triple (video) are set. The `*_BASE_URL`
+proves the operator pointed at a real endpoint and flows into the gateway
+container; `*_MODEL` pins the exact upstream model id to request (rather than a
+hard-coded alias) and is also published to the gateway so the registry serves
+it. The script collects every fully-configured (backend, modality), confirms
+the chosen model is actually served by `GET /v1/models`, then generates one
+image through the OpenAI-shape front-end (image) and one video through the
+Seedance-shape front-end (create + poll), asserting real data comes back. When
+*no* modality of any backend has all three set it **exits 0** (skips), so it is
+safe to wire into CI before secrets exist.
 
 ```bash
 mm-gateway &                          # or: docker run -p 8000:8000 ghcr.io/<owner>/<repo>:latest
-OPENAI_API_KEY=sk-... OPENAI_BASE_URL=https://api.openai.com OPENAI_MODEL=gpt-image-1 \
+OPENAI_IMAGE_API_KEY=sk-... OPENAI_IMAGE_BASE_URL=https://api.openai.com/v1 OPENAI_IMAGE_MODEL=gpt-image-1 \
+OPENAI_VIDEO_API_KEY=sk-... OPENAI_VIDEO_BASE_URL=https://api.openai.com/v1 OPENAI_VIDEO_MODEL=sora-2 \
   GATEWAY_API_KEY=... python tests/e2e/smoke.py
 # pin a single backend / model instead of collecting all configured ones:
 E2E_BACKEND=volcengine E2E_IMAGE_MODEL=gateway-image-seedream python tests/e2e/smoke.py
@@ -286,51 +289,73 @@ dispatch:
    `{{version}}/{{major}}/{{major}}.{{minor}}` (on `v*` tags), and `sha-<short>`.
    The built image is also saved as an artifact for the e2e job.
 3. **E2E (real provider)** — loads the *just-built* image, starts it with the
-   provider `*_API_KEY` (secret) and `*_BASE_URL` / `*_MODEL` (variables), plus
-   `GATEWAY_API_KEY`, passed straight through to the container — whatever you
-   configure in GitHub flows into the image 1:1, no hard-coding — and runs
-   `tests/e2e/smoke.py`. This job **only runs** when at least one provider is
-   fully configured (all three of `*_API_KEY` + `*_BASE_URL` + `*_MODEL` set)
-   *or* the manual `run-e2e` flag is checked, so the workflow stays green
-   before secrets exist.
+   provider `*_IMAGE_API_KEY` / `*_VIDEO_API_KEY` (secrets) and the matching
+   `*_IMAGE_BASE_URL` / `*_IMAGE_MODEL` / `*_VIDEO_BASE_URL` / `*_VIDEO_MODEL`
+   (variables), plus `GATEWAY_API_KEY`, passed straight through to the container
+   — whatever you configure in GitHub flows into the image 1:1, no hard-coding —
+   and runs `tests/e2e/smoke.py`. This job **only runs** when at least one
+   provider modality is fully configured (all three of an `*_IMAGE_*` or
+   `*_VIDEO_*` triple set) *or* the manual `run-e2e` flag is checked, so the
+   workflow stays green before secrets exist.
 
 Configure these in **Settings → Secrets and variables → Actions**, under the
-`ci` environment. The `*_API_KEY` values are sensitive, so store them as
-**secrets**; `*_BASE_URL` and `*_MODEL` are not sensitive, so store them as
-**variables** — the workflow reads them from the `vars.*` context, not
-`secrets.*`, so a `*_BASE_URL`/`*_MODEL` stored as a *secret* is invisible to the
-gate and the e2e silently skips. A provider's e2e runs only when **all three** of
-its `*_API_KEY` (secret) + `*_BASE_URL` (variable) + `*_MODEL` (variable) are set.
+`ci` environment. Each provider's image and video credentials are **split**:
+`*_IMAGE_API_KEY` + `*_VIDEO_API_KEY` are sensitive, so store them as
+**secrets**; `*_IMAGE_BASE_URL` / `*_IMAGE_MODEL` / `*_VIDEO_BASE_URL` /
+`*_VIDEO_MODEL` are not sensitive, so store them as **variables** — the workflow
+reads them from the `vars.*` context, not `secrets.*`, so a `*_BASE_URL`/
+`*_MODEL` stored as a *secret* is invisible to the gate and the e2e silently
+skips. A provider modality runs only when **all three** of its `*_IMAGE_*` (or
+`*_VIDEO_*`) triple — `*_API_KEY` (secret) + `*_BASE_URL` (variable) +
+`*_MODEL` (variable) — are set. The legacy un-split `*_API_KEY` / `*_BASE_URL` /
+`*_MODEL` names still work as a per-modality fallback until you migrate to the
+split names.
 
-**Secrets** (`*_API_KEY` + gateway/publish creds):
+**Secrets** (`*_IMAGE_API_KEY` + `*_VIDEO_API_KEY` + gateway/publish creds):
 
 | Secret | Provider | Notes |
 |--------|----------|-------|
-| `OPENAI_API_KEY` | OpenAI | image (gpt-image) + video (sora) |
-| `ARK_API_KEY` | Volcengine | seedream image + seedance video |
-| `GOOGLE_API_KEY` | Google | imagen + veo |
-| `XAI_API_KEY` | xAI | grok-imagine image + video |
-| `RUNAPI_API_KEY` | FLUX | image only (key env is `RUNAPI_*`) |
-| `DASHSCOPE_API_KEY` | DashScope | wanx + wan |
-| `STABILITY_API_KEY` | Stability | sd + svd |
-| `OPENROUTER_API_KEY` | OpenRouter | router (no first-class image alias) |
+| `OPENAI_IMAGE_API_KEY` | OpenAI | image (gpt-image) |
+| `OPENAI_VIDEO_API_KEY` | OpenAI | video (sora) |
+| `ARK_IMAGE_API_KEY` | Volcengine | seedream image |
+| `ARK_VIDEO_API_KEY` | Volcengine | seedance video |
+| `GOOGLE_IMAGE_API_KEY` | Google | imagen |
+| `GOOGLE_VIDEO_API_KEY` | Google | veo |
+| `XAI_IMAGE_API_KEY` | xAI | grok-imagine image |
+| `XAI_VIDEO_API_KEY` | xAI | grok-imagine video |
+| `FLUX_IMAGE_API_KEY` | FLUX | image only (FLUX has no video) |
+| `DASHSCOPE_IMAGE_API_KEY` | DashScope | wanx image |
+| `DASHSCOPE_VIDEO_API_KEY` | DashScope | wan video |
+| `STABILITY_IMAGE_API_KEY` | Stability | sd image |
+| `STABILITY_VIDEO_API_KEY` | Stability | svd video |
+| `OPENROUTER_IMAGE_API_KEY` | OpenRouter | router image (no first-class alias) |
+| `OPENROUTER_VIDEO_API_KEY` | OpenRouter | router video (no first-class alias) |
 | `GATEWAY_API_KEY` | — | front-end Bearer token; if unset the gateway is open |
 | `DOCKERHUB_USERNAME` | — | opt-in: also publish to Docker Hub as `<username>/<repo>` |
 | `DOCKERHUB_TOKEN` | — | opt-in: Docker Hub access token (paired with `DOCKERHUB_USERNAME`) |
 
-**Variables** (`*_BASE_URL` + `*_MODEL`, one pair per provider you wire up):
+**Variables** (`*_IMAGE_*` + `*_VIDEO_*`, one triple per provider modality you wire up):
 
 | Variable | Provider | Notes |
 |----------|----------|-------|
-| `OPENAI_BASE_URL` | OpenAI | upstream endpoint; **include `/v1`** (the SDK uses it verbatim), e.g. `https://api.openai.com/v1` |
-| `OPENAI_MODEL` | OpenAI | model id to request + serve via the registry |
-| `ARK_BASE_URL` / `ARK_MODEL` | Volcengine | endpoint + model id |
-| `GOOGLE_BASE_URL` / `GOOGLE_MODEL` | Google | endpoint + model id |
-| `XAI_BASE_URL` / `XAI_MODEL` | xAI | endpoint (with or without `/v1` — the adapter normalises) + model id |
-| `FLUX_BASE_URL` / `FLUX_MODEL` | FLUX | endpoint + model id (env is `FLUX_*`) |
-| `DASHSCOPE_BASE_URL` / `DASHSCOPE_MODEL` | DashScope | endpoint + model id |
-| `STABILITY_BASE_URL` / `STABILITY_MODEL` | Stability | endpoint + model id |
-| `OPENROUTER_BASE_URL` / `OPENROUTER_MODEL` | OpenRouter | endpoint + model id |
+| `OPENAI_IMAGE_BASE_URL` / `OPENAI_IMAGE_MODEL` | OpenAI | image endpoint + model id |
+| `OPENAI_VIDEO_BASE_URL` / `OPENAI_VIDEO_MODEL` | OpenAI | video endpoint + model id |
+| `ARK_IMAGE_BASE_URL` / `ARK_IMAGE_MODEL` | Volcengine | seedream endpoint + model id |
+| `ARK_VIDEO_BASE_URL` / `ARK_VIDEO_MODEL` | Volcengine | seedance endpoint + model id |
+| `GOOGLE_IMAGE_BASE_URL` / `GOOGLE_IMAGE_MODEL` | Google | imagen endpoint + model id |
+| `GOOGLE_VIDEO_BASE_URL` / `GOOGLE_VIDEO_MODEL` | Google | veo endpoint + model id |
+| `XAI_IMAGE_BASE_URL` / `XAI_IMAGE_MODEL` | xAI | image endpoint (with or without `/v1` — the adapter normalises) + model id |
+| `XAI_VIDEO_BASE_URL` / `XAI_VIDEO_MODEL` | xAI | video endpoint + model id |
+| `FLUX_IMAGE_BASE_URL` / `FLUX_IMAGE_MODEL` | FLUX | image endpoint + model id (FLUX is image-only) |
+| `DASHSCOPE_IMAGE_BASE_URL` / `DASHSCOPE_IMAGE_MODEL` | DashScope | wanx endpoint + model id |
+| `DASHSCOPE_VIDEO_BASE_URL` / `DASHSCOPE_VIDEO_MODEL` | DashScope | wan endpoint + model id |
+| `STABILITY_IMAGE_BASE_URL` / `STABILITY_IMAGE_MODEL` | Stability | sd endpoint + model id |
+| `STABILITY_VIDEO_BASE_URL` / `STABILITY_VIDEO_MODEL` | Stability | svd endpoint + model id |
+| `OPENROUTER_IMAGE_BASE_URL` / `OPENROUTER_IMAGE_MODEL` | OpenRouter | image endpoint + model id |
+| `OPENROUTER_VIDEO_BASE_URL` / `OPENROUTER_VIDEO_MODEL` | OpenRouter | video endpoint + model id |
+
+For OpenAI (and OpenAI-compatible endpoints), the base URL should **include
+`/v1`** (the SDK uses it verbatim), e.g. `https://api.openai.com/v1`.
 
 `GITHUB_TOKEN` (for pushing to GHCR) is provided automatically — no setup needed.
 Without `DOCKERHUB_*` the image is published to GHCR only, so the workflow stays
