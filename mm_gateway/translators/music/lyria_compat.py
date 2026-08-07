@@ -1,0 +1,168 @@
+"""Gemini Lyria 3-compatible music translator.
+
+The Lyria 3 REST shape (``POST /v1beta/interactions``) is::
+
+    { "model": "lyria-3-pro-preview",
+      "input": "a string prompt" | [ {type:"text", text} | {type:"image", mime_type, data} ... ],
+      "response_format": {"type": "audio"} }   # optional, "audio" => WAV
+
+The response is a ``steps`` array whose ``model_output`` steps carry a
+``content`` array of typed blocks (``{type:"text", text}`` for lyrics/structure
+and ``{type:"audio", data}`` for base64-encoded audio). The SDK also exposes
+``interaction.output_audio`` / ``interaction.output_text`` convenience
+accessors; we surface the same values as top-level fields for REST clients.
+
+This translator maps that front-end shape to/from the unified ``UnifiedMusic``
+schema, so every backend provider (ElevenLabs, MiniMax, udioapi, Mureka,
+ACE-Step, Lyria itself) is reachable through a Lyria-shaped request.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from mm_gateway.core.exceptions import ValidationError
+from mm_gateway.schemas.music import (
+    UnifiedMusicTask,
+    audio_part,
+    image_part,
+    text_part,
+)
+from mm_gateway.schemas.music import UnifiedMusicRequest
+
+# Top-level fields the unified model owns; everything else -> extra.
+_KNOWN = {
+    "model", "content", "negative_prompt", "duration", "bpm", "key_scale",
+    "key", "scale", "time_signature", "vocal_language", "audio_format",
+    "audio_quality", "is_instrumental", "generate_audio", "seed",
+    "guidance_scale", "n", "callback_url",
+}
+
+# Lyria `input` text part -> unified; image part (mime_type+data) -> image_url
+# is not a 1:1 fit (Lyria carries inline base64 images), so we stash inline
+# images in extra["images"] for providers that can consume them (e.g. ACE-Step
+# image-to-music fetches its own URL; the data form is a gateway extension).
+
+
+def from_lyria(body: dict[str, Any]) -> UnifiedMusicRequest:
+    if "model" not in body:
+        raise ValidationError("`model` is required for music generation.")
+    kwargs: dict[str, Any] = {"model": body["model"]}
+
+    # ``input`` is either a string prompt or a parts array. Lyria parts are
+    # {type:"text", text} and {type:"image", mime_type, data}; the gateway also
+    # accepts our native {type:"audio_url",...}/{type:"image_url",...} shapes so
+    # the same content[] model as video works.
+    parts = []
+    inp = body.get("input")
+    if isinstance(inp, str):
+        if inp:
+            parts.append(text_part(inp))
+    elif isinstance(inp, list):
+        for part in inp:
+            if not isinstance(part, dict):
+                continue
+            ptype = part.get("type")
+            if ptype == "text":
+                if part.get("text"):
+                    parts.append(text_part(part.get("text") or ""))
+            elif ptype == "image":
+                # Lyria inline image: {mime_type, data}. Stash for providers
+                # that consume inline reference images.
+                if part.get("data"):
+                    kwargs.setdefault("extra", {}).setdefault("images", []).append(
+                        {"mime_type": part.get("mime_type") or "image/jpeg",
+                         "data": part["data"]}
+                    )
+            elif ptype == "audio_url":
+                url = (part.get("audio_url") or {}).get("url")
+                if url:
+                    parts.append(audio_part(url, part.get("role") or "reference_audio"))
+            elif ptype == "image_url":
+                url = (part.get("image_url") or {}).get("url")
+                if url:
+                    parts.append(image_part(url, part.get("role") or "reference_image"))
+    if parts:
+        kwargs["content"] = parts
+
+    # Flat generation knobs (gateway extension beyond the minimal Lyria shape).
+    for k in ("negative_prompt", "duration", "bpm", "key_scale", "key", "scale",
+              "time_signature", "vocal_language", "audio_format", "audio_quality",
+              "is_instrumental", "generate_audio", "seed", "guidance_scale", "n",
+              "callback_url"):
+        if (v := body.get(k)) is not None:
+            kwargs[k] = v
+
+    # response_format {"type": "audio"} selects WAV output. Map the Lyria hint
+    # to audio_format ('wav' for 'audio', else 'mp3' default).
+    rf = body.get("response_format")
+    if isinstance(rf, dict):
+        rtype = rf.get("type")
+        if rtype == "audio":
+            kwargs.setdefault("audio_format", "wav")
+        elif isinstance(rtype, str):
+            kwargs.setdefault("audio_format", rtype)
+        if rf.get("quality"):
+            kwargs.setdefault("audio_quality", rf.get("quality"))
+
+    extra: dict[str, Any] = kwargs.get("extra", {})
+    for k, v in body.items():
+        if k not in _KNOWN and k not in ("input", "response_format"):
+            extra[k] = v
+    if extra:
+        kwargs["extra"] = extra
+    return UnifiedMusicRequest(**kwargs)
+
+
+def to_lyria_create(task: UnifiedMusicTask) -> dict[str, Any]:
+    """The create endpoint returns only the task id (Lyria interaction id)."""
+    return {"id": task.task_id}
+
+
+def to_lyria_task(task: UnifiedMusicTask) -> dict[str, Any]:
+    """Map the unified task to the Lyria steps/content response shape.
+
+    ``model_output`` steps carry a ``content`` array of typed blocks: audio
+    blocks ({type:"audio", data, mime_type}) and text blocks ({type:"text",
+    text} for lyrics/structure). Convenience top-level ``output_audio`` (last
+    audio block's base64) and ``output_text`` mirror the SDK accessors. When a
+    provider returned a URL rather than inline bytes (most async backends), the
+    URL is exposed as ``output_audio_url`` and the audio block's ``url`` field
+    — a gateway extension since Lyria native output is inline base64.
+    """
+    out: dict[str, Any] = {
+        "id": task.task_id,
+        "model": task.model,
+        "status": task.status,
+    }
+    content: list[dict[str, Any]] = []
+    # Prefer inline base64 (Lyria native); fall back to URL blocks otherwise.
+    if task.audio_b64:
+        block: dict[str, Any] = {"type": "audio", "data": task.audio_b64}
+        if task.audio_media_type:
+            block["mime_type"] = task.audio_media_type
+        content.append(block)
+    for url in task.audio_urls:
+        b: dict[str, Any] = {"type": "audio", "url": url}
+        if task.audio_media_type:
+            b["mime_type"] = task.audio_media_type
+        content.append(b)
+    if task.lyrics:
+        content.append({"type": "text", "text": task.lyrics})
+    if content:
+        out["steps"] = [{"type": "model_output", "content": content}]
+
+    if task.audio_b64:
+        out["output_audio"] = task.audio_b64
+    elif task.audio_urls:
+        out["output_audio_url"] = task.audio_urls[0]
+    if task.lyrics:
+        out["output_text"] = task.lyrics
+    if task.error:
+        out["error"] = {"code": "failed", "message": task.error}
+    if task.usage and task.usage.cost is not None:
+        out["usage"] = {"cost": task.usage.cost}
+    return out
+
+
+__all__ = ["from_lyria", "to_lyria_create", "to_lyria_task"]

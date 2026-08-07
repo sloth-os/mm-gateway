@@ -19,7 +19,7 @@ from mm_gateway.core.exceptions import GatewayError
 from mm_gateway.observability.logging import bind_context, clear_context, configure_logging, get_logger, new_request_id
 from mm_gateway.observability.metrics import render_prometheus
 from mm_gateway.registry import Registry
-from mm_gateway.services import ImageService, VideoService
+from mm_gateway.services import ImageService, MusicService, VideoService
 from mm_gateway.tasks.store import TaskStore
 
 log = get_logger("app")
@@ -34,6 +34,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     video_service = VideoService(
         registry, max_sync_wait=settings.max_sync_wait,
         poll_interval=settings.poll_interval, sync_default=settings.video_sync_default,
+    )
+    music_service = MusicService(
+        registry, max_sync_wait=settings.max_sync_wait,
+        poll_interval=settings.poll_interval, sync_default=settings.music_sync_default,
     )
     task_store = TaskStore()
 
@@ -53,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.registry = registry
     app.state.image_service = image_service
     app.state.video_service = video_service
+    app.state.music_service = music_service
     app.state.task_store = task_store
 
     @app.middleware("http")
@@ -72,10 +77,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
 
     # Register routes.
-    from mm_gateway.server.routes import image_routes, video_routes, meta_routes
+    from mm_gateway.server.routes import image_routes, video_routes, music_routes, meta_routes
     app.include_router(meta_routes.router, tags=["meta"])
     app.include_router(image_routes.router)
     app.include_router(video_routes.router)
+    app.include_router(music_routes.router)
 
     # Optionally mount the HTTP MCP endpoint (no-op when mcp_enabled is false).
     from mm_gateway.server.mcp import mount_mcp

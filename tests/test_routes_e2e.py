@@ -6,7 +6,6 @@ fake provider -> translator -> JSON response, with no network calls.
 
 from __future__ import annotations
 
-
 # -- Meta routes ------------------------------------------------------------ #
 
 def test_health(client):
@@ -128,3 +127,67 @@ def test_video_openrouter_seedance_shape_via_header(client, fake_provider):
     assert r.status_code == 200, r.text
     # Seedance create returns {"id": ...}.
     assert r.json() == {"id": "task-1"}
+
+
+# -- Music routes (Gemini Lyria 3 shape) ------------------------------------- #
+
+
+def test_music_create_sync_returns_just_id(client, fake_provider):
+    # music_sync_default defaults to True, so create blocks until success and
+    # returns only the Lyria interaction id.
+    r = client.post("/v1/music", json={"model": "fake-music-1", "input": "an upbeat pop song"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"id": "music-1"}
+    assert len(fake_provider.music_calls) == 1
+    assert fake_provider.music_calls[0].prompt() == "an upbeat pop song"
+
+
+def test_music_async_then_poll_returns_steps_content(client, fake_provider):
+    # Respond-async: create returns immediately without waiting.
+    r = client.post("/v1/music", json={"model": "fake-music-1", "input": "a sad ballad"},
+                    headers={"prefer": "respond-async"})
+    assert r.status_code == 200, r.text
+    task_id = r.json()["id"]
+
+    # Poll until terminal.
+    for _ in range(10):
+        poll = client.get(f"/v1/music/{task_id}")
+        assert poll.status_code == 200, poll.text
+        if poll.json()["status"] == "succeeded":
+            break
+    body = poll.json()
+    assert body["id"] == task_id
+    assert body["status"] == "succeeded"
+    # The audio + lyrics ride a model_output step's content array as typed blocks.
+    step = body["steps"][0]
+    assert step["type"] == "model_output"
+    blocks = step["content"]
+    assert any(b["type"] == "audio" and b["data"] == "AAAA" for b in blocks)
+    assert any(b["type"] == "text" and b["text"] == "la la la" for b in blocks)
+    # Convenience accessors mirror the SDK's interaction.output_audio / output_text.
+    assert body["output_audio"] == "AAAA"
+    assert body["output_text"] == "la la la"
+
+
+def test_music_parts_input_round_trips(client, fake_provider):
+    # ``input`` as a parts array (Lyria native) is accepted and concatenates.
+    r = client.post("/v1/music", json={
+        "model": "fake-music-1",
+        "input": [{"type": "text", "text": "verse"}, {"type": "text", "text": "chorus"}],
+        "response_format": {"type": "audio"},
+    })
+    assert r.status_code == 200, r.text
+    assert fake_provider.music_calls[0].prompt() == "verse\nchorus"
+    # response_format {"type":"audio"} selects wav output.
+    assert fake_provider.music_calls[0].audio_format == "wav"
+
+
+def test_music_missing_model_is_rejected(client):
+    r = client.post("/v1/music", json={"input": "x"})
+    assert r.status_code in (400, 422)
+
+
+def test_music_poll_unknown_task_is_404(client):
+    # No record in the task store -> the service surfaces a not-found error.
+    r = client.get("/v1/music/no-such-task")
+    assert r.status_code == 404

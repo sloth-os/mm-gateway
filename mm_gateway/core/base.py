@@ -1,10 +1,10 @@
 """Abstract provider interfaces.
 
 The gateway talks to providers only through these protocols, so adding a new
-provider never touches the HTTP layer or the translators. Two capabilities are
-modelled separately — ``ImageProvider`` and ``VideoProvider`` — because not
-every provider supports both (e.g. FLUX is image-only). A provider class may
-implement either or both.
+provider never touches the HTTP layer or the translators. Capabilities are
+modelled separately — ``ImageProvider``, ``VideoProvider`` and
+``MusicProvider`` — because not every provider supports all of them (e.g.
+FLUX is image-only). A provider class may implement any subset.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from mm_gateway.schemas.image import UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.music import UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 
@@ -30,6 +31,7 @@ class Provider(ABC):
     # Human-readable list of model ids this provider accepts, for /models and docs.
     image_models: ClassVar[list[str]] = []
     video_models: ClassVar[list[str]] = []
+    music_models: ClassVar[list[str]] = []
 
     def __init__(self, backend: Any):
         self.backend = backend
@@ -41,6 +43,10 @@ class Provider(ABC):
     @property
     def supports_video(self) -> bool:
         return isinstance(self, VideoProvider)
+
+    @property
+    def supports_music(self) -> bool:
+        return isinstance(self, MusicProvider)
 
 
 class ImageProvider(Provider):
@@ -58,5 +64,17 @@ class VideoProvider(Provider):
 
     @abstractmethod
     async def get_video_task(self, task_id: str) -> UnifiedVideoTask:
+        """Poll a previously submitted task by its provider-local id."""
+        ...
+
+
+class MusicProvider(Provider):
+    @abstractmethod
+    async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
+        """Submit a music generation task; return a handle the gateway can poll."""
+        ...
+
+    @abstractmethod
+    async def get_music_task(self, task_id: str) -> UnifiedMusicTask:
         """Poll a previously submitted task by its provider-local id."""
         ...

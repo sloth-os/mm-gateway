@@ -21,7 +21,7 @@ import importlib
 from typing import Any
 
 from mm_gateway.config import BackendConfig, KeyConfig, Settings
-from mm_gateway.core.base import ImageProvider, Provider, VideoProvider
+from mm_gateway.core.base import ImageProvider, MusicProvider, Provider, VideoProvider
 from mm_gateway.core.exceptions import (
     ForbiddenError,
     ModelNotFoundError,
@@ -42,6 +42,11 @@ _PROVIDER_CLASSES: dict[str, str] = {
     "openrouter": "OpenRouterProvider",
     "dashscope": "DashScopeProvider",
     "stability": "StabilityProvider",
+    "elevenlabs": "ElevenLabsProvider",
+    "minimax": "MiniMaxProvider",
+    "udioapi": "UdioApiProvider",
+    "mureka": "MurekaProvider",
+    "acestep": "AceStepProvider",
 }
 
 # Gateway-friendly model aliases -> (backend type, real_model). Lets clients call
@@ -65,6 +70,14 @@ _MODEL_ALIASES: dict[str, tuple[str, str]] = {
     # both aliases resolve to the same omni model id.
     "gateway-video-seedance-2": ("volcengine", "doubao-seedance-2-0-260128"),
     "gateway-video-seedance-2-i2v": ("volcengine", "doubao-seedance-2-0-260128"),
+    # Music aliases (Gemini Lyria 3 is the front-end shape; each backend serves a
+    # stable id under a friendlier name).
+    "gateway-music-lyria": ("google", "lyria-3"),
+    "gateway-music-elevenlabs": ("elevenlabs", "music_v2"),
+    "gateway-music-minimax": ("minimax", "music-3.0"),
+    "gateway-music-udio": ("udioapi", "udio-v2"),
+    "gateway-music-mureka": ("mureka", "mureka-song-1"),
+    "gateway-music-acestep": ("acestep", "ace-step-1.5"),
 }
 
 
@@ -105,11 +118,16 @@ class Registry:
                 extra_video = cfg.extra.get("video_model")
                 if extra_video and provider.supports_video and extra_video not in provider.video_models:
                     provider.video_models = [*provider.video_models, extra_video]
+                # Same treatment for a music model pinned via the legacy env
+                # layout's *_MUSIC_MODEL (extra["music_model"]).
+                extra_music = cfg.extra.get("music_model")
+                if extra_music and provider.supports_music and extra_music not in provider.music_models:
+                    provider.music_models = [*provider.music_models, extra_music]
                 self._backends[cfg.name] = provider
                 self._configs[cfg.name] = cfg
                 log.info("backend_registered", backend=cfg.name, type=cfg.type,
                          tags=cfg.tags, image=provider.supports_image,
-                         video=provider.supports_video)
+                         video=provider.supports_video, music=provider.supports_music)
             except ProviderNotConfiguredError as exc:
                 log.info("backend_skipped", backend=cfg.name, reason=exc.message)
             except Exception as exc:  # noqa: BLE001
@@ -143,7 +161,11 @@ class Registry:
         return allowed
 
     def _modality_models(self, prov: Provider, modality: str) -> list[str]:
-        return prov.image_models if modality == "image" else prov.video_models
+        if modality == "image":
+            return prov.image_models
+        if modality == "music":
+            return prov.music_models
+        return prov.video_models
 
     def list_models(self, key: KeyConfig | None = None) -> list[dict[str, Any]]:
         models: list[dict[str, Any]] = []
@@ -152,7 +174,12 @@ class Registry:
         for alias, (btype, real) in self._aliases.items():
             # Include an alias iff at least one usable backend is of its type.
             if any(self._configs[n].type == btype for n in usable if n in self._configs):
-                modality = "video" if "video" in alias else "image"
+                if "video" in alias:
+                    modality = "video"
+                elif "music" in alias:
+                    modality = "music"
+                else:
+                    modality = "image"
                 models.append({"id": alias, "type": btype, "underlying": real, "modality": modality})
         for name in usable:
             prov = self._backends[name]
@@ -160,6 +187,8 @@ class Registry:
                 models.append({"id": m, "provider": name, "modality": "image"})
             for m in prov.video_models:
                 models.append({"id": m, "provider": name, "modality": "video"})
+            for m in prov.music_models:
+                models.append({"id": m, "provider": name, "modality": "music"})
         return models
 
     def resolve(
@@ -206,6 +235,8 @@ class Registry:
                 return False
             if modality == "video" and not prov.supports_video:
                 return False
+            if modality == "music" and not prov.supports_music:
+                return False
             known = self._modality_models(prov, modality)
             # A backend serves the request if it knows the real model, or if the
             # model is an alias of its type, or if it advertises no fixed list
@@ -224,15 +255,21 @@ class Registry:
             if tagged:
                 chosen = tagged[0]
         if chosen is None and key:
-            default = key.default_image_backend if modality == "image" else key.default_video_backend
+            if modality == "image":
+                default = key.default_image_backend
+                default_tag = key.default_image_tag
+            elif modality == "music":
+                default = key.default_music_backend
+                default_tag = key.default_music_tag
+            else:
+                default = key.default_video_backend
+                default_tag = key.default_video_tag
             if default and default in candidates:
                 chosen = default
-            else:
-                default_tag = key.default_image_tag if modality == "image" else key.default_video_tag
-                if default_tag:
-                    tagged = [n for n in candidates if default_tag in self._configs[n].tags]
-                    if tagged:
-                        chosen = tagged[0]
+            elif default_tag:
+                tagged = [n for n in candidates if default_tag in self._configs[n].tags]
+                if tagged:
+                    chosen = tagged[0]
         if chosen is None:
             chosen = candidates[0]
 
@@ -254,4 +291,10 @@ class Registry:
         prov = self.get(name)
         if not isinstance(prov, VideoProvider):
             raise ProviderNotFoundError(f"Backend '{name}' does not support video generation.")
+        return prov  # type: ignore[return-value]
+
+    def music_provider(self, name: str) -> MusicProvider:
+        prov = self.get(name)
+        if not isinstance(prov, MusicProvider):
+            raise ProviderNotFoundError(f"Backend '{name}' does not support music generation.")
         return prov  # type: ignore[return-value]

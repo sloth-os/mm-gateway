@@ -21,10 +21,12 @@ class _FakeProv:
         self.name = "fake"
         self.image_models = ["fake-image-1"]
         self.video_models = ["fake-video-1"]
+        self.music_models = ["fake-music-1"]
         self.backend = cfg
 
     supports_image = True
     supports_video = True
+    supports_music = True
 
 
 @pytest.fixture
@@ -85,6 +87,14 @@ def test_list_models(registry, key):
     ids = [m["id"] for m in models]
     assert "fake-image-1" in ids
     assert "fake-video-1" in ids
+    assert "fake-music-1" in ids
+
+
+def test_resolve_music_model(registry, key):
+    prov, model, backend = registry.resolve("fake-music-1", key, modality="music")
+    assert prov.name == "fake"
+    assert model == "fake-music-1"
+    assert backend == "fake"
 
 
 def test_key_with_no_usable_backend_is_forbidden(settings):

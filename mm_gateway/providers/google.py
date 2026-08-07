@@ -1,28 +1,48 @@
-"""Google provider — Imagen (image) and Veo (video) via google-genai."""
+"""Google provider — Imagen (image), Veo (video) and Lyria (music).
+
+Image and video go through the ``google-genai`` SDK (``client.aio.models`` and
+``client.aio.operations``). Music is served by the **Lyria 3** Interactions
+API, which the SDK does not yet expose ergonomically; this adapter speaks that
+one REST surface directly over httpx against the same
+``generativelanguage.googleapis.com`` host the SDK uses, with the API key as a
+``?key=`` query parameter. Lyria is synchronous — a single ``predictInteractions``
+call returns the audio inline — so, like ElevenLabs/MiniMax, we wrap it as a
+synthetic in-memory task for the gateway's uniform poll surface.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import time
-from typing import Any
+import uuid
+from typing import Any, ClassVar
 
+import httpx
 from google import genai
 from google.genai import types
 
-from mm_gateway.core.base import ImageProvider, VideoProvider
-from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
+from mm_gateway.core.base import ImageProvider, MusicProvider, VideoProvider
+from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 log = get_logger("provider.google")
 
+# In-memory store for the synchronous Lyria "tasks". Single-process only.
+_MUSIC_TASKS: dict[str, dict[str, Any]] = {}
 
-class GoogleProvider(ImageProvider, VideoProvider):
+# Host the google-genai SDK targets by default; overridden by base_url when set.
+_GLM_BASE = "https://generativelanguage.googleapis.com"
+
+
+class GoogleProvider(ImageProvider, VideoProvider, MusicProvider):
     name = "google"
     image_models = ["imagen-4.0-generate-001", "imagen-3.0-generate-001", "gemini-2.5-flash-image"]
     video_models = ["veo-2.0-generate-001", "veo-3.0-generate-001", "veo-3.1-generate-preview"]
+    music_models: ClassVar[list[str]] = ["lyria-3"]
 
     def __init__(self, backend):
         super().__init__(backend)
@@ -32,6 +52,11 @@ class GoogleProvider(ImageProvider, VideoProvider):
         if backend.base_url:
             kwargs["http_options"] = types.HttpOptions(base_url=backend.base_url)
         self._client = genai.Client(**kwargs)
+        # Lyria REST surface. Prefer a music-specific base_url if the operator
+        # split Google's modalities; otherwise the same host the SDK uses.
+        self._music_base = (backend.extra.get("music_base_url")
+                            or backend.base_url or _GLM_BASE).rstrip("/")
+        self._api_key = backend.api_key
 
     async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         model = request.model
@@ -148,3 +173,138 @@ class GoogleProvider(ImageProvider, VideoProvider):
             task.status = "failed"
             task.error = str(op.error)
         return task
+
+    # -- Lyria music ------------------------------------------------------- #
+
+    async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
+        prompt = request.prompt()
+        if not prompt:
+            raise ProviderRequestError(
+                "google lyria music requires a prompt (text part)", provider="google",
+                status_code=400,
+            )
+        task_id = f"lyria-{uuid.uuid4().hex}"
+        _MUSIC_TASKS[task_id] = {
+            "model": request.model or "lyria-3",
+            "request": request,
+            "status": "pending",
+            "created_at": int(time.time()),
+        }
+        return UnifiedMusicTask(
+            task_id=task_id, provider=self.name, model=request.model, status="pending",
+            created_at=_MUSIC_TASKS[task_id]["created_at"],
+        )
+
+    async def get_music_task(self, task_id: str) -> UnifiedMusicTask:
+        rec = _MUSIC_TASKS.get(task_id)
+        if rec is None:
+            raise ProviderRequestError(
+                f"google music task {task_id} not found", provider="google", status_code=404,
+            )
+        if rec["status"] in ("succeeded", "failed"):
+            return UnifiedMusicTask(
+                task_id=task_id, provider=self.name, model=rec["model"], status=rec["status"],
+                audio_b64=rec.get("audio_b64"), audio_media_type=rec.get("audio_media_type"),
+                lyrics=rec.get("lyrics"), error=rec.get("error"),
+                created_at=rec["created_at"], completed_at=rec.get("completed_at"),
+                usage=rec.get("usage"),
+            )
+        # Run the blocking Lyria call now.
+        rec["status"] = "running"
+        request: UnifiedMusicRequest = rec["request"]
+        try:
+            body = self._lyria_body(request)
+            url = (f"{self._music_base}/v1beta/models/{rec['model']}:predictInteractions"
+                   f"?key={self._api_key}")
+            async with httpx.AsyncClient(timeout=240.0) as c:
+                resp = await c.post(url, json=body, headers={"Content-Type": "application/json"})
+        except httpx.HTTPError as exc:
+            rec["status"] = "failed"; rec["error"] = str(exc)
+            raise ProviderRequestError(
+                f"google music transport error: {exc}", provider="google", status_code=502
+            ) from exc
+        if resp.status_code >= 400:
+            rec["status"] = "failed"; rec["error"] = resp.text[:500]
+            raise ProviderRequestError(
+                f"google music returned HTTP {resp.status_code}", provider="google",
+                status_code=502, details={"upstream_body": resp.text[:1000]},
+            )
+        data = resp.json()
+        audio_b64, lyrics = _extract_lyria_output(data)
+        if not audio_b64:
+            rec["status"] = "failed"
+            rec["error"] = "no audio in lyria response"
+            raise TaskFailedError("google lyria returned no audio", provider="google")
+        rec["status"] = "succeeded"
+        rec["completed_at"] = int(time.time())
+        rec["audio_b64"] = audio_b64
+        rec["audio_media_type"] = "audio/wav"
+        if lyrics:
+            rec["lyrics"] = lyrics
+        if request.duration is not None:
+            rec["usage"] = MusicUsage(duration=int(request.duration))
+        return UnifiedMusicTask(
+            task_id=task_id, provider=self.name, model=rec["model"], status="succeeded",
+            audio_b64=audio_b64, audio_media_type="audio/wav", lyrics=rec.get("lyrics"),
+            created_at=rec["created_at"], completed_at=rec["completed_at"],
+            usage=rec.get("usage"),
+        )
+
+    def _lyria_body(self, request: UnifiedMusicRequest) -> dict[str, Any]:
+        # The unified content[] maps directly onto Lyria's input parts: text ->
+        # {type:"text", text}; inline reference images (extra["images"]) ->
+        # {type:"image", mime_type, data}.
+        parts: list[dict[str, Any]] = []
+        for p in request.content:
+            root = p.root
+            if hasattr(root, "text"):
+                parts.append({"type": "text", "text": root.text})
+        for img in request.extra.get("images", []) or []:
+            parts.append({"type": "image", "mime_type": img.get("mime_type", "image/jpeg"),
+                          "data": img.get("data")})
+        if not parts:
+            parts.append({"type": "text", "text": request.prompt() or ""})
+        body: dict[str, Any] = {"model": request.model, "input": parts}
+        config: dict[str, Any] = {"response_modalities": ["AUDIO"]}
+        if request.audio_format:
+            config["response_format"] = {"type": request.audio_format}
+        if request.negative_prompt:
+            config["negative_prompt"] = request.negative_prompt
+        if request.seed is not None:
+            config["seed"] = request.seed
+        if request.guidance_scale is not None:
+            config["guidance_scale"] = request.guidance_scale
+        if request.n is not None:
+            config["number_of_outputs"] = request.n
+        config.update(request.extra.get("lyria_config") or {})
+        body["config"] = config
+        return body
+
+
+def _extract_lyria_output(data: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Pull the inline audio (base64) and any text/lyrics out of a Lyria
+    response. The shape is ``steps[].content[]`` blocks: audio blocks carry
+    ``{type:"audio", data, mime_type}``, text blocks ``{type:"text", text}``."""
+    audio_b64: str | None = None
+    lyrics: str | None = None
+    steps = data.get("steps") or data.get("model_output") or []
+    if isinstance(steps, dict):
+        steps = [steps]
+    for step in steps:
+        content = (step or {}).get("content") or (step or {}).get("model_output") or []
+        if isinstance(content, dict):
+            content = [content]
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "audio" and block.get("data") and not audio_b64:
+                audio_b64 = block["data"]
+            elif btype == "text" and block.get("text") and not lyrics:
+                lyrics = block["text"]
+    # Some envelopes surface the audio at the top level instead.
+    if not audio_b64:
+        audio_b64 = data.get("output_audio") or data.get("audio")
+    if not lyrics:
+        lyrics = data.get("output_text") or data.get("text")
+    return audio_b64, lyrics

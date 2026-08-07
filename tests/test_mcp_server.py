@@ -25,7 +25,6 @@ from mm_gateway.config import BackendConfig, KeyConfig, Settings
 from mm_gateway.server.app import create_app
 from tests.conftest import FakeProvider
 
-
 # --------------------------------------------------------------------------- #
 # Multi-backend fixture
 # --------------------------------------------------------------------------- #
@@ -35,6 +34,7 @@ def _backends() -> list[BackendConfig]:
     return [
         BackendConfig(name="fake-img", type="fake", api_key="k", tags=["image-primary"]),
         BackendConfig(name="fake-vid", type="fake", api_key="k", tags=["video-primary"]),
+        BackendConfig(name="fake-mus", type="fake", api_key="k", tags=["music-primary"]),
         BackendConfig(name="fake-other", type="fake", api_key="k", tags=["other"]),
     ]
 
@@ -42,7 +42,8 @@ def _backends() -> list[BackendConfig]:
 def _keys() -> list[KeyConfig]:
     return [
         # A real-token key that may use every backend.
-        KeyConfig(id="alice", key="alice-token", allow_tags=["image-primary", "video-primary", "other"]),
+        KeyConfig(id="alice", key="alice-token",
+                  allow_tags=["image-primary", "video-primary", "music-primary", "other"]),
         # A key pinned to one backend by name.
         KeyConfig(id="bob", key="bob-token", allow_backends=["fake-img"]),
         # A key whose allow_tags match no configured backend, so every call is
@@ -105,10 +106,9 @@ async def _session(app, token: str | None):
     http_client = httpx.AsyncClient(transport=transport, headers=headers)
     async with streamable_http_client(
         "http://testserver/mcp", http_client=http_client,
-    ) as (read, write):
-        async with ClientSession(read, write) as sess:
-            await sess.initialize()
-            yield sess
+    ) as (read, write), ClientSession(read, write) as sess:
+        await sess.initialize()
+        yield sess
 
 
 @asynccontextmanager
@@ -120,9 +120,8 @@ async def _client(app, token: str | None):
     ``_lifespan`` + ``_session`` directly (see
     ``test_poll_denied_when_key_not_authorised_for_tasks_backend``).
     """
-    async with _lifespan(app):
-        async with _session(app, token) as sess:
-            yield sess
+    async with _lifespan(app), _session(app, token) as sess:
+        yield sess
 
 
 def _first_leaf(exc: BaseException, leaf_type: type) -> BaseException | None:
@@ -168,11 +167,12 @@ async def _call(app, token: str | None, tool: str, args: dict | None = None):
 # --------------------------------------------------------------------------- #
 
 
-async def test_lists_all_four_gateway_tools(mcp_app):
+async def test_lists_all_gateway_tools(mcp_app):
     async with _client(mcp_app, "alice-token") as sess:
         tools = await sess.list_tools()
     names = sorted(t.name for t in tools.tools)
-    assert names == ["create_video", "generate_image", "get_video", "list_models"]
+    assert names == ["create_music", "create_video", "generate_image",
+                     "get_music", "get_video", "list_models"]
 
 
 # --------------------------------------------------------------------------- #
@@ -215,7 +215,7 @@ async def test_valid_token_succeeds(mcp_app):
     assert not is_error
     data = json.loads(text)
     ids = [m["id"] for m in data["data"]]
-    assert "fake-image-1" in ids and "fake-video-1" in ids
+    assert "fake-image-1" in ids and "fake-video-1" in ids and "fake-music-1" in ids
 
 
 # --------------------------------------------------------------------------- #
@@ -286,6 +286,74 @@ async def test_get_video_polls_to_succeeded(mcp_app):
     assert body["id"] == task_id
     assert body["status"] == "succeeded"
     assert body["content"]["video_url"] == "https://example.test/out.mp4"
+
+
+# --------------------------------------------------------------------------- #
+# Music create + poll (Gemini Lyria 3 shape)
+# --------------------------------------------------------------------------- #
+
+
+async def test_create_music_returns_interaction_id(mcp_app):
+    is_error, text = await _call(mcp_app, "alice-token", "create_music", {
+        "model": "fake-music-1",
+        "input": "an upbeat pop song",
+        "wait": True,
+        # Pin to the music backend so we can assert the call landed there; without
+        # this, resolution picks the first usable backend that serves the model
+        # (all fake backends do), which would be fake-img.
+        "backend": "fake-mus",
+    })
+    assert not is_error, text
+    assert json.loads(text) == {"id": "music-1"}
+    prov = mcp_app.state.registry._backends["fake-mus"]
+    assert prov.music_calls and prov.music_calls[0].prompt() == "an upbeat pop song"
+
+
+async def test_create_music_accepts_parts_input(mcp_app):
+    # ``input`` as a Lyria parts array is accepted; text parts concatenate.
+    is_error, text = await _call(mcp_app, "alice-token", "create_music", {
+        "model": "fake-music-1",
+        "input": [{"type": "text", "text": "verse"}, {"type": "text", "text": "chorus"}],
+        "wait": True,
+        "backend": "fake-mus",
+    })
+    assert not is_error, text
+    prov = mcp_app.state.registry._backends["fake-mus"]
+    assert prov.music_calls[0].prompt() == "verse\nchorus"
+
+
+async def test_get_music_polls_to_succeeded(mcp_app):
+    # Async create returns immediately; a follow-up get_music re-polls to the
+    # terminal state and the Lyria steps/content envelope (audio + lyrics blocks).
+    async with _client(mcp_app, "alice-token") as sess:
+        res = await sess.call_tool("create_music", {
+            "model": "fake-music-1",
+            "input": "a sad ballad",
+            "wait": False,  # async, so we get the id back immediately
+            "backend": "fake-mus",
+        })
+        assert not res.is_error, res.content
+        task_id = json.loads(res.content[0].text)["id"]
+
+        # Poll until terminal — the fake provider moves pending->running->succeeded
+        # across polls, so a couple of get_music calls converge.
+        body = None
+        for _ in range(10):
+            res = await sess.call_tool("get_music", {"id": task_id})
+            assert not res.is_error, res.content
+            body = json.loads(res.content[0].text)
+            if body["status"] == "succeeded":
+                break
+    assert body is not None
+    assert body["id"] == task_id
+    assert body["status"] == "succeeded"
+    step = body["steps"][0]
+    assert step["type"] == "model_output"
+    blocks = step["content"]
+    assert any(b["type"] == "audio" and b["data"] == "AAAA" for b in blocks)
+    assert any(b["type"] == "text" and b["text"] == "la la la" for b in blocks)
+    assert body["output_audio"] == "AAAA"
+    assert body["output_text"] == "la la la"
 
 
 # --------------------------------------------------------------------------- #

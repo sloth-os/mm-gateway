@@ -70,8 +70,10 @@ class KeyConfig:
     allow_backends: list[str] = field(default_factory=list)
     default_image_tag: str | None = None
     default_video_tag: str | None = None
+    default_music_tag: str | None = None
     default_image_backend: str | None = None
     default_video_backend: str | None = None
+    default_music_backend: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -85,6 +87,8 @@ class Settings:
     # When True, video endpoints block until the task completes (sync-style) up to
     # max_sync_wait seconds, then fall back to returning a task id.
     video_sync_default: bool = field(default_factory=lambda: _env("VIDEO_SYNC_DEFAULT", "true").lower() == "true")
+    # Same semantics for music endpoints.
+    music_sync_default: bool = field(default_factory=lambda: _env("MUSIC_SYNC_DEFAULT", "true").lower() == "true")
     max_sync_wait: float = field(default_factory=lambda: float(_env("MAX_SYNC_WAIT", "300") or "300"))
     poll_interval: float = field(default_factory=lambda: float(_env("POLL_INTERVAL", "2.0") or "2.0"))
     enable_metrics: bool = field(default_factory=lambda: _env("ENABLE_METRICS", "true").lower() == "true")
@@ -137,6 +141,13 @@ class Settings:
                 return k.default_video_backend
         return self.backends[0].name if self.backends else ""
 
+    @property
+    def default_music_provider(self) -> str:
+        for k in self.keys:
+            if k.default_music_backend:
+                return k.default_music_backend
+        return self.backends[0].name if self.backends else ""
+
     # -- loaders -------------------------------------------------------------- #
 
     @classmethod
@@ -177,8 +188,10 @@ class Settings:
                 allow_backends=list(k.get("allow_backends") or []),
                 default_image_tag=k.get("default_image_tag"),
                 default_video_tag=k.get("default_video_tag"),
+                default_music_tag=k.get("default_music_tag"),
                 default_image_backend=k.get("default_image_backend"),
                 default_video_backend=k.get("default_video_backend"),
+                default_music_backend=k.get("default_music_backend"),
                 extra=dict(k.get("extra") or {}),
             )
             for k in (raw.get("keys") or [])
@@ -192,6 +205,7 @@ class Settings:
 
         server = _section("server")
         video = _section("video")
+        music = _section("music")
         defaults = _section("defaults")
         mcp = _section("mcp")
         return cls(
@@ -201,6 +215,7 @@ class Settings:
             log_format=str(server.get("log_format", _env("LOG_FORMAT", "json") or "json")),
             request_timeout=float(server.get("request_timeout", _env("REQUEST_TIMEOUT", "120") or "120")),
             video_sync_default=_bool(video.get("sync_default", _env("VIDEO_SYNC_DEFAULT", "true"))),
+            music_sync_default=_bool(music.get("sync_default", _env("MUSIC_SYNC_DEFAULT", "true"))),
             max_sync_wait=float(video.get("max_sync_wait", _env("MAX_SYNC_WAIT", "300") or "300")),
             poll_interval=float(video.get("poll_interval", _env("POLL_INTERVAL", "2.0") or "2.0")),
             enable_metrics=_bool(defaults.get("enable_metrics", _env("ENABLE_METRICS", "true"))),
@@ -227,73 +242,100 @@ class Settings:
         ``*_BASE_URL`` / ``*_MODEL`` names are still honoured as a fallback for
         each modality, so an existing deployment keeps working until it migrates.
         """
-        # (type, key env pair, base_url env pair, model env pair). Each pair is
-        # (image_env, video_env); the image triple registers/pins the served
-        # image model and the video triple the video model. The model env lets
-        # an operator pin/extend a backend's served models (e.g. a brand-new id
-        # not yet in the provider's hardcoded list) without editing code; the
-        # registry appends them to the backend's image/video model lists at build
-        # time.
+        # (type, key env pair, base_url env pair, model env pair, legacy triple,
+        #  music triple). Each pair is (image_env, video_env); the image triple
+        # registers/pins the served image model and the video triple the video
+        # model. The music triple is (music_key_env, music_url_env,
+        # music_model_env). The model env lets an operator pin/extend a backend's
+        # served models (e.g. a brand-new id not yet in the provider's hardcoded
+        # list) without editing code; the registry appends them to the backend's
+        # image/video/music model lists at build time.
+        _NO_PAIR = ("", "")   # placeholder for modality pairs a provider doesn't serve
+        _NO_TRIPLE = ("", "", "")  # placeholder for modality triples a provider doesn't serve
         specs = [
             ("openai", ("OPENAI_IMAGE_API_KEY", "OPENAI_VIDEO_API_KEY"),
              ("OPENAI_IMAGE_BASE_URL", "OPENAI_VIDEO_BASE_URL"),
              ("OPENAI_IMAGE_MODEL", "OPENAI_VIDEO_MODEL"),
-             ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL")),
+             ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL"), _NO_TRIPLE),
             ("google", ("GOOGLE_IMAGE_API_KEY", "GOOGLE_VIDEO_API_KEY"),
              ("GOOGLE_IMAGE_BASE_URL", "GOOGLE_VIDEO_BASE_URL"),
              ("GOOGLE_IMAGE_MODEL", "GOOGLE_VIDEO_MODEL"),
-             ("GOOGLE_API_KEY", "GOOGLE_BASE_URL", "GOOGLE_MODEL")),
+             ("GOOGLE_API_KEY", "GOOGLE_BASE_URL", "GOOGLE_MODEL"),
+             ("GOOGLE_MUSIC_API_KEY", "GOOGLE_MUSIC_BASE_URL", "GOOGLE_MUSIC_MODEL")),
             ("xai", ("XAI_IMAGE_API_KEY", "XAI_VIDEO_API_KEY"),
              ("XAI_IMAGE_BASE_URL", "XAI_VIDEO_BASE_URL"),
              ("XAI_IMAGE_MODEL", "XAI_VIDEO_MODEL"),
-             ("XAI_API_KEY", "XAI_BASE_URL", "XAI_MODEL")),
+             ("XAI_API_KEY", "XAI_BASE_URL", "XAI_MODEL"), _NO_TRIPLE),
             ("volcengine", ("ARK_IMAGE_API_KEY", "ARK_VIDEO_API_KEY"),
              ("ARK_IMAGE_BASE_URL", "ARK_VIDEO_BASE_URL"),
              ("ARK_IMAGE_MODEL", "ARK_VIDEO_MODEL"),
-             ("ARK_API_KEY", "ARK_BASE_URL", "ARK_MODEL")),
+             ("ARK_API_KEY", "ARK_BASE_URL", "ARK_MODEL"), _NO_TRIPLE),
             ("flux", ("FLUX_IMAGE_API_KEY", "FLUX_VIDEO_API_KEY"),
              ("FLUX_IMAGE_BASE_URL", "FLUX_VIDEO_BASE_URL"),
              ("FLUX_IMAGE_MODEL", "FLUX_VIDEO_MODEL"),
-             ("RUNAPI_API_KEY", "FLUX_BASE_URL", "FLUX_MODEL")),
+             ("RUNAPI_API_KEY", "FLUX_BASE_URL", "FLUX_MODEL"), _NO_TRIPLE),
             ("openrouter", ("OPENROUTER_IMAGE_API_KEY", "OPENROUTER_VIDEO_API_KEY"),
              ("OPENROUTER_IMAGE_BASE_URL", "OPENROUTER_VIDEO_BASE_URL"),
              ("OPENROUTER_IMAGE_MODEL", "OPENROUTER_VIDEO_MODEL"),
-             ("OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL")),
+             ("OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL"), _NO_TRIPLE),
             ("dashscope", ("DASHSCOPE_IMAGE_API_KEY", "DASHSCOPE_VIDEO_API_KEY"),
              ("DASHSCOPE_IMAGE_BASE_URL", "DASHSCOPE_VIDEO_BASE_URL"),
              ("DASHSCOPE_IMAGE_MODEL", "DASHSCOPE_VIDEO_MODEL"),
-             ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASHSCOPE_MODEL")),
+             ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "DASHSCOPE_MODEL"), _NO_TRIPLE),
             ("stability", ("STABILITY_IMAGE_API_KEY", "STABILITY_VIDEO_API_KEY"),
              ("STABILITY_IMAGE_BASE_URL", "STABILITY_VIDEO_BASE_URL"),
              ("STABILITY_IMAGE_MODEL", "STABILITY_VIDEO_MODEL"),
-             ("STABILITY_API_KEY", "STABILITY_BASE_URL", "STABILITY_MODEL")),
+             ("STABILITY_API_KEY", "STABILITY_BASE_URL", "STABILITY_MODEL"), _NO_TRIPLE),
+            # Music-only providers. They carry no image/video triple.
+            ("elevenlabs", _NO_PAIR, _NO_PAIR, _NO_PAIR,
+             ("ELEVENLABS_API_KEY", "ELEVENLABS_BASE_URL", "ELEVENLABS_MODEL"),
+             ("ELEVENLABS_MUSIC_API_KEY", "ELEVENLABS_MUSIC_BASE_URL", "ELEVENLABS_MUSIC_MODEL")),
+            ("minimax", _NO_PAIR, _NO_PAIR, _NO_PAIR,
+             ("MINIMAX_API_KEY", "MINIMAX_BASE_URL", "MINIMAX_MODEL"),
+             ("MINIMAX_MUSIC_API_KEY", "MINIMAX_MUSIC_BASE_URL", "MINIMAX_MUSIC_MODEL")),
+            ("udioapi", _NO_PAIR, _NO_PAIR, _NO_PAIR,
+             ("UDIOAPI_API_KEY", "UDIOAPI_BASE_URL", "UDIOAPI_MODEL"),
+             ("UDIOAPI_MUSIC_API_KEY", "UDIOAPI_MUSIC_BASE_URL", "UDIOAPI_MUSIC_MODEL")),
+            ("mureka", _NO_PAIR, _NO_PAIR, _NO_PAIR,
+             ("MUREKA_API_KEY", "MUREKA_BASE_URL", "MUREKA_MODEL"),
+             ("MUREKA_MUSIC_API_KEY", "MUREKA_MUSIC_BASE_URL", "MUREKA_MUSIC_MODEL")),
+            ("acestep", _NO_PAIR, _NO_PAIR, _NO_PAIR,
+             ("ACESTEP_API_KEY", "ACESTEP_BASE_URL", "ACESTEP_MODEL"),
+             ("ACESTEP_MUSIC_API_KEY", "ACESTEP_MUSIC_BASE_URL", "ACESTEP_MUSIC_MODEL")),
         ]
         backends: list[BackendConfig] = []
         for (type_, (img_key_env, vid_key_env), (img_url_env, vid_url_env),
-             (img_model_env, vid_model_env), (legacy_key, legacy_url, legacy_model)) in specs:
+             (img_model_env, vid_model_env), (legacy_key, legacy_url, legacy_model),
+             (mus_key_env, mus_url_env, mus_model_env)) in specs:
             # Resolve each modality's key/url/model, preferring the split
-            # *_IMAGE_* / *_VIDEO_* env over the legacy un-split *_* name.
+            # *_IMAGE_* / *_VIDEO_* / *_MUSIC_* env over the legacy un-split *_* name.
             img_key = _env(img_key_env) or _env(legacy_key)
             vid_key = _env(vid_key_env) or _env(legacy_key)
+            mus_key = _env(mus_key_env) or _env(legacy_key)
             # A backend is registered iff at least one modality carries a key.
-            api_key = img_key or vid_key
+            api_key = img_key or vid_key or mus_key
             if not api_key:
                 continue
-            # When the two modalities point at different endpoints, prefer the
+            # When the modalities point at different endpoints, prefer the
             # image one (image is the primary gateway surface); a provider that
-            # genuinely needs separate image/video endpoints should use a YAML
-            # config with two backends of the same type. The split base_url is
-            # still recorded in extra so a future adapter could consult it.
-            base_url = _env(img_url_env) or _env(legacy_url) or _env(vid_url_env)
+            # genuinely needs separate endpoints should use a YAML config with
+            # multiple backends of the same type. The split base_urls are still
+            # recorded in extra so an adapter can consult them.
+            base_url = _env(img_url_env) or _env(legacy_url) or _env(vid_url_env) or _env(mus_url_env)
             extra: dict[str, Any] = {}
             img_model = _env(img_model_env) or _env(legacy_model)
             vid_model = _env(vid_model_env)
+            mus_model = _env(mus_model_env) or (_env(legacy_model) if not (img_model or vid_model) else None)
             if img_model:
                 extra["image_model"] = img_model
             if vid_model:
                 extra["video_model"] = vid_model
+            if mus_model:
+                extra["music_model"] = mus_model
             if _env(vid_url_env) and _env(vid_url_env) != base_url:
                 extra["video_base_url"] = _env(vid_url_env)
+            if _env(mus_url_env) and _env(mus_url_env) != base_url:
+                extra["music_base_url"] = _env(mus_url_env)
             backends.append(BackendConfig(
                 name=type_, type=type_, api_key=api_key,
                 base_url=base_url, tags=[], extra=extra,
@@ -307,6 +349,7 @@ class Settings:
             allow_backends=[b.name for b in backends],
             default_image_backend=_env("DEFAULT_IMAGE_PROVIDER"),
             default_video_backend=_env("DEFAULT_VIDEO_PROVIDER"),
+            default_music_backend=_env("DEFAULT_MUSIC_PROVIDER"),
         )]
         return cls(backends=backends, keys=keys)
 

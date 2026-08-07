@@ -9,11 +9,16 @@ is tied to the app lifespan so the MCP server starts/stops with the gateway.
 
 The MCP server registers four tools that mirror the HTTP API:
 
-* ``list_models``        — list usable models for the calling key (image+video).
+* ``list_models``        — list usable models for the calling key (image+video+music).
 * ``generate_image``     — generate an image (OpenAI unified request shape).
 * ``create_video``       — submit a video task (Seedance content-array shape),
                            returning a task id; honours ``wait`` for sync-style.
 * ``get_video``          — poll a video task by id.
+* ``create_music``       — submit a music task (Gemini Lyria 3 shape: ``model``
+                           + ``input`` string/parts), returning an interaction id;
+                           honours ``wait`` for sync-style.
+* ``get_music``          — poll a music task by id; returns the Lyria steps/content
+                           envelope (audio base64 + lyrics blocks).
 
 Every tool authenticates the caller through the same bearer-token resolution as
 the HTTP routes: the ``Authorization`` header carried on the MCP ``Context`` is
@@ -37,6 +42,7 @@ from mm_gateway.core.exceptions import GatewayError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.server.auth import resolve_key
 from mm_gateway.translators.image import openai_compat
+from mm_gateway.translators.music import lyria_compat
 from mm_gateway.translators.video import seedance_compat
 
 log = get_logger("mcp")
@@ -131,6 +137,7 @@ def _build_mcp_server(app: FastAPI) -> "MCPServer":
     registry = app.state.registry
     image_service = app.state.image_service
     video_service = app.state.video_service
+    music_service = app.state.music_service
     task_store = app.state.task_store
     mcp = MCPServer(name="mm-gateway", version="0.1.0")
 
@@ -215,6 +222,54 @@ def _build_mcp_server(app: FastAPI) -> "MCPServer":
             )
         task = await video_service.get(id, backend_name=owner)
         return json.dumps(seedance_compat.to_seedance_task(task))
+
+    @mcp.tool()
+    @_tool
+    async def create_music(
+        ctx: Context,
+        model: str,
+        input: str | list[dict[str, Any]],
+        wait: bool = True,
+        tag: str | None = None,
+        backend: str | None = None,
+    ) -> str:
+        """Submit a music generation task (Gemini Lyria 3 shape).
+
+        ``input`` is either a string prompt or a Lyria parts array
+        (``[{"type":"text","text":...}, ...]``). Returns ``{"id": "<task_id>"}``;
+        when ``wait`` is true the call blocks until the task reaches a terminal
+        state (up to the sync wait limit).
+        """
+        import json
+        from mm_gateway.tasks.store import TaskRecord
+        key = _key(ctx)
+        unified = lyria_compat.from_lyria({"model": model, "input": input})
+        task = await music_service.create(
+            unified, key=key, tag=tag, backend_name=backend, wait=wait,
+        )
+        await task_store.put(TaskRecord(
+            task_id=task.task_id, provider=task.provider, model=task.model,
+            modality="music",
+        ))
+        return json.dumps(lyria_compat.to_lyria_create(task))
+
+    @mcp.tool()
+    @_tool
+    async def get_music(ctx: Context, id: str) -> str:
+        """Poll a music task by id; returns the Lyria steps/content envelope."""
+        import json
+        key = _key(ctx)
+        record = await task_store.get(id)
+        # Same cross-tenant guard as get_video: the calling key must be authorised
+        # for the backend that owns the task.
+        owner = record.provider if record else None
+        if owner and owner not in registry.usable_backends(key):
+            from mm_gateway.core.exceptions import ForbiddenError
+            raise ForbiddenError(
+                f"API key '{key.id}' is not allowed to use backend '{owner}'."
+            )
+        task = await music_service.get(id, backend_name=owner)
+        return json.dumps(lyria_compat.to_lyria_task(task))
 
     return mcp
 
