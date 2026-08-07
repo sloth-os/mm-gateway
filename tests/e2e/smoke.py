@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import httpx
@@ -242,6 +243,26 @@ def generate_video(client: httpx.Client, model: str) -> str:
     raise RuntimeError(f"video task did not complete within {TIMEOUT}s (last: {str(last)[:500]})")
 
 
+def run_one(candidate: tuple[str, str, str]) -> tuple[str, str, str, str]:
+    """Exercise a single (backend, modality, model) in its own client/thread.
+
+    Each worker holds its own ``httpx.Client`` — the client is not safe to
+    share across concurrent requests, so parallel candidates must not reuse one.
+    Returns ``(backend, modality, model, result)`` where result is either an
+    ok-summary string or an error message prefixed with ``FAILED: ``.
+    """
+    backend, modality, model = candidate
+    try:
+        with httpx.Client(base_url=BASE, timeout=TIMEOUT) as client:
+            if modality == "image":
+                out = generate_image(client, model)
+                return backend, modality, model, f"image ok: {out.get('url') or '<b64_json>'}"
+            url = generate_video(client, model)
+            return backend, modality, model, f"video ok: {url}"
+    except Exception as exc:  # noqa: BLE001
+        return backend, modality, model, f"FAILED: {exc}"
+
+
 def main() -> int:
     log(f"target gateway: {BASE}")
     cands = candidates()
@@ -256,14 +277,23 @@ def main() -> int:
         wait_for_health(client)
         log("gateway healthy")
         chosen = choose_models(client, cands)
-        for backend, modality, model in chosen:
-            log(f"using backend={backend} modality={modality} model={model}")
-            if modality == "image":
-                out = generate_image(client, model)
-                log(f"image ok: {out.get('url') or '<b64_json>'}")
-            else:
-                url = generate_video(client, model)
-                log(f"video ok: {url}")
+    # Run every configured candidate concurrently so a slow/failing one (e.g.
+    # an upstream 500) no longer blocks the rest; each backend gets the full
+    # E2E_TIMEOUT budget instead of sharing the wall-clock of a serial loop.
+    failures: list[str] = []
+    nworkers = min(len(chosen) or 1, 8)
+    with ThreadPoolExecutor(max_workers=nworkers) as pool:
+        futures = {pool.submit(run_one, c): c for c in chosen}
+        for fut in as_completed(futures):
+            backend, modality, model, result = fut.result()
+            log(f"[{backend}/{modality}] {model} -> {result}")
+            if result.startswith("FAILED:"):
+                failures.append(f"{backend}/{modality}/{model}: {result}")
+    if failures:
+        log(f"FAILED: {len(failures)} of {len(chosen)} candidate(s) failed:")
+        for f in failures:
+            log(f"  - {f}")
+        return 1
     return 0
 
 
