@@ -46,8 +46,6 @@ class DashScopeProvider(ImageProvider, VideoProvider):
             kwargs["seed"] = request.seed
         if request.negative_prompt:
             kwargs["negative_prompt"] = request.negative_prompt
-        if request.prompt_extend is not None:
-            kwargs["prompt_extend"] = request.prompt_extend
         kwargs.update(request.extra)
 
         try:
@@ -97,7 +95,8 @@ class DashScopeProvider(ImageProvider, VideoProvider):
         except Exception as exc:  # noqa: BLE001
             raise ProviderRequestError(f"dashscope video poll failed: {exc}", provider="dashscope") from exc
         st = _STATUS_MAP.get(status.output.task_status, "running")
-        task = UnifiedVideoTask(task_id=task_id, provider=self.name, model=request.model, status=st)  # type: ignore[arg-type]
+        model = getattr(status.output, "model", "") or ""
+        task = UnifiedVideoTask(task_id=task_id, provider=self.name, model=model, status=st)  # type: ignore[arg-type]
         if st == "succeeded":
             url = getattr(status.output, "video_url", None)
             if url:
