@@ -53,7 +53,21 @@ class DashScopeProvider(ImageProvider, VideoProvider):
         except Exception as exc:  # noqa: BLE001
             raise ProviderRequestError(f"dashscope image submit failed: {exc}", provider="dashscope") from exc
 
-        task_id = resp.output.task_id
+        # The submit step must return an async task id we poll to completion. An
+        # upstream that returns an error or a non-DashScope shape (e.g. a base
+        # URL pointed at an OpenAI-compatible endpoint) leaves ``output`` unset
+        # — surface that clearly instead of an opaque AttributeError on
+        # ``resp.output.task_id``.
+        output = getattr(resp, "output", None)
+        task_id = getattr(output, "task_id", None) if output else None
+        if not task_id:
+            raise ProviderRequestError(
+                "dashscope image submit returned no task_id "
+                f"(status_code={getattr(resp, 'status_code', None)} "
+                f"code={getattr(resp, 'code', None)} "
+                f"message={getattr(resp, 'message', None)})",
+                provider="dashscope",
+            )
         final = await AioImageSynthesis.wait(resp, wait_timeout=300)
         if final.status_code != 200 or final.output.task_status != "SUCCEEDED":
             raise TaskFailedError(

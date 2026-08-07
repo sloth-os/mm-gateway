@@ -120,6 +120,24 @@ def test_image_generate_passes_prompt_extend_via_extra(
     assert kw["prompt_extend"] is True
 
 
+def test_image_submit_no_task_id_is_clean_error(provider: DashScopeProvider) -> None:
+    """A non-DashScope-shaped submit response (e.g. base_url pointed at an
+    OpenAI-compatible endpoint) leaves ``output`` unset. This must surface as a
+    clear ProviderRequestError — not an opaque AttributeError on
+    ``resp.output.task_id`` (the original CI failure)."""
+    async def empty(**kw: Any) -> Any:
+        # Mirrors the SDK response shape when the upstream returns an error or a
+        # non-task body: top-level fields set, output missing/None.
+        return SimpleNamespace(status_code=400, code="Bad Request", message="no task", output=None)
+
+    provider._fake_image.async_call = empty  # type: ignore[attr-defined]
+    with pytest.raises(ProviderRequestError) as ei:
+        asyncio.run(provider.generate_image(UnifiedImageRequest(model="m", prompt="x")))
+    msg = str(ei.value)
+    assert "no task_id" in msg
+    assert "Bad Request" in msg  # the upstream code/message are included for debugging
+
+
 def test_image_propagates_sdk_error(provider: DashScopeProvider) -> None:
     async def boom(**kw: Any) -> Any:
         raise RuntimeError("upstream down")
