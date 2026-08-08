@@ -18,6 +18,7 @@ from mm_gateway.schemas.image import (
     ImageData,
     UnifiedImageRequest,
     UnifiedImageResponse,
+    UnifiedImageTask,
 )
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask, VideoUsage
@@ -48,14 +49,39 @@ class FakeProvider(ImageProvider, VideoProvider, MusicProvider):
         # routing/store layers can look the owning backend up by it.
         return self.backend.name
 
-    async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
+    async def create_image_task(self, request: UnifiedImageRequest) -> UnifiedImageTask:
         self.image_calls.append(request)
-        return UnifiedImageResponse(
-            created=int(time.time()),
-            model=request.model,
-            provider=self.name,
-            data=[ImageData(url="https://example.test/out.png", revised_prompt=request.prompt)],
+        task_id = f"img-{len(self.image_calls)}"
+        self._tasks[task_id] = "pending"
+        self._polls[task_id] = 0
+        return UnifiedImageTask(
+            task_id=task_id, provider=self.name, model=request.model, status="pending",
         )
+
+    async def get_image_task(self, task_id: str) -> UnifiedImageTask:
+        if task_id not in self._tasks:
+            from mm_gateway.core.exceptions import ProviderRequestError
+            raise ProviderRequestError(
+                f"image task {task_id} not found", provider=self.name, status_code=404,
+            )
+        state = self._tasks.get(task_id, "pending")
+        n = self._polls.get(task_id, 0) + 1
+        self._polls[task_id] = n
+        if state == "pending":
+            state = "running"
+        elif state == "running":
+            state = "succeeded"
+        self._tasks[task_id] = state
+        task = UnifiedImageTask(
+            task_id=task_id, provider=self.name, model="fake-image-1", status=state,
+        )
+        if state == "succeeded":
+            req = self.image_calls[0] if self.image_calls else None
+            task.images = [ImageData(
+                url="https://example.test/out.png",
+                revised_prompt=req.prompt() if req else None,
+            )]
+        return task
 
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
         self.video_calls.append(request)

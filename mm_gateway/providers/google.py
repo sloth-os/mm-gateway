@@ -25,6 +25,7 @@ from google.genai import types
 from mm_gateway.core.base import ImageProvider, MusicProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
@@ -38,7 +39,7 @@ _MUSIC_TASKS: dict[str, dict[str, Any]] = {}
 _GLM_BASE = "https://generativelanguage.googleapis.com"
 
 
-class GoogleProvider(ImageProvider, VideoProvider, MusicProvider):
+class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProvider):
     name = "google"
     image_models = ["imagen-4.0-generate-001", "imagen-3.0-generate-001", "gemini-2.5-flash-image"]
     video_models = ["veo-2.0-generate-001", "veo-3.0-generate-001", "veo-3.1-generate-preview"]
@@ -58,7 +59,7 @@ class GoogleProvider(ImageProvider, VideoProvider, MusicProvider):
                             or backend.base_url or _GLM_BASE).rstrip("/")
         self._api_key = backend.api_key
 
-    async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
+    async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         model = request.model
         try:
             if model.startswith("gemini"):
@@ -85,7 +86,7 @@ class GoogleProvider(ImageProvider, VideoProvider, MusicProvider):
         config = types.GenerateImagesConfig(**cfg_fields)
 
         resp = await self._client.aio.models.generate_images(
-            model=request.model, prompt=request.prompt, config=config
+            model=request.model, prompt=request.prompt() or "", config=config
         )
         data: list[ImageData] = []
         for gen in resp.generated_images or []:
@@ -103,7 +104,7 @@ class GoogleProvider(ImageProvider, VideoProvider, MusicProvider):
             image_config.aspect_ratio = request.aspect_ratio
         config = types.GenerateContentConfig(response_modalities=["IMAGE"], image_config=image_config)
         resp = await self._client.aio.models.generate_content(
-            model=request.model, contents=request.prompt, config=config
+            model=request.model, contents=request.prompt() or "", config=config
         )
         data: list[ImageData] = []
         for cand in resp.candidates or []:

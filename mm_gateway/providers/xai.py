@@ -26,6 +26,7 @@ from mm_gateway.core.exceptions import (
 )
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._http import _map_status, make_client, request_json
+from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
     ImageData,
     ImageUsage,
@@ -48,7 +49,7 @@ def _cost_from_ticks(ticks: Any) -> float | None:
         return None
 
 
-class XAIProvider(ImageProvider, VideoProvider):
+class XAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "xai"
     image_models: ClassVar[list[str]] = [
         "grok-imagine-image",
@@ -77,10 +78,10 @@ class XAIProvider(ImageProvider, VideoProvider):
             headers={"authorization": f"Bearer {backend.api_key}"},
         )
 
-    async def generate_image(
+    async def _generate_image(
         self, request: UnifiedImageRequest
     ) -> UnifiedImageResponse:
-        body: dict[str, Any] = {"model": request.model, "prompt": request.prompt}
+        body: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
         if request.n:
             # xAI caps n at 10 (GenerateImageRequest.n maximum: 10); clamp so an
             # out-of-range request is honoured up to the cap rather than 422->502.

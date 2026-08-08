@@ -1,10 +1,11 @@
 """Tests for the HTTP MCP server (``/mcp``).
 
 These exercise the full stack — FastAPI app lifespan, the
-``StreamableHTTPSessionManager``, the delegating ``/mcp`` route, and the four
-gateway tools (``list_models``, ``generate_image``, ``create_video``,
-``get_video``) — over an in-process httpx ASGI transport talking the real MCP
-Streamable-HTTP client protocol. No sockets, no network.
+``StreamableHTTPSessionManager``, the delegating ``/mcp`` route, and the seven
+gateway tools (``list_models``, ``create_image``, ``get_image``, ``create_video``,
+``get_video``, ``create_music``, ``get_music``) — over an in-process httpx ASGI
+transport talking the real MCP Streamable-HTTP client protocol. No sockets, no
+network.
 
 The fake provider is a multi-backend fixture so auth and routing can be
 exercised through the MCP surface exactly as they are through the HTTP routes.
@@ -171,8 +172,8 @@ async def test_lists_all_gateway_tools(mcp_app):
     async with _client(mcp_app, "alice-token") as sess:
         tools = await sess.list_tools()
     names = sorted(t.name for t in tools.tools)
-    assert names == ["create_music", "create_video", "generate_image",
-                     "get_music", "get_video", "list_models"]
+    assert names == ["create_image", "create_music", "create_video",
+                     "get_image", "get_music", "get_video", "list_models"]
 
 
 # --------------------------------------------------------------------------- #
@@ -219,35 +220,63 @@ async def test_valid_token_succeeds(mcp_app):
 
 
 # --------------------------------------------------------------------------- #
-# Image generation
+# Image create + poll (Gemini shape)
 # --------------------------------------------------------------------------- #
 
 
-async def test_generate_image_returns_openai_shape(mcp_app):
-    is_error, text = await _call(mcp_app, "alice-token", "generate_image",
-                                 {"model": "fake-image-1", "prompt": "a cat"})
+async def test_create_image_sync_returns_just_id(mcp_app):
+    is_error, text = await _call(mcp_app, "alice-token", "create_image",
+                                 {"model": "fake-image-1", "input": "a cat", "wait": True})
     assert not is_error, text
-    body = json.loads(text)
-    assert body["data"][0]["url"] == "https://example.test/out.png"
-    assert body["data"][0]["revised_prompt"] == "a cat"
+    assert json.loads(text) == {"id": "img-1"}
 
 
-async def test_generate_image_routes_to_pinned_backend(mcp_app):
+async def test_create_image_routes_to_pinned_backend(mcp_app):
     # Bob is pinned to fake-img; verify the request landed there.
-    is_error, text = await _call(mcp_app, "bob-token", "generate_image",
-                                 {"model": "fake-image-1", "prompt": "x"})
+    is_error, text = await _call(mcp_app, "bob-token", "create_image",
+                                 {"model": "fake-image-1", "input": "x", "wait": True})
     assert not is_error, text
     prov = mcp_app.state.registry._backends["fake-img"]
     assert prov.image_calls and prov.image_calls[0].provider == "fake-img"
 
 
-async def test_generate_image_tag_routing_via_tool_arg(mcp_app):
+async def test_create_image_tag_routing_via_tool_arg(mcp_app):
     # Alice may use any backend; pin via the ``backend`` arg to fake-other.
-    is_error, text = await _call(mcp_app, "alice-token", "generate_image",
-                                 {"model": "fake-image-1", "prompt": "x", "backend": "fake-other"})
+    is_error, text = await _call(mcp_app, "alice-token", "create_image",
+                                 {"model": "fake-image-1", "input": "x",
+                                  "backend": "fake-other", "wait": True})
     assert not is_error, text
     prov = mcp_app.state.registry._backends["fake-other"]
     assert prov.image_calls and prov.image_calls[0].provider == "fake-other"
+
+
+async def test_get_image_polls_to_succeeded(mcp_app):
+    # Async create returns immediately; a follow-up get_image re-polls to the
+    # terminal state and the Gemini steps/content envelope (image + revised_prompt).
+    async with _client(mcp_app, "alice-token") as sess:
+        res = await sess.call_tool("create_image", {
+            "model": "fake-image-1", "input": "a cat", "wait": False,
+        })
+        assert not res.is_error, res.content
+        task_id = json.loads(res.content[0].text)["id"]
+
+        body = None
+        for _ in range(10):
+            res = await sess.call_tool("get_image", {"id": task_id})
+            assert not res.is_error, res.content
+            body = json.loads(res.content[0].text)
+            if body["status"] == "succeeded":
+                break
+    assert body is not None
+    assert body["id"] == task_id
+    assert body["status"] == "succeeded"
+    step = body["steps"][0]
+    assert step["type"] == "model_output"
+    blocks = step["content"]
+    assert any(b["type"] == "image" and b["url"] == "https://example.test/out.png"
+               for b in blocks)
+    assert body["output_image_url"] == "https://example.test/out.png"
+    assert any(b["type"] == "text" and b["text"] == "a cat" for b in blocks)
 
 
 # --------------------------------------------------------------------------- #

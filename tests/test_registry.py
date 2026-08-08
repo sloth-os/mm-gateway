@@ -120,7 +120,10 @@ def test_build_appends_pinned_image_model(monkeypatch):
         def __init__(self, backend):
             self.backend = backend
 
-        async def generate_image(self, request):  # pragma: no cover - not called
+        async def create_image_task(self, request):  # pragma: no cover - not called
+            raise NotImplementedError
+
+        async def get_image_task(self, task_id):  # pragma: no cover - not called
             raise NotImplementedError
 
     stub_module = types.ModuleType("mm_gateway.providers.stub")
@@ -159,7 +162,10 @@ def test_build_no_extra_model_leaves_list_unchanged(monkeypatch):
         def __init__(self, backend):
             self.backend = backend
 
-        async def generate_image(self, request):  # pragma: no cover - not called
+        async def create_image_task(self, request):  # pragma: no cover - not called
+            raise NotImplementedError
+
+        async def get_image_task(self, task_id):  # pragma: no cover - not called
             raise NotImplementedError
 
     stub_module = types.ModuleType("mm_gateway.providers.stub")

@@ -1,23 +1,22 @@
 # mm-gateway
 
 A unified **image / video / music / AI gateway** written in Python 3.11+. It
-exposes OpenAI-, OpenRouter-, and Gemini Lyria 3-compatible front-ends and routes
-to multiple provider back-ends, translating each provider's native SDK shape into
-one canonical internal schema.
+exposes Gemini-compatible image, Seedance-compatible video, and Gemini Lyria
+3-compatible music front-ends and routes to multiple provider back-ends,
+translating each provider's native SDK shape into one canonical internal schema.
 
 ```
             ┌─────────────────────────── mm-gateway ───────────────────────────┐
- OpenAI     │  POST /v1/images/generations          POST /v1/videos            │
- shape  ───▶│  POST /api/v1/images          GET  /v1/videos/{id}               │
-            │  POST /api/v1/videos          GET  /api/v1/videos/{id}           │
- OpenRouter │                               GET  /api/v1/videos/{id}/content   │
- shape  ───▶│                               POST /v1/music                     │
- Lyria 3    │                               GET  /v1/music/{id}               │
- shape  ───▶│       translators → unified schema → services → registry         │
-            │                          → provider adapters → SDKs              │
-            └──────────────────────────────────────────────────────────────────┘
-   providers: openai · google · xai · volcengine(seedream+seedance) · flux · openrouter · dashscope · stability
-              elevenlabs · minimax · udioapi · mureka · acestep · google(lyria)
+ Gemini     │  POST /v1/images              GET  /v1/images/{id}               │
+ image  ───▶│                                                               │
+            │  POST /v1/videos              GET  /v1/videos/{id}               │
+ Seedance   │                                                               │
+ video  ───▶│  POST /v1/music               GET  /v1/music/{id}               │
+            │       translators → unified schema → services → registry         │
+ Gemini     │                          → provider adapters → SDKs              │
+ Lyria 3    └──────────────────────────────────────────────────────────────────┘
+ music  ───▶│   providers: openai · google · xai · volcengine(seedream+seedance) · flux · openrouter · dashscope · stability
+            │              elevenlabs · minimax · udioapi · mureka · acestep · google(lyria)
 ```
 
 ## Why
@@ -31,20 +30,23 @@ code-verified facts are in [`docs/providers/reference.md`](docs/providers/refere
 
 ## Front-end shapes
 
-| Modality | OpenAI-compatible | OpenRouter-compatible |
-|----------|-------------------|-----------------------|
-| Image    | `POST /v1/images/generations` | `POST /api/v1/images` |
-| Video    | `POST /v1/videos` + `GET /v1/videos/{id}` (Seedance shape) | `POST /api/v1/videos` + `GET /api/v1/videos/{id}` + `GET /api/v1/videos/{id}/content` |
-| Music    | — | — (Gemini Lyria 3 shape: `POST /v1/music` + `GET /v1/music/{id}`) |
+| Modality | Front-end shape |
+|----------|-----------------|
+| Image    | `POST /v1/images` + `GET /v1/images/{id}` (Gemini shape: `{model, input}` → `{id}`, poll `steps[].content[]` image blocks) |
+| Video    | `POST /v1/videos` + `GET /v1/videos/{id}` (Seedance shape: `{model, content[]}` → `{id}`, poll `{status, content}`) |
+| Music    | `POST /v1/music` + `GET /v1/music/{id}` (Gemini Lyria 3 shape: `{model, input}` → `{id}`, poll `steps[].content[]` audio/lyrics blocks) |
 
 Plus `GET /health`, `GET /v1/models` (and `/api/v1/models`), `GET /metrics`
-(Prometheus text). Override the response shape of any image or video endpoint
-with `X-Response-Format: openai|openrouter|seedance` (music has a single Lyria
-shape, so the header is ignored on `POST /v1/music` / `GET /v1/music/{id}`).
+(Prometheus text).
 
-Video sync vs async: by default the create call blocks until the task completes
-(`VIDEO_SYNC_DEFAULT=true`). Send `Prefer: respond-async` or `?wait=false` to
+Image sync vs async: by default the create call blocks until the task completes
+(`IMAGE_SYNC_DEFAULT=true`). Send `Prefer: respond-async` or `?wait=false` to
 get a polling handle back immediately.
+
+Video sync vs async: the same trade-off, governed by
+`VIDEO_SYNC_DEFAULT=true`. Send `Prefer: respond-async` or `?wait=false` to
+get a polling handle back immediately and poll `GET /v1/videos/{id}`;
+`?wait=true` forces blocking.
 
 Music sync vs async: the same trade-off, governed by `MUSIC_SYNC_DEFAULT=true`.
 Send `Prefer: respond-async` or `?wait=false` to get the interaction id back
@@ -68,11 +70,11 @@ for backward compatibility, the gateway is open if no key is set).
 ## MCP
 
 The gateway also exposes an **MCP** (Model Context Protocol) server over the
-Streamable-HTTP transport. When the `mcp` config section is enabled, six tools
-mirror the HTTP API — `list_models`, `generate_image`, `create_video`,
-`get_video`, `create_music`, `get_music` — so any MCP client (an IDE, agent, or
-the `mcp` CLI) can drive the gateway with the same bearer-token auth and backend
-routing as the HTTP routes.
+Streamable-HTTP transport. When the `mcp` config section is enabled, seven tools
+mirror the HTTP API — `list_models`, `create_image`, `get_image`,
+`create_video`, `get_video`, `create_music`, `get_music` — so any MCP client (an
+IDE, agent, or the `mcp` CLI) can drive the gateway with the same bearer-token
+auth and backend routing as the HTTP routes.
 A `GatewayError` raised by a tool surfaces as a structured MCP/JSON-RPC error
 (code `-32000`, the gateway's `code`/`status_code` in `data`), so an MCP client
 can branch on it exactly like an HTTP client branches on status.
@@ -201,13 +203,16 @@ export FRONTEND_KEY_ALICE=...     # the token you will send as Bearer
 mm-gateway                       # or: python -m mm_gateway.server.app
 ```
 
-### Image (OpenAI shape)
+### Image (Gemini shape, async then poll)
 
 ```bash
-curl -s localhost:8000/v1/images/generations \
-  -H 'authorization: Bearer $FRONTEND_KEY_ALICE' \
+T=$(curl -s localhost:8000/v1/images \
+  -H "authorization: Bearer $FRONTEND_KEY_ALICE" \
   -H 'content-type: application/json' \
-  -d '{"model":"gateway-image-pro","prompt":"a cat in a spacesuit","size":"1024x1024"}'
+  -H 'prefer: respond-async' \
+  -d '{"model":"gateway-image-pro","input":"a cat in a spacesuit"}' \
+  | jq -r .id)
+curl -s -H "authorization: Bearer $FRONTEND_KEY_ALICE" localhost:8000/v1/images/$T
 ```
 
 ### Video (Seedance shape, async then poll)
@@ -220,16 +225,6 @@ T=$(curl -s localhost:8000/v1/videos \
   -d '{"model":"gateway-video-pro","content":[{"type":"text","text":"a cat playing"}]}' \
   | jq -r .id)
 curl -s -H "authorization: Bearer $FRONTEND_KEY_ALICE" localhost:8000/v1/videos/$T
-```
-
-### Video (OpenRouter shape)
-
-```bash
-curl -s localhost:8000/api/v1/videos \
-  -H "authorization: Bearer $FRONTEND_KEY_ALICE" \
-  -H 'content-type: application/json' \
-  -H 'prefer: respond-async' \
-  -d '{"model":"gateway-video-pro","prompt":"a cat playing"}'
 ```
 
 ### Music (Lyria shape, async then poll)
@@ -266,10 +261,10 @@ async with streamable_http_client(
 ) as (read, write):
     async with ClientSession(read, write) as session:
         await session.initialize()
-        tools = await session.list_tools()                 # the six gateway tools
-        img = await session.call_tool("generate_image",
+        tools = await session.list_tools()                 # the seven gateway tools
+        img = await session.call_tool("create_image",
                                       {"model": "gateway-image-pro",
-                                       "prompt": "a cat in a spacesuit"})
+                                       "input": "a cat in a spacesuit"})
         mus = await session.call_tool("create_music",
                                       {"model": "gateway-music-mureka",
                                        "input": "a cat playing piano, jazz",
@@ -315,7 +310,7 @@ container; `*_MODEL` pins the exact upstream model id to request (rather than a
 hard-coded alias) and is also published to the gateway so the registry serves
 it. The script collects every fully-configured (backend, modality), confirms
 the chosen model is actually served by `GET /v1/models`, then generates one
-image through the OpenAI-shape front-end (image) and one video through the
+image through the Gemini-shape front-end (image) and one video through the
 Seedance-shape front-end (create + poll), asserting real data comes back. When
 *no* modality of any backend has all three set it **exits 0** (skips), so it is
 safe to wire into CI before secrets exist.

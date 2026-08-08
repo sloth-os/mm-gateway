@@ -153,9 +153,9 @@ def test_valid_token_lists_usable_backends_only(client):
 
 
 def test_key_with_no_usable_backend_403(client):
-    r = client.post("/v1/images/generations",
+    r = client.post("/v1/images",
                     headers={"authorization": "Bearer dave-token"},
-                    json={"model": "fake-image-1", "prompt": "x"})
+                    json={"model": "fake-image-1", "input": "x"})
     assert r.status_code == 403
     body = r.json()["error"]
     assert body["code"] == "forbidden"
@@ -167,9 +167,9 @@ def test_carol_denied_backend_routes_away(client, multi):
     # must therefore land on the remaining usable image backend, img-b — proving
     # deny_tags removes the named backend from routing rather than rejecting the
     # whole key (which would be a 403).
-    r = client.post("/v1/images/generations",
+    r = client.post("/v1/images",
                     headers={"authorization": "Bearer carol-token"},
-                    json={"model": "fake-image-1", "prompt": "x"})
+                    json={"model": "fake-image-1", "input": "x"})
     assert r.status_code == 200, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-b")
@@ -178,9 +178,9 @@ def test_carol_denied_backend_routes_away(client, multi):
 
 def test_erin_denied_by_type_403(client):
     # Erin denies the 'fake' type entirely -> no backend usable -> forbidden.
-    r = client.post("/v1/images/generations",
+    r = client.post("/v1/images",
                     headers={"authorization": "Bearer erin-token"},
-                    json={"model": "fake-image-1", "prompt": "x"})
+                    json={"model": "fake-image-1", "input": "x"})
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "forbidden"
 
@@ -192,10 +192,10 @@ def test_erin_denied_by_type_403(client):
 
 def test_tag_routing_via_x_backend_tag_header(client, multi):
     # Alice may use any backend; pin via the header to img-b (image-secondary).
-    r = client.post("/v1/images/generations",
+    r = client.post("/v1/images",
                     headers={"authorization": "Bearer alice-token",
                              "x-backend-tag": "image-secondary"},
-                    json={"model": "fake-image-1", "prompt": "x"})
+                    json={"model": "fake-image-1", "input": "x"})
     assert r.status_code == 200, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-b")
@@ -203,9 +203,9 @@ def test_tag_routing_via_x_backend_tag_header(client, multi):
 
 
 def test_tag_routing_via_provider_tag_body(client, multi):
-    r = client.post("/api/v1/images",
+    r = client.post("/v1/images",
                     headers={"authorization": "Bearer alice-token"},
-                    json={"model": "fake-image-1", "prompt": "x",
+                    json={"model": "fake-image-1", "input": "x",
                           "provider": {"tag": "image-secondary"}})
     assert r.status_code == 200, r.text
     provs = _providers(multi)
@@ -218,10 +218,10 @@ def test_tag_routing_via_provider_tag_body(client, multi):
 
 
 def test_backend_pin_via_x_backend_header(client, multi):
-    r = client.post("/v1/images/generations",
+    r = client.post("/v1/images",
                     headers={"authorization": "Bearer alice-token",
                              "x-backend": "img-b"},
-                    json={"model": "fake-image-1", "prompt": "x"})
+                    json={"model": "fake-image-1", "input": "x"})
     assert r.status_code == 200, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-b")
@@ -229,9 +229,9 @@ def test_backend_pin_via_x_backend_header(client, multi):
 
 
 def test_backend_pin_via_provider_backend_body(client, multi):
-    r = client.post("/api/v1/images",
+    r = client.post("/v1/images",
                     headers={"authorization": "Bearer alice-token"},
-                    json={"model": "fake-image-1", "prompt": "x",
+                    json={"model": "fake-image-1", "input": "x",
                           "provider": {"backend": "img-b"}})
     assert r.status_code == 200, r.text
     provs = _providers(multi)
@@ -242,9 +242,9 @@ def test_bob_pinned_to_img_a_short_circuits(client, multi):
     # Bob's only allowed backend is img-a; the call lands there even though the
     # model is also served by img-b. (Registry.usable_backends scopes to img-a,
     # so the pin need not even be named on the request.)
-    r = client.post("/v1/images/generations",
+    r = client.post("/v1/images",
                     headers={"authorization": "Bearer bob-token"},
-                    json={"model": "fake-image-1", "prompt": "x"})
+                    json={"model": "fake-image-1", "input": "x"})
     assert r.status_code == 200, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-a")
@@ -282,9 +282,9 @@ def test_default_image_backend_is_picked_without_override(client, multi):
         app.state.registry._backends[cfg.name] = FakeProvider(cfg)
         app.state.registry._configs[cfg.name] = cfg
     zoe_client = TestClient(app)
-    r = zoe_client.post("/v1/images/generations",
+    r = zoe_client.post("/v1/images",
                         headers={"authorization": "Bearer zoe-token"},
-                        json={"model": "fake-image-1", "prompt": "x"})
+                        json={"model": "fake-image-1", "input": "x"})
     assert r.status_code == 200, r.text
     provs = {n: p for n, p in app.state.registry._backends.items()}
     assert _image_landed(provs, "img-b")

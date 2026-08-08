@@ -30,7 +30,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(level=settings.log_level, fmt=settings.log_format)
 
     registry = Registry(settings)
-    image_service = ImageService(registry)
+    image_service = ImageService(
+        registry, max_sync_wait=settings.max_sync_wait,
+        poll_interval=settings.poll_interval, sync_default=settings.image_sync_default,
+    )
     video_service = VideoService(
         registry, max_sync_wait=settings.max_sync_wait,
         poll_interval=settings.poll_interval, sync_default=settings.video_sync_default,

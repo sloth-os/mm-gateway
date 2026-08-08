@@ -24,7 +24,7 @@ def test_models_lists_fake_models(client):
 
 def test_metrics_exposes_prometheus(client):
     # Make a real request first so the metrics store has a counter to render.
-    client.post("/v1/images/generations", json={"model": "fake-image-1", "prompt": "x"})
+    client.post("/v1/images", json={"model": "fake-image-1", "input": "x"})
     r = client.get("/metrics")
     assert r.status_code == 200
     assert "gateway_requests_total" in r.text
@@ -37,39 +37,52 @@ def test_request_id_middleware(client):
 
 # -- Image routes ------------------------------------------------------------ #
 
-def test_openai_image_generation(client, fake_provider):
-    r = client.post("/v1/images/generations", json={"model": "fake-image-1", "prompt": "a cat", "n": 1})
+def test_image_create_sync_returns_just_id(client, fake_provider):
+    # image_sync_default defaults to True, so create blocks until success and
+    # returns only the Gemini interaction id.
+    r = client.post("/v1/images", json={"model": "fake-image-1", "input": "a cat", "n": 1})
     assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["data"][0]["url"] == "https://example.test/out.png"
-    assert body["data"][0]["revised_prompt"] == "a cat"
+    assert r.json() == {"id": "img-1"}
     assert len(fake_provider.image_calls) == 1
     assert fake_provider.image_calls[0].model == "fake-image-1"
+    assert fake_provider.image_calls[0].prompt() == "a cat"
 
 
-def test_openai_image_generation_error_envelope(client):
-    r = client.post("/v1/images/generations", json={"prompt": "no model"})
-    # Either Pydantic 422 (request validation) or a 400 from our error handler.
+def test_image_async_then_poll_returns_steps_content(client, fake_provider):
+    # Respond-async: create returns immediately without waiting.
+    r = client.post("/v1/images", json={"model": "fake-image-1", "input": "a cat"},
+                    headers={"prefer": "respond-async"})
+    assert r.status_code == 200, r.text
+    task_id = r.json()["id"]
+
+    # Poll until terminal.
+    for _ in range(10):
+        poll = client.get(f"/v1/images/{task_id}")
+        assert poll.status_code == 200, poll.text
+        if poll.json()["status"] == "succeeded":
+            break
+    body = poll.json()
+    assert body["id"] == task_id
+    assert body["status"] == "succeeded"
+    # The image rides a model_output step's content array as a typed block.
+    step = body["steps"][0]
+    assert step["type"] == "model_output"
+    blocks = step["content"]
+    assert any(b["type"] == "image" and b["url"] == "https://example.test/out.png" for b in blocks)
+    # Convenience accessor mirrors the SDK's interaction.output_image / output_image_url.
+    assert body["output_image_url"] == "https://example.test/out.png"
+    # revised_prompt surfaces as a text block.
+    assert any(b["type"] == "text" and b["text"] == "a cat" for b in blocks)
+
+
+def test_image_missing_model_is_rejected(client):
+    r = client.post("/v1/images", json={"input": "no model"})
     assert r.status_code in (400, 422)
 
 
-def test_openrouter_image_generation(client, fake_provider):
-    r = client.post("/api/v1/images", json={
-        "model": "fake-image-1", "prompt": "a cat",
-        "provider": {"only": "fake"},
-    })
-    assert r.status_code == 200, r.text
-    body = r.json()
-    # OpenRouter shape emits b64_json/media_type.
-    assert body["data"][0]["media_type"] == "image/png"
-    assert fake_provider.image_calls[0].provider == "fake"
-
-
-def test_image_response_format_header_forces_openai_shape(client):
-    r = client.post("/api/v1/images", json={"model": "fake-image-1", "prompt": "x"},
-                    headers={"x-response-format": "openai"})
-    assert r.status_code == 200, r.text
-    assert "url" in r.json()["data"][0] or "b64_json" in r.json()["data"][0]
+def test_image_poll_unknown_task_is_404(client):
+    r = client.get("/v1/images/no-such-task")
+    assert r.status_code == 404
 
 
 # -- Video routes ------------------------------------------------------------ #
@@ -86,47 +99,26 @@ def test_video_seedance_create_sync_returns_completed(client, fake_provider):
     assert out == {"id": "task-1"}
 
 
-def test_video_openrouter_async_then_poll(client, fake_provider):
+def test_video_seedance_async_then_poll(client, fake_provider):
     # Respond-async: create returns a handle without waiting.
-    r = client.post("/api/v1/videos", json={"model": "fake-video-1", "prompt": "a cat"},
-                     headers={"prefer": "respond-async"})
+    r = client.post("/v1/videos", json={
+        "model": "fake-video-1",
+        "content": [{"type": "text", "text": "a cat playing"}],
+    }, headers={"prefer": "respond-async"})
     assert r.status_code == 200, r.text
-    handle = r.json()
-    task_id = handle["id"]
-    assert handle["status"] in ("pending", "running")
-    assert handle["polling_url"].endswith(f"/api/v1/videos/{task_id}")
+    task_id = r.json()["id"]
 
     # Poll until terminal.
     for _ in range(10):
-        poll = client.get(f"/api/v1/videos/{task_id}")
+        poll = client.get(f"/v1/videos/{task_id}")
         assert poll.status_code == 200, poll.text
         if poll.json()["status"] == "succeeded":
             break
-    assert poll.json()["status"] == "succeeded"
-    assert poll.json()["unsigned_urls"] == ["https://example.test/out.mp4"]
-
-    # Content endpoint returns the urls for a completed task.
-    content = client.get(f"/api/v1/videos/{task_id}/content")
-    assert content.status_code == 200, content.text
-    assert content.json()["unsigned_urls"] == ["https://example.test/out.mp4"]
-
-
-def test_video_content_endpoint_conflict_before_done(client, fake_provider):
-    r = client.post("/api/v1/videos", json={"model": "fake-video-1", "prompt": "x"},
-                    headers={"prefer": "respond-async"})
-    task_id = r.json()["id"]
-    # The fake provider's first poll moves pending->running, so it's not done.
-    content = client.get(f"/api/v1/videos/{task_id}/content")
-    assert content.status_code == 409
-    assert content.json()["status"] != "succeeded"
-
-
-def test_video_openrouter_seedance_shape_via_header(client, fake_provider):
-    r = client.post("/api/v1/videos", json={"model": "fake-video-1", "prompt": "a cat"},
-                    headers={"x-response-format": "seedance"})
-    assert r.status_code == 200, r.text
-    # Seedance create returns {"id": ...}.
-    assert r.json() == {"id": "task-1"}
+    body = poll.json()
+    assert body["status"] == "succeeded"
+    assert body["id"] == task_id
+    # The video url rides the content envelope.
+    assert body["content"]["video_url"] == "https://example.test/out.mp4"
 
 
 # -- Music routes (Gemini Lyria 3 shape) ------------------------------------- #

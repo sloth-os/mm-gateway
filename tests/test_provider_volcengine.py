@@ -16,7 +16,7 @@ import pytest
 from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.providers.volcengine import VolcengineProvider
-from mm_gateway.schemas.image import UnifiedImageRequest
+from mm_gateway.schemas.image import UnifiedImageRequest, text_part as image_text_part
 from mm_gateway.schemas.video import UnifiedVideoRequest, audio_part, image_part, text_part, video_part
 
 
@@ -70,25 +70,30 @@ def test_provider_requires_api_key() -> None:
 # -- image --------------------------------------------------------------- #
 
 def test_image_generate_maps_params_and_response(provider: VolcengineProvider) -> None:
-    req = UnifiedImageRequest(model="doubao-seedream-4-0-t2i-250828", prompt="a cat", size="1024x1024",
-                              seed=7, guidance_scale=2.5, watermark=True)
-    resp = asyncio.run(provider.generate_image(req))
+    req = UnifiedImageRequest(model="doubao-seedream-4-0-t2i-250828", content=[image_text_part("a cat")],
+                              size="1024x1024", seed=7, guidance_scale=2.5, watermark=True)
+    task = asyncio.run(provider.create_image_task(req))
+    assert task.status == "pending" and task.task_id
+    # The synthetic task runs the blocking call on first poll.
+    task = asyncio.run(provider.get_image_task(task.task_id))
+    assert task.status == "succeeded"
+    assert task.images[0].url == "https://ark.test/img.png"
+    assert task.provider == "volcengine"
+    assert task.usage is not None and task.usage.total_tokens == 12
     kw = provider._ark.image_calls[0]
     assert kw["model"] == "doubao-seedream-4-0-t2i-250828"
     assert kw["prompt"] == "a cat"
     assert kw["size"] == "1024x1024"
     assert kw["seed"] == 7 and kw["guidance_scale"] == 2.5 and kw["watermark"] is True
-    assert resp.data[0].url == "https://ark.test/img.png"
-    assert resp.provider == "volcengine"
-    assert resp.usage is not None and resp.usage.total_tokens == 12
 
 
 def test_image_propagates_sdk_error(provider: VolcengineProvider) -> None:
     async def boom(**kw: Any) -> Any:
         raise RuntimeError("upstream down")
     provider._ark.images.generate = boom
+    task = asyncio.run(provider.create_image_task(UnifiedImageRequest(model="m", content=[image_text_part("x")])))
     with pytest.raises(ProviderRequestError):
-        asyncio.run(provider.generate_image(UnifiedImageRequest(model="m", prompt="x")))
+        asyncio.run(provider.get_image_task(task.task_id))
 
 
 # -- video create -------------------------------------------------------- #

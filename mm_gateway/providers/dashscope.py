@@ -12,7 +12,13 @@ from dashscope.aigc.video_synthesis import AioVideoSynthesis
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
 from mm_gateway.observability.logging import get_logger
-from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.image import (
+    ImageData,
+    ImageUsage,
+    UnifiedImageRequest,
+    UnifiedImageResponse,
+    UnifiedImageTask,
+)
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 log = get_logger("provider.dashscope")
@@ -21,6 +27,11 @@ _STATUS_MAP = {
     "PENDING": "pending", "RUNNING": "running", "SUSPENDED": "running",
     "SUCCEEDED": "succeeded", "FAILED": "failed", "CANCELED": "cancelled", "UNKNOWN": "failed",
 }
+
+# In-memory store for the native async image tasks: create records the submit
+# handle, the first poll blocks on AioImageSynthesis.wait to completion.
+# (Single-process only; a real deployment would use a durable task store.)
+_IMAGE_TASKS: dict[str, dict[str, Any]] = {}
 
 
 class DashScopeProvider(ImageProvider, VideoProvider):
@@ -36,8 +47,8 @@ class DashScopeProvider(ImageProvider, VideoProvider):
         if backend.base_url:
             dashscope.base_http_api_url = backend.base_url
 
-    async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
-        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt}
+    async def create_image_task(self, request: UnifiedImageRequest) -> UnifiedImageTask:
+        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
         if request.n:
             kwargs["n"] = request.n
         if request.size:
@@ -68,15 +79,53 @@ class DashScopeProvider(ImageProvider, VideoProvider):
                 f"message={getattr(resp, 'message', None)})",
                 provider="dashscope",
             )
-        final = await AioImageSynthesis.wait(resp, wait_timeout=300)
-        if final.status_code != 200 or final.output.task_status != "SUCCEEDED":
-            raise TaskFailedError(
-                f"dashscope image task {task_id}: {final.output.task_status}", provider="dashscope"
+        created_at = int(time.time())
+        _IMAGE_TASKS[task_id] = {
+            "model": request.model, "resp": resp, "status": "pending", "created_at": created_at,
+        }
+        return UnifiedImageTask(
+            task_id=task_id, provider=self.name, model=request.model, status="pending",
+            created_at=created_at,
+        )
+
+    async def get_image_task(self, task_id: str) -> UnifiedImageTask:
+        rec = _IMAGE_TASKS.get(task_id)
+        if rec is None:
+            raise ProviderRequestError(
+                f"dashscope image task {task_id} not found", provider="dashscope", status_code=404,
             )
+        if rec["status"] in ("succeeded", "failed"):
+            return UnifiedImageTask(
+                task_id=task_id, provider=self.name, model=rec["model"], status=rec["status"],
+                images=rec.get("images", []), error=rec.get("error"),
+                created_at=rec["created_at"], completed_at=rec.get("completed_at"),
+                usage=rec.get("usage"),
+            )
+        # Block on the async wait to completion (DashScope's wait polls
+        # internally up to wait_timeout). Single-process, like every other
+        # in-memory task store in the gateway.
+        rec["status"] = "running"
+        try:
+            final = await AioImageSynthesis.wait(rec["resp"], wait_timeout=300)
+        except Exception as exc:  # noqa: BLE001
+            rec["status"] = "failed"; rec["error"] = str(exc)
+            raise ProviderRequestError(f"dashscope image poll failed: {exc}", provider="dashscope") from exc
+        if final.status_code != 200 or final.output.task_status != "SUCCEEDED":
+            err = f"dashscope image task {task_id}: {final.output.task_status}"
+            rec["status"] = "failed"; rec["error"] = err
+            raise TaskFailedError(err, provider="dashscope")
         data = [ImageData(url=getattr(r, "url", None)) for r in (final.output.results or [])]
-        return UnifiedImageResponse(
-            created=int(time.time()), data=data, model=request.model, provider=self.name,
-            usage=ImageUsage(),
+        if not data:
+            rec["status"] = "failed"; rec["error"] = "provider returned no images"
+            raise TaskFailedError("dashscope image returned no images", provider="dashscope")
+        rec["status"] = "succeeded"
+        rec["completed_at"] = int(time.time())
+        rec["images"] = data
+        rec["usage"] = ImageUsage()
+        return UnifiedImageTask(
+            task_id=task_id, provider=self.name, model=rec["model"], status="succeeded",
+            images=data, created_at=rec["created_at"], completed_at=rec["completed_at"],
+            usage=rec["usage"],
         )
 
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:

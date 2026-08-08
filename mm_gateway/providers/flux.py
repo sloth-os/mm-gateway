@@ -16,6 +16,7 @@ from runapi.flux_2 import Flux2Client
 from mm_gateway.core.base import ImageProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
 
 log = get_logger("provider.flux")
@@ -23,7 +24,7 @@ log = get_logger("provider.flux")
 _T2I = ("flux-2-flex-text-to-image", "flux-2-max-text-to-image", "flux-2-pro-text-to-image")
 
 
-class FluxProvider(ImageProvider):
+class FluxProvider(SyncImageTaskMixin, ImageProvider):
     name = "flux"
     image_models = list(_T2I) + (
         ["flux-2-flex-remix-image", "flux-2-max-remix-image", "flux-2-pro-remix-image"]
@@ -43,15 +44,15 @@ class FluxProvider(ImageProvider):
                 pass
         self._client = Flux2Client(**kwargs)
 
-    async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
-        is_remix = request.model.endswith("remix-image") or bool(request.input_images)
-        params: dict[str, Any] = {"model": request.model, "prompt": request.prompt}
+    async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
+        is_remix = request.model.endswith("remix-image") or bool(request.input_images())
+        params: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
         if request.aspect_ratio:
             params["aspect_ratio"] = request.aspect_ratio
         if request.resolution:
             params["output_resolution"] = request.resolution
-        if is_remix and request.input_images:
-            params["source_image_urls"] = [i.url for i in request.input_images if i.url]
+        if is_remix and request.input_images():
+            params["source_image_urls"] = [i.url for i in request.input_images() if i.url]
         params.update(request.extra)
 
         try:

@@ -194,21 +194,40 @@ def choose_models(client: httpx.Client, cands: list[tuple[str, str, str]]) -> li
 
 
 def generate_image(client: httpx.Client, model: str) -> dict[str, Any]:
-    r = client.post(
-        "/v1/images/generations",
+    """Create a Gemini-shape image task and poll until it has an image block."""
+    create = client.post(
+        "/v1/images",
         headers={**auth_headers(), "content-type": "application/json"},
-        json={"model": model, "prompt": PROMPT, "n": 1, "size": "1024x1024"},
+        params={"wait": "false"},
+        json={"model": model, "input": PROMPT},
         timeout=TIMEOUT,
     )
-    if r.status_code != 200:
-        raise RuntimeError(
-            f"POST /v1/images/generations -> {r.status_code}: {r.text[:500]}"
-        )
-    body = r.json()
-    data = body.get("data") or []
-    if not data or not (data[0].get("url") or data[0].get("b64_json")):
-        raise RuntimeError(f"response had no image data: {str(body)[:500]}")
-    return data[0]
+    if create.status_code != 200:
+        raise RuntimeError(f"POST /v1/images -> {create.status_code}: {create.text[:500]}")
+    task_id = create.json().get("id")
+    if not task_id:
+        raise RuntimeError(f"image create returned no task id: {str(create.json())[:500]}")
+
+    deadline = time.time() + TIMEOUT
+    last: dict[str, Any] = {}
+    while time.time() < deadline:
+        r = client.get(f"/v1/images/{task_id}", headers=auth_headers(), timeout=TIMEOUT)
+        if r.status_code != 200:
+            raise RuntimeError(f"GET /v1/images/{task_id} -> {r.status_code}: {r.text[:500]}")
+        last = r.json()
+        status = last.get("status")
+        if status == "succeeded":
+            blocks = ((last.get("steps") or [{}])[0]).get("content") or []
+            img = next((b for b in blocks if b.get("type") == "image"), {})
+            url = img.get("url")
+            b64 = img.get("data")
+            if not (url or b64):
+                raise RuntimeError(f"image succeeded but no image block: {str(last)[:500]}")
+            return {"url": url, "data": b64}
+        if status in ("failed", "cancelled", "expired"):
+            raise RuntimeError(f"image task {status}: {str(last)[:500]}")
+        time.sleep(2)
+    raise RuntimeError(f"image task did not complete within {TIMEOUT}s (last: {str(last)[:500]})")
 
 
 def generate_video(client: httpx.Client, model: str) -> str:

@@ -5,7 +5,7 @@ The provider talks to the async AIO SDK classes (``AioImageSynthesis`` /
 Responses are read via attribute access, so plain ``SimpleNamespace`` objects
 stand in for the SDK's DictMixin models.
 
-Regression note: ``generate_image`` must not touch ``request.prompt_extend`` —
+Regression note: ``create_image_task`` must not touch ``request.prompt_extend`` —
 ``UnifiedImageRequest`` has no such field, and the old code raised
 ``AttributeError`` on every image call.
 """
@@ -22,7 +22,7 @@ from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.providers import dashscope as dashscope_mod
 from mm_gateway.providers.dashscope import DashScopeProvider
-from mm_gateway.schemas.image import UnifiedImageRequest
+from mm_gateway.schemas.image import UnifiedImageRequest, text_part as image_text_part
 from mm_gateway.schemas.video import UnifiedVideoRequest, image_part, text_part
 
 
@@ -90,13 +90,16 @@ def test_provider_requires_api_key() -> None:
 def test_image_generate_maps_params_and_response(provider: DashScopeProvider) -> None:
     req = UnifiedImageRequest(
         model="wanx2.1-t2i-turbo",
-        prompt="a cat",
+        content=[image_text_part("a cat")],
         size="1024x1024",
         seed=7,
         n=1,
         negative_prompt="blurry",
     )
-    resp = asyncio.run(provider.generate_image(req))
+    task = asyncio.run(provider.create_image_task(req))
+    assert task.status == "pending" and task.task_id == "img-task-1"
+    # The native async task blocks to completion on the first poll.
+    task = asyncio.run(provider.get_image_task("img-task-1"))
     kw = provider._fake_image.call_kwargs  # type: ignore[attr-defined]
     assert kw["model"] == "wanx2.1-t2i-turbo"
     assert kw["prompt"] == "a cat"
@@ -105,17 +108,18 @@ def test_image_generate_maps_params_and_response(provider: DashScopeProvider) ->
     # prompt_extend is provider-specific; it is NOT a field on UnifiedImageRequest
     # and must not be read as a direct attribute — it only passes via `extra`.
     assert "prompt_extend" not in kw
-    assert resp.data[0].url == "https://dashscope.test/img.png"
-    assert resp.provider == "dashscope" and resp.model == "wanx2.1-t2i-turbo"
+    assert task.images[0].url == "https://dashscope.test/img.png"
+    assert task.provider == "dashscope" and task.model == "wanx2.1-t2i-turbo"
 
 
 def test_image_generate_passes_prompt_extend_via_extra(
     provider: DashScopeProvider,
 ) -> None:
     req = UnifiedImageRequest(
-        model="wanx2.1-t2i-turbo", prompt="a cat", extra={"prompt_extend": True}
+        model="wanx2.1-t2i-turbo", content=[image_text_part("a cat")], extra={"prompt_extend": True}
     )
-    asyncio.run(provider.generate_image(req))
+    task = asyncio.run(provider.create_image_task(req))
+    asyncio.run(provider.get_image_task(task.task_id))
     kw = provider._fake_image.call_kwargs  # type: ignore[attr-defined]
     assert kw["prompt_extend"] is True
 
@@ -132,7 +136,7 @@ def test_image_submit_no_task_id_is_clean_error(provider: DashScopeProvider) -> 
 
     provider._fake_image.async_call = empty  # type: ignore[attr-defined]
     with pytest.raises(ProviderRequestError) as ei:
-        asyncio.run(provider.generate_image(UnifiedImageRequest(model="m", prompt="x")))
+        asyncio.run(provider.create_image_task(UnifiedImageRequest(model="m", content=[image_text_part("x")])))
     msg = str(ei.value)
     assert "no task_id" in msg
     assert "Bad Request" in msg  # the upstream code/message are included for debugging
@@ -144,7 +148,7 @@ def test_image_propagates_sdk_error(provider: DashScopeProvider) -> None:
 
     provider._fake_image.async_call = boom  # type: ignore[attr-defined]
     with pytest.raises(ProviderRequestError):
-        asyncio.run(provider.generate_image(UnifiedImageRequest(model="m", prompt="x")))
+        asyncio.run(provider.create_image_task(UnifiedImageRequest(model="m", content=[image_text_part("x")])))
 
 
 def test_video_create_maps_params_and_response(provider: DashScopeProvider) -> None:

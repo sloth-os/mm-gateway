@@ -1,5 +1,5 @@
-"""Image translators: OpenAI shape and OpenRouter unified shape."""
+"""Image translators: Gemini-compatible shape."""
 
-from mm_gateway.translators.image import openai_compat, openrouter_compat
+from mm_gateway.translators.image import gemini_compat
 
-__all__ = ["openai_compat", "openrouter_compat"]
+__all__ = ["gemini_compat"]

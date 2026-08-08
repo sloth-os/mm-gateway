@@ -15,6 +15,7 @@ from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._http import make_client, request_json
+from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
@@ -28,7 +29,7 @@ _STATUS_MAP = {
 }
 
 
-class OpenRouterProvider(ImageProvider, VideoProvider):
+class OpenRouterProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "openrouter"
     image_models = []  # OpenRouter's catalogue is dynamic; resolved at request time.
     video_models = []
@@ -42,7 +43,7 @@ class OpenRouterProvider(ImageProvider, VideoProvider):
             headers={"Authorization": f"Bearer {backend.api_key}"},
         )
 
-    async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
+    async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         body = _image_body(request)
         result = await request_json(self._client, "POST", "/images", provider="openrouter", json=body)
         data = [ImageData(b64_json=d.get("b64_json"), media_type=d.get("media_type"))
@@ -83,7 +84,7 @@ class OpenRouterProvider(ImageProvider, VideoProvider):
 
 
 def _image_body(request: UnifiedImageRequest) -> dict[str, Any]:
-    body: dict[str, Any] = {"model": request.model, "prompt": request.prompt}
+    body: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
     if request.n:
         body["n"] = request.n
     if request.aspect_ratio:
@@ -102,10 +103,10 @@ def _image_body(request: UnifiedImageRequest) -> dict[str, Any]:
         body["output_format"] = request.output_format
     if request.output_compression is not None:
         body["output_compression"] = request.output_compression
-    if request.input_images:
+    if request.input_images():
         body["input_references"] = [
-            {"type": "image_url", "image_url": {"url": i.url or f"data:image/png;base64,{i.b64_json}"}}
-            for i in request.input_images
+            {"type": "image_url", "image_url": {"url": i.url or f"data:image/png;base64,{i.data}"}}
+            for i in request.input_images()
         ]
     body.update(request.extra)
     return body

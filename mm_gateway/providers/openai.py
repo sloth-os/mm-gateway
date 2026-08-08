@@ -11,13 +11,14 @@ from openai import AsyncOpenAI
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 log = get_logger("provider.openai")
 
 
-class OpenAIProvider(ImageProvider, VideoProvider):
+class OpenAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "openai"
     image_models = ["gpt-image-1", "gpt-image-1-mini", "gpt-image-2", "dall-e-2", "dall-e-3"]
     video_models = ["sora-2", "sora-2-pro"]
@@ -31,8 +32,8 @@ class OpenAIProvider(ImageProvider, VideoProvider):
             base_url=backend.base_url or None,
         )
 
-    async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
-        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt}
+    async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
+        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
         if request.n and request.n > 1:
             kwargs["n"] = request.n
         if request.size:

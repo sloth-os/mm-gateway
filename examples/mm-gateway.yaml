@@ -20,11 +20,11 @@ defaults:
   enable_metrics: true
 
 # Expose the gateway as an MCP Streamable-HTTP server. Disabled by default — set
-# enabled: true to mount the four gateway tools (list_models, generate_image,
-# create_video, get_video) at `path` (default /mcp). The `mcp` package is a core
-# dependency of the gateway; if it fails to import, the gateway starts and logs
-# a warning instead of mounting the endpoint. The same bearer-token keys govern
-# the MCP surface as the HTTP routes.
+# enabled: true to mount the seven gateway tools (list_models, create_image,
+# get_image, create_video, get_video, create_music, get_music) at `path`
+# (default /mcp). The `mcp` package is a core dependency of the gateway; if it
+# fails to import, the gateway starts and logs a warning instead of mounting the
+# endpoint. The same bearer-token keys govern the MCP surface as the HTTP routes.
 mcp:
   enabled: true
   path: /mcp

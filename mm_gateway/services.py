@@ -19,7 +19,7 @@ from mm_gateway.core.exceptions import GatewayError, TaskFailedError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.observability.metrics import timed
 from mm_gateway.registry import Registry
-from mm_gateway.schemas.image import UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.image import UnifiedImageRequest, UnifiedImageTask
 from mm_gateway.schemas.music import UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
@@ -27,17 +27,31 @@ log = get_logger("service")
 
 
 class ImageService:
-    def __init__(self, registry: Registry):
-        self.registry = registry
+    """Orchestrates an image request end-to-end, mirroring ``VideoService``.
 
-    async def generate(
+    Image generation is task-based on every provider: the synchronous backends
+    (OpenAI, Imagen, Stability, xAI, Volcengine, OpenRouter, FLUX) wrap their
+    blocking call as a synthetic in-memory task (the first poll runs it), and
+    DashScope Wanx is natively async. The flow is identical to video/music:
+    resolve → create → optionally block → return a handle.
+    """
+
+    def __init__(self, registry: Registry, *, max_sync_wait: float, poll_interval: float,
+                 sync_default: bool):
+        self.registry = registry
+        self.max_sync_wait = max_sync_wait
+        self.poll_interval = poll_interval
+        self.sync_default = sync_default
+
+    async def create(
         self,
         request: UnifiedImageRequest,
         *,
+        wait: bool | None = None,
         key: KeyConfig | None = None,
         tag: str | None = None,
         backend_name: str | None = None,
-    ) -> UnifiedImageResponse:
+    ) -> UnifiedImageTask:
         provider_obj, real_model, backend = self.registry.resolve(
             request.model, key, modality="image", tag=tag, backend_name=backend_name
         )
@@ -49,16 +63,50 @@ class ImageService:
         routed = request.model_copy(update={"model": real_model, "provider": backend})
         with timed(backend, "image"):
             try:
-                resp = await provider_obj.generate_image(routed)
+                task = await provider_obj.create_image_task(routed)
             except GatewayError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                raise GatewayError(f"image generation failed: {exc}", provider=backend,
+                raise GatewayError(f"image create failed: {exc}", provider=backend,
                                    code="provider_error", status_code=502) from exc
-        if not resp.data:
-            raise GatewayError("provider returned no images", provider=backend,
-                               code="provider_error", status_code=502)
-        return resp
+        # Stamp the owning backend so the poll route can route correctly.
+        task.provider = backend
+        if (wait if wait is not None else self.sync_default):
+            task = await self._await_or_timeout(provider_obj, task)
+        return task
+
+    async def get(self, task_id: str, backend_name: str | None = None) -> UnifiedImageTask:
+        provider_obj = self._find_provider_for(task_id, backend_name)
+        with timed(provider_obj.name, "image"):
+            try:
+                task = await provider_obj.get_image_task(task_id)
+            except GatewayError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise GatewayError(f"image poll failed: {exc}", provider=provider_obj.name,
+                                   code="provider_error", status_code=502) from exc
+        return task
+
+    async def _await_or_timeout(self, provider: ImageProvider, task: UnifiedImageTask) -> UnifiedImageTask:
+        deadline = time.monotonic() + self.max_sync_wait
+        while time.monotonic() < deadline:
+            task = await provider.get_image_task(task.task_id)
+            if task.status in ("succeeded", "failed", "cancelled", "expired"):
+                if task.status in ("failed", "cancelled", "expired") and not task.error:
+                    task.error = task.status
+                return task
+            await asyncio.sleep(self.poll_interval)
+        # Timed out waiting — return the latest non-terminal task so the client can keep polling.
+        log.info("image_sync_wait_timeout", task_id=task.task_id, provider=provider.name)
+        return task
+
+    def _find_provider_for(self, task_id: str, backend_name: str | None) -> ImageProvider:
+        if backend_name:
+            return self.registry.image_provider(backend_name)
+        providers = [p for p in self.registry.providers.values() if isinstance(p, ImageProvider)]
+        if len(providers) == 1:
+            return providers[0]
+        return self.registry.image_provider(self.registry.settings.default_image_provider)
 
 
 class VideoService:

@@ -22,6 +22,7 @@ from volcenginesdkarkruntime import AsyncArk
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask, VideoUsage
 
@@ -40,7 +41,7 @@ _STATUS_MAP = {
 }
 
 
-class VolcengineProvider(ImageProvider, VideoProvider):
+class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "volcengine"
     image_models = ["doubao-seedream-3-0-t2i-250415", "doubao-seedream-4-0-t2i-250828"]
     video_models = [
@@ -59,8 +60,8 @@ class VolcengineProvider(ImageProvider, VideoProvider):
         base = backend.base_url or _BASE
         self._ark = AsyncArk(api_key=backend.api_key, base_url=base)
 
-    async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
-        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt}
+    async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
+        kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
         if request.size:
             kwargs["size"] = request.size
         if request.response_format:
@@ -71,8 +72,8 @@ class VolcengineProvider(ImageProvider, VideoProvider):
             kwargs["guidance_scale"] = request.guidance_scale
         if request.watermark is not None:
             kwargs["watermark"] = request.watermark
-        if request.input_images:
-            kwargs["image"] = [i.url for i in request.input_images if i.url]
+        if request.input_images():
+            kwargs["image"] = [i.url for i in request.input_images() if i.url]
         kwargs.update(request.extra)
 
         try:

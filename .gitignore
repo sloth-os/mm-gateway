@@ -217,3 +217,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 actionlint
+
+# Claude Code session-local state (workflow scripts auto-persisted per session,
+# agent transcripts, etc. — not shared repo config).
+.claude/

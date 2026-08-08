@@ -1,9 +1,9 @@
-"""Tests for the video translators (Seedance <-> unified <-> OpenRouter)."""
+"""Tests for the Seedance-compatible video translator."""
 
 from __future__ import annotations
 
 from mm_gateway.schemas.video import UnifiedVideoTask, VideoUsage
-from mm_gateway.translators.video import openrouter_compat, seedance_compat
+from mm_gateway.translators.video import seedance_compat
 
 
 def _task(status: str = "succeeded") -> UnifiedVideoTask:
@@ -16,7 +16,8 @@ def _task(status: str = "succeeded") -> UnifiedVideoTask:
     return t
 
 
-# -- Seedance compat --------------------------------------------------------- #
+# -- from_seedance --------------------------------------------------------- #
+
 
 def test_seedance_request_text_and_first_frame():
     unified = seedance_compat.from_seedance({
@@ -48,6 +49,9 @@ def test_seedance_aspect_ratio_maps_to_ratio():
     assert unified.ratio == "9:16"
 
 
+# -- to_seedance_create / to_seedance_task --------------------------------- #
+
+
 def test_seedance_create_response_is_just_id():
     out = seedance_compat.to_seedance_create(_task("pending"))
     assert out == {"id": "t-1"}
@@ -58,37 +62,3 @@ def test_seedance_task_response_has_content():
     assert out["id"] == "t-1"
     assert out["status"] == "succeeded"
     assert out["content"]["video_url"] == "https://x.test/v.mp4"
-
-
-# -- OpenRouter compat ------------------------------------------------------- #
-
-def test_openrouter_request_known_fields():
-    unified = openrouter_compat.from_openrouter({"model": "m", "prompt": "x", "duration": 4, "aspect_ratio": "1:1"})
-    assert unified.duration == 4
-    assert unified.ratio == "1:1"
-
-
-def test_openrouter_request_frame_images():
-    unified = openrouter_compat.from_openrouter({
-        "model": "m", "prompt": "x",
-        "frame_images": [
-            {"image_url": {"url": "https://x.test/a.png"}, "frame_type": "first_frame"},
-            {"image_url": {"url": "https://x.test/b.png"}, "frame_type": "last_frame"},
-        ],
-    })
-    assert unified.first_image() == "https://x.test/a.png"
-    assert unified.last_image() == "https://x.test/b.png"
-
-
-def test_openrouter_response_polling_url_and_unsigned():
-    out = openrouter_compat.to_openrouter(_task("succeeded"), base_url="https://gw.test")
-    assert out["id"] == "t-1"
-    assert out["status"] == "succeeded"
-    assert out["polling_url"] == "https://gw.test/api/v1/videos/t-1"
-    assert out["unsigned_urls"] == ["https://x.test/v.mp4"]
-    assert out["usage"]["cost"] == 0.02
-
-
-def test_openrouter_response_pending_has_no_unsigned_urls():
-    out = openrouter_compat.to_openrouter(_task("pending"))
-    assert "unsigned_urls" not in out

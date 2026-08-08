@@ -70,18 +70,18 @@ so a client never has to learn provider-specific shapes.
 
 ## Front-end shapes exposed
 
-The gateway serves **two** request/response shapes for each modality, mapped
+The gateway serves **one** request/response shape per modality, all routed
 through the same unified internal model so a request in one shape can be
 fulfilled by any provider:
 
-| Modality | Shape A | Shape B |
-|---|---|---|
-| Image | **OpenAI-compatible** `POST /v1/images/generations` (`{model,prompt,n,size,response_format,...}` → `{created,data:[{url|b64_json,revised_prompt}]}`) | **OpenRouter-compatible** `POST /api/v1/images` (`{model,prompt,aspect_ratio,n,output_format,quality,resolution,size,seed,background,input_references,provider}` → `{created,data:[{b64_json,media_type}],usage}`) |
-| Video | **Seedance-compatible** `POST /v1/videos` (`{model,content:[{type:text|image_url}],duration,resolution,ratio,camera_fixed,seed,watermark}` → `{id,status,...}`) + `GET /v1/videos/{id}` | **OpenRouter-compatible** `POST /api/v1/videos` (`{model,prompt,aspect_ratio,resolution,duration,frame_images,seed,callback_url}` → `{id,status,unsigned_urls}`) + `GET /api/v1/videos/{id}` |
-| Music | **Gemini Lyria 3-compatible** `POST /v1/music` (`{model,input:string|parts[],negative_prompt,duration,bpm,key_scale,key,scale,time_signature,vocal_language,audio_format,audio_quality,is_instrumental,generate_audio,seed,guidance_scale,n,callback_url,response_format}` → `{id}`) + `GET /v1/music/{id}` (`{id,model,status,steps:[{type:"model_output",content:[{type:"audio",data,url,mime_type}|{type:"text",text}]}],output_audio|output_audio_url,output_text,error,usage}`) | _(single front-end shape)_ |
+| Modality | Front-end shape |
+|---|---|
+| Image | **Gemini-compatible** `POST /v1/images` (`{model,input:string|parts[]}` → `{id}`) + `GET /v1/images/{id}` (`{id,model,status,steps:[{type:"model_output",content:[{type:"image",data,url,mime_type}|{type:"text",text}]}],output_image|output_image_url,error,usage}`) |
+| Video | **Seedance-compatible** `POST /v1/videos` (`{model,content:[{type:text|image_url}],duration,resolution,ratio,camera_fixed,seed,watermark}` → `{id,status,...}`) + `GET /v1/videos/{id}` |
+| Music | **Gemini Lyria 3-compatible** `POST /v1/music` (`{model,input:string|parts[],negative_prompt,duration,bpm,key_scale,key,scale,time_signature,vocal_language,audio_format,audio_quality,is_instrumental,generate_audio,seed,guidance_scale,n,callback_url,response_format}` → `{id}`) + `GET /v1/music/{id}` (`{id,model,status,steps:[{type:"model_output",content:[{type:"audio",data,url,mime_type}|{type:"text",text}]}],output_audio|output_audio_url,output_text,error,usage}`) |
 
 Translators are pure functions (no I/O) living under `translators/`, one file
-per (modality × shape) direction. Adding a third front-end shape (e.g. a
+per (modality × shape) direction. Adding a second front-end shape (e.g. a
 Replicate-style surface) is a new translator pair, not a provider change.
 
 ## Best-effort translation policy
@@ -259,8 +259,8 @@ forwards a curated set of provider-specific extras verbatim:
   `extra["music_model"]` is appended to a provider's `music_models` at build
   time. `resolve()` gates music routing on `supports_music` and
   `key.default_music_backend` / `default_music_tag`.
-- **MCP** (`server/mcp.py`): part of the gateway's **six-tool** MCP surface —
+- **MCP** (`server/mcp.py`): part of the gateway's **seven-tool** MCP surface —
   `create_music(model, input, wait=True, tag, backend)` and `get_music(id)`
-  (the other four — `list_models`, `generate_image`, `create_video`,
+  (the other five — `list_models`, `create_image`, `get_image`, `create_video`,
   `get_video` — mirror image/video/models) — using the same bearer-token auth
   and cross-tenant guard as the HTTP routes.

@@ -89,6 +89,10 @@ class Settings:
     video_sync_default: bool = field(default_factory=lambda: _env("VIDEO_SYNC_DEFAULT", "true").lower() == "true")
     # Same semantics for music endpoints.
     music_sync_default: bool = field(default_factory=lambda: _env("MUSIC_SYNC_DEFAULT", "true").lower() == "true")
+    # Same semantics for image endpoints. Most image backends are synchronous
+    # (the blocking call runs on the first poll of the synthetic task), so this
+    # only controls whether create blocks for that first poll to finish.
+    image_sync_default: bool = field(default_factory=lambda: _env("IMAGE_SYNC_DEFAULT", "true").lower() == "true")
     max_sync_wait: float = field(default_factory=lambda: float(_env("MAX_SYNC_WAIT", "300") or "300"))
     poll_interval: float = field(default_factory=lambda: float(_env("POLL_INTERVAL", "2.0") or "2.0"))
     enable_metrics: bool = field(default_factory=lambda: _env("ENABLE_METRICS", "true").lower() == "true")
@@ -206,6 +210,7 @@ class Settings:
         server = _section("server")
         video = _section("video")
         music = _section("music")
+        image = _section("image")
         defaults = _section("defaults")
         mcp = _section("mcp")
         return cls(
@@ -216,6 +221,7 @@ class Settings:
             request_timeout=float(server.get("request_timeout", _env("REQUEST_TIMEOUT", "120") or "120")),
             video_sync_default=_bool(video.get("sync_default", _env("VIDEO_SYNC_DEFAULT", "true"))),
             music_sync_default=_bool(music.get("sync_default", _env("MUSIC_SYNC_DEFAULT", "true"))),
+            image_sync_default=_bool(image.get("sync_default", _env("IMAGE_SYNC_DEFAULT", "true"))),
             max_sync_wait=float(video.get("max_sync_wait", _env("MAX_SYNC_WAIT", "300") or "300")),
             poll_interval=float(video.get("poll_interval", _env("POLL_INTERVAL", "2.0") or "2.0")),
             enable_metrics=_bool(defaults.get("enable_metrics", _env("ENABLE_METRICS", "true"))),

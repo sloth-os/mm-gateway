@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
-from mm_gateway.schemas.image import UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.image import UnifiedImageRequest, UnifiedImageTask
 from mm_gateway.schemas.music import UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
@@ -51,8 +51,18 @@ class Provider(ABC):
 
 class ImageProvider(Provider):
     @abstractmethod
-    async def generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
-        """Generate one or more images. Must populate ``provider`` on the response."""
+    async def create_image_task(self, request: UnifiedImageRequest) -> UnifiedImageTask:
+        """Submit an image generation task; return a handle the gateway can poll.
+
+        For synchronous providers (OpenAI, Imagen, Stability, xAI, Volcengine,
+        FLUX) the adapter mints a synthetic in-memory task id and runs the
+        blocking call on the first poll, so the create/poll surface is uniform.
+        """
+        ...
+
+    @abstractmethod
+    async def get_image_task(self, task_id: str) -> UnifiedImageTask:
+        """Poll a previously submitted task by its provider-local id."""
         ...
 
 

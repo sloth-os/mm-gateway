@@ -1,81 +1,111 @@
-"""Tests for the image translators (OpenAI <-> unified <-> OpenRouter)."""
+"""Tests for the Gemini-compatible image translator."""
 
 from __future__ import annotations
 
-import time
-
-from mm_gateway.schemas.image import ImageData, UnifiedImageResponse
-from mm_gateway.translators.image import openai_compat, openrouter_compat
+from mm_gateway.schemas.image import ImageData, UnifiedImageTask
+from mm_gateway.translators.image import gemini_compat
 
 
-def _resp(url: str = "https://x.test/a.png") -> UnifiedImageResponse:
-    return UnifiedImageResponse(
-        created=int(time.time()), model="gpt-image-1", provider="openai",
-        data=[ImageData(url=url, revised_prompt="a cat")],
+def _task(status: str = "succeeded", *, url: str | None = None,
+          b64: str | None = None) -> UnifiedImageTask:
+    images = []
+    if url or b64:
+        images.append(ImageData(url=url, b64_json=b64, revised_prompt="a cat"))
+    return UnifiedImageTask(
+        task_id="img-1", provider="openai", model="gpt-image-1", status=status,
+        images=images, created_at=1, completed_at=2,
     )
 
 
-# -- OpenAI compat ----------------------------------------------------------- #
+# -- from_gemini ----------------------------------------------------------- #
 
-def test_openai_request_basic_fields():
-    unified = openai_compat.from_openai({"model": "gpt-image-1", "prompt": "a cat", "n": 2, "size": "1024x1024"})
+
+def test_request_string_prompt_becomes_content_text():
+    unified = gemini_compat.from_gemini(
+        {"model": "gpt-image-1", "input": "a cat", "n": 2, "size": "1024x1024"}
+    )
     assert unified.model == "gpt-image-1"
-    assert unified.prompt == "a cat"
+    assert unified.prompt() == "a cat"
     assert unified.n == 2
     assert unified.size == "1024x1024"
 
 
-def test_openai_request_unknown_fields_go_to_extra():
-    unified = openai_compat.from_openai({"model": "gpt-image-1", "prompt": "x", "magic_knob": 7})
+def test_request_parts_array_text_and_image_url():
+    unified = gemini_compat.from_gemini({
+        "model": "gpt-image-1",
+        "input": [
+            {"type": "text", "text": "edit"},
+            {"type": "image", "url": "https://x.test/in.png"},
+        ],
+    })
+    assert unified.prompt() == "edit"
+    imgs = unified.input_images()
+    assert imgs and imgs[0].url == "https://x.test/in.png"
+
+
+def test_request_inline_image_data_part():
+    unified = gemini_compat.from_gemini({
+        "model": "gpt-image-1",
+        "input": [
+            {"type": "image", "mime_type": "image/png", "data": "AAAA"},
+        ],
+    })
+    imgs = unified.input_images()
+    assert imgs and imgs[0].data == "AAAA" and imgs[0].mime_type == "image/png"
+
+
+def test_request_unknown_fields_go_to_extra():
+    unified = gemini_compat.from_gemini(
+        {"model": "gpt-image-1", "input": "x", "magic_knob": 7}
+    )
     assert unified.extra == {"magic_knob": 7}
 
 
-def test_openai_request_image_string_becomes_input_images():
-    unified = openai_compat.from_openai({"model": "gpt-image-1", "prompt": "edit", "image": "https://x.test/in.png"})
-    assert unified.input_images and unified.input_images[0].url == "https://x.test/in.png"
-
-
-def test_openai_response_shape():
-    out = openai_compat.to_openai(_resp())
-    assert out["data"][0]["url"] == "https://x.test/a.png"
-    assert out["data"][0]["revised_prompt"] == "a cat"
-    assert "created" in out
-
-
-# -- OpenRouter compat ------------------------------------------------------- #
-
-def test_openrouter_request_known_fields():
-    unified = openrouter_compat.from_openrouter({"model": "flux-2", "prompt": "a cat", "aspect_ratio": "16:9"})
-    assert unified.aspect_ratio == "16:9"
-
-
-def test_openrouter_request_provider_field_is_dropped():
-    unified = openrouter_compat.from_openrouter({"model": "flux-2", "prompt": "x", "provider": {"only": "flux"}})
-    assert unified.provider is None  # routing handled by the route layer
-
-
-def test_openrouter_request_input_references_data_uri():
-    unified = openrouter_compat.from_openrouter({
-        "model": "flux-2", "prompt": "x",
-        "input_references": [{"image_url": {"url": "data:image/png;base64,AAAA"}}],
-    })
-    assert unified.input_images and unified.input_images[0].b64_json == "AAAA"
-
-
-def test_openrouter_response_prefers_b64_then_url():
-    out = openrouter_compat.to_openrouter(_resp(url="https://x.test/a.png"))
-    assert out["data"][0]["b64_json"] == "https://x.test/a.png"
-    assert out["data"][0]["media_type"] == "image/png"
-
-
-# -- Round trip -------------------------------------------------------------- #
-
-def test_openai_to_openrouter_via_unified():
-    """A request that arrives as OpenAI and is emitted as OpenRouter keeps the image."""
-    unified = openai_compat.from_openai({"model": "gpt-image-1", "prompt": "a cat"})
-    resp = UnifiedImageResponse(
-        created=1, model=unified.model, provider="openai",
-        data=[ImageData(b64_json="AAAA")],
+def test_request_response_format_string_mapped():
+    unified = gemini_compat.from_gemini(
+        {"model": "gpt-image-1", "input": "x", "response_format": "b64_json"}
     )
-    out = openrouter_compat.to_openrouter(resp)
-    assert out["data"][0]["b64_json"] == "AAAA"
+    assert unified.response_format == "b64_json"
+
+
+def test_request_missing_model_raises():
+    import pytest
+    from mm_gateway.core.exceptions import ValidationError
+    with pytest.raises(ValidationError):
+        gemini_compat.from_gemini({"input": "a cat"})
+
+
+# -- to_gemini_create / to_gemini_task ------------------------------------ #
+
+
+def test_create_returns_only_id():
+    out = gemini_compat.to_gemini_create(_task(status="pending"))
+    assert out == {"id": "img-1"}
+
+
+def test_task_url_image_block():
+    out = gemini_compat.to_gemini_task(_task(url="https://x.test/a.png"))
+    assert out["id"] == "img-1" and out["status"] == "succeeded"
+    block = out["steps"][0]["content"][0]
+    assert block == {"type": "image", "url": "https://x.test/a.png"}
+    assert out["output_image_url"] == "https://x.test/a.png"
+    assert "output_image" not in out  # falls back to url when no b64
+
+
+def test_task_b64_image_block_and_text():
+    out = gemini_compat.to_gemini_task(_task(b64="AAAA"))
+    blocks = out["steps"][0]["content"]
+    assert {"type": "image", "data": "AAAA"} in blocks
+    assert {"type": "text", "text": "a cat"} in blocks
+    assert out["output_image"] == "AAAA"
+    assert "output_image_url" not in out
+
+
+def test_task_error_envelope():
+    task = UnifiedImageTask(
+        task_id="img-1", provider="openai", model="m", status="failed",
+        error="boom",
+    )
+    out = gemini_compat.to_gemini_task(task)
+    assert out["error"] == {"code": "failed", "message": "boom"}
+    assert "steps" not in out  # no content blocks on failure

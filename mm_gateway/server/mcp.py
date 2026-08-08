@@ -7,10 +7,14 @@ When ``Settings.mcp_enabled`` is true, ``mount_mcp(app, settings)`` mounts a
 buffering its body into a single ``Response``. The session manager's lifespan
 is tied to the app lifespan so the MCP server starts/stops with the gateway.
 
-The MCP server registers six tools that mirror the HTTP API:
+The MCP server registers seven tools that mirror the HTTP API:
 
 * ``list_models``        — list usable models for the calling key (image+video+music).
-* ``generate_image``     — generate an image (OpenAI unified request shape).
+* ``create_image``       — submit an image task (Gemini shape: ``model`` + ``input``
+                           string/parts), returning a task id; honours ``wait``
+                           for sync-style.
+* ``get_image``          — poll an image task by id; returns the Gemini
+                           steps/content envelope (image base64/URL blocks).
 * ``create_video``       — submit a video task (Seedance content-array shape),
                            returning a task id; honours ``wait`` for sync-style.
 * ``get_video``          — poll a video task by id.
@@ -41,7 +45,7 @@ from mm_gateway.config import Settings
 from mm_gateway.core.exceptions import GatewayError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.server.auth import resolve_key
-from mm_gateway.translators.image import openai_compat
+from mm_gateway.translators.image import gemini_compat
 from mm_gateway.translators.music import lyria_compat
 from mm_gateway.translators.video import seedance_compat
 
@@ -155,27 +159,51 @@ def _build_mcp_server(app: FastAPI) -> "MCPServer":
 
     @mcp.tool()
     @_tool
-    async def generate_image(
+    async def create_image(
         ctx: Context,
         model: str,
-        prompt: str,
-        size: str | None = None,
-        n: int = 1,
-        response_format: str | None = None,
+        input: str | list[dict[str, Any]],
+        wait: bool = True,
         tag: str | None = None,
         backend: str | None = None,
     ) -> str:
-        """Generate one or more images. Returns the OpenAI-shape response as JSON."""
+        """Submit an image generation task (Gemini shape).
+
+        ``input`` is either a string prompt or a parts array
+        (``[{"type":"text","text":...}, {"type":"image","url":...}, ...]``).
+        Returns ``{"id": "<task_id>"}``; when ``wait`` is true the call blocks
+        until the task reaches a terminal state (up to the sync wait limit).
+        """
+        import json
+        from mm_gateway.tasks.store import TaskRecord
+        key = _key(ctx)
+        unified = gemini_compat.from_gemini({"model": model, "input": input})
+        task = await image_service.create(
+            unified, key=key, tag=tag, backend_name=backend, wait=wait,
+        )
+        await task_store.put(TaskRecord(
+            task_id=task.task_id, provider=task.provider, model=task.model,
+            modality="image",
+        ))
+        return json.dumps(gemini_compat.to_gemini_create(task))
+
+    @mcp.tool()
+    @_tool
+    async def get_image(ctx: Context, id: str) -> str:
+        """Poll an image task by id; returns the Gemini steps/content envelope."""
         import json
         key = _key(ctx)
-        body: dict[str, Any] = {"model": model, "prompt": prompt, "n": n}
-        if size:
-            body["size"] = size
-        if response_format:
-            body["response_format"] = response_format
-        unified = openai_compat.from_openai(body)
-        resp = await image_service.generate(unified, key=key, tag=tag, backend_name=backend)
-        return json.dumps(openai_compat.to_openai(resp))
+        record = await task_store.get(id)
+        # Same cross-tenant guard as get_video/get_music: the calling key must be
+        # authorised for the backend that owns the task.
+        owner = record.provider if record else None
+        if owner and owner not in registry.usable_backends(key):
+            from mm_gateway.core.exceptions import ForbiddenError
+            raise ForbiddenError(
+                f"API key '{key.id}' is not allowed to use backend '{owner}'."
+            )
+        task = await image_service.get(id, backend_name=owner)
+        return json.dumps(gemini_compat.to_gemini_task(task))
 
     @mcp.tool()
     @_tool

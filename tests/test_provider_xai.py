@@ -17,7 +17,7 @@ import pytest
 from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.providers.xai import XAIProvider
-from mm_gateway.schemas.image import UnifiedImageRequest
+from mm_gateway.schemas.image import UnifiedImageRequest, text_part as image_text_part
 from mm_gateway.schemas.video import UnifiedVideoRequest, image_part, text_part
 
 
@@ -116,14 +116,17 @@ def test_image_generate_maps_params_and_response() -> None:
 
     req = UnifiedImageRequest(
         model="grok-imagine-image-lite",
-        prompt="a cat",
+        content=[image_text_part("a cat")],
         n=2,
         response_format="url",
         aspect_ratio="1:1",
         resolution="1k",
         user="u1",
     )
-    resp = asyncio.run(p.generate_image(req))
+    task = asyncio.run(p.create_image_task(req))
+    assert task.status == "pending"
+    task = asyncio.run(p.get_image_task(task.task_id))
+    assert task.status == "succeeded"
 
     assert captured["path"] == "/v1/images/generations"
     assert captured["method"] == "POST"
@@ -134,18 +137,20 @@ def test_image_generate_maps_params_and_response() -> None:
     assert b["n"] == 2 and b["response_format"] == "url"
     assert b["aspect_ratio"] == "1:1" and b["resolution"] == "1k" and b["user"] == "u1"
 
-    assert len(resp.data) == 1
-    assert resp.data[0].url == "https://x.test/img.png"
-    assert resp.data[0].media_type == "image/png"
-    assert resp.provider == "xai" and resp.model == "grok-imagine-image-lite"
-    assert resp.usage is not None
-    assert resp.usage.cost == pytest.approx(0.005)
+    assert len(task.images) == 1
+    assert task.images[0].url == "https://x.test/img.png"
+    assert task.images[0].media_type == "image/png"
+    assert task.provider == "xai" and task.model == "grok-imagine-image-lite"
+    assert task.usage is not None
+    assert task.usage.cost == pytest.approx(0.005)
 
 
 def test_image_generate_without_usage() -> None:
     # Spec: GeneratedImageResponse.usage is nullable (oneOf null|MediaUsage),
     # only `data` is required. A 200 that omits usage must not crash.
     p = XAIProvider(_backend("https://ai.xmiaom.com"))
+
+    captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured["body"] = _body(request)
@@ -156,16 +161,16 @@ def test_image_generate_without_usage() -> None:
             },
         )
 
-    captured: dict[str, Any] = {}
     _mount(p, handler)
 
-    resp = asyncio.run(
-        p.generate_image(
-            UnifiedImageRequest(model="grok-imagine-image-lite", prompt="a cat")
+    task = asyncio.run(
+        p.create_image_task(
+            UnifiedImageRequest(model="grok-imagine-image-lite", content=[image_text_part("a cat")])
         )
     )
-    assert resp.usage is None
-    assert resp.data[0].url == "https://x.test/img.png"
+    task = asyncio.run(p.get_image_task(task.task_id))
+    assert task.usage is None
+    assert task.images[0].url == "https://x.test/img.png"
 
 
 def test_image_generate_passes_extra_fields() -> None:
@@ -180,13 +185,14 @@ def test_image_generate_passes_extra_fields() -> None:
         return httpx.Response(200, json={"data": [{"url": "https://x.test/i.png"}]})
 
     _mount(p, handler)
-    asyncio.run(
-        p.generate_image(
+    task = asyncio.run(
+        p.create_image_task(
             UnifiedImageRequest(
-                model="m", prompt="x", extra={"storage_options": {"bucket": "mm"}}
+                model="m", content=[image_text_part("x")], extra={"storage_options": {"bucket": "mm"}}
             )
         )
     )
+    asyncio.run(p.get_image_task(task.task_id))
     assert captured["body"]["storage_options"] == {"bucket": "mm"}
 
 
@@ -203,11 +209,12 @@ def test_image_generate_clamps_n_to_spec_max() -> None:
         return httpx.Response(200, json={"data": [{"url": "https://x.test/i.png"}]})
 
     _mount(p, handler)
-    asyncio.run(
-        p.generate_image(
-            UnifiedImageRequest(model="grok-imagine-image", prompt="x", n=16)
+    task = asyncio.run(
+        p.create_image_task(
+            UnifiedImageRequest(model="grok-imagine-image", content=[image_text_part("x")], n=16)
         )
     )
+    asyncio.run(p.get_image_task(task.task_id))
     assert captured["body"]["n"] == 10
 
 
@@ -222,7 +229,8 @@ def test_image_generate_auth_header() -> None:
         return httpx.Response(200, json={"data": [{"url": "https://x.test/i.png"}]})
 
     _mount(p, handler)
-    asyncio.run(p.generate_image(UnifiedImageRequest(model="m", prompt="x")))
+    task = asyncio.run(p.create_image_task(UnifiedImageRequest(model="m", content=[image_text_part("x")])))
+    asyncio.run(p.get_image_task(task.task_id))
     assert auth["header"] == "Bearer xai-key"
 
 
@@ -233,8 +241,9 @@ def test_image_generate_propagates_upstream_error() -> None:
         return httpx.Response(401, text="unauthorized")
 
     _mount(p, handler)
+    task = asyncio.run(p.create_image_task(UnifiedImageRequest(model="m", content=[image_text_part("x")])))
     with pytest.raises(ProviderRequestError):
-        asyncio.run(p.generate_image(UnifiedImageRequest(model="m", prompt="x")))
+        asyncio.run(p.get_image_task(task.task_id))
 
 
 # -- video create -------------------------------------------------------- #

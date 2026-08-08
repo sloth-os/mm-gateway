@@ -1,5 +1,5 @@
-"""Video translators: Seedance (Volcengine Ark) shape and OpenRouter unified shape."""
+"""Video translators: Seedance (Volcengine Ark) shape."""
 
-from mm_gateway.translators.video import openrouter_compat, seedance_compat
+from mm_gateway.translators.video import seedance_compat
 
-__all__ = ["openrouter_compat", "seedance_compat"]
+__all__ = ["seedance_compat"]
