@@ -76,9 +76,11 @@ def test_single_base_url_when_not_split(monkeypatch: pytest.MonkeyPatch) -> None
     assert [_http_options_base(c) for c in captured] == ["https://google.test", "https://google.test"]
 
 
-def test_default_base_url_omits_http_options(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no base pinned, the SDK default host applies — i.e. no
-    ``http_options`` override is passed."""
+def test_default_base_url_omits_host_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no base pinned, the SDK default host applies — i.e. the injected
+    ``http_options`` carries a ``None`` base_url (no host override). The
+    ``http_options`` is still passed so the backend-logging httpx client is
+    injected regardless of whether a host is pinned."""
     captured: list[dict[str, Any]] = []
 
     class CapturingClient:
@@ -87,7 +89,8 @@ def test_default_base_url_omits_http_options(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(google_mod, "genai", type("G", (), {"Client": CapturingClient}))
     GoogleProvider(_backend())
-    assert all("http_options" not in c for c in captured)
+    assert all("http_options" in c for c in captured)
+    assert all(_http_options_base(c) is None for c in captured)
 
 
 def test_music_base_prefers_music_base_url() -> None:

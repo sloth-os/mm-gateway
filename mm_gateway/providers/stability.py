@@ -19,6 +19,7 @@ import httpx
 
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
@@ -58,8 +59,10 @@ class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         image_base = backend.base_url or _BASE
         video_base = backend.extra.get("video_base_url") or image_base
         headers = {"Authorization": f"Bearer {self._api_key}"}
-        self._client = httpx.AsyncClient(base_url=image_base, timeout=300, headers=headers)
-        self._client_video = httpx.AsyncClient(base_url=video_base, timeout=300, headers=headers)
+        self._client = httpx.AsyncClient(base_url=image_base, timeout=300, headers=headers,
+                                         event_hooks=backend_event_hooks())
+        self._client_video = httpx.AsyncClient(base_url=video_base, timeout=300, headers=headers,
+                                               event_hooks=backend_event_hooks())
 
     def _image_path(self, model: str) -> str:
         if model in _IMAGE_PATHS:

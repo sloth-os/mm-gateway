@@ -17,16 +17,22 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import httpx
 from volcenginesdkarkruntime import AsyncArk
 
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
+from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask, VideoUsage
 
 log = get_logger("provider.volcengine")
+
+
+def _logged_httpx() -> httpx.AsyncClient:
+    return httpx.AsyncClient(event_hooks=backend_event_hooks())
 
 _BASE = "https://ark.cn-beijing.volces.com/api/v3"
 
@@ -66,8 +72,8 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         # operator pins them apart.
         image_base = backend.base_url or _BASE
         video_base = backend.extra.get("video_base_url") or image_base
-        self._ark = AsyncArk(api_key=backend.api_key, base_url=image_base)
-        self._ark_video = AsyncArk(api_key=backend.api_key, base_url=video_base)
+        self._ark = AsyncArk(api_key=backend.api_key, base_url=image_base, http_client=_logged_httpx())
+        self._ark_video = AsyncArk(api_key=backend.api_key, base_url=video_base, http_client=_logged_httpx())
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}

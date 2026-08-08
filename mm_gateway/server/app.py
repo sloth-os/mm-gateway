@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 from mm_gateway.config import Settings
 from mm_gateway.core.exceptions import GatewayError
+from mm_gateway.observability.httplog import frontend_request_log, frontend_response_log
 from mm_gateway.observability.logging import bind_context, clear_context, configure_logging, get_logger, new_request_id
 from mm_gateway.observability.metrics import render_prometheus
 from mm_gateway.registry import Registry
@@ -67,10 +68,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def request_context(request: Request, call_next):
         request_id = request.headers.get("x-request-id") or new_request_id()
         bind_context(request_id=request_id)
+        # Inbound request log: curl format (masked sensitive headers) + body.
+        # Reading ``request.body()`` caches it in Starlette's
+        # ``BaseHTTPMiddleware`` request wrapper, which re-serves the cached
+        # body to downstream handlers automatically — no manual re-injection.
+        try:
+            raw_body = await request.body()
+        except Exception:  # noqa: BLE001
+            raw_body = None
+        frontend_request_log(
+            request.method, str(request.url), request.headers, raw_body,
+        )
+        # If the downstream raises, the response never streams, so clear the
+        # context now — the streaming wrapper below is never installed.
         try:
             response = await call_next(request)
-        finally:
+        except Exception:
             clear_context()
+            raise
+        # Outbound response body log. Wrap the streaming body iterator so chunks
+        # flow through to the client unchanged — eagerly buffering the body
+        # would deadlock streaming endpoints (the downstream runs in a task
+        # group that only produces chunks while the response streams out, e.g.
+        # the MCP SSE transport). Capture chunks as they pass and log once the
+        # stream completes. ``clear_context`` is deferred to the end of the
+        # stream (and re-binds ``request_id`` on the consumer task, which may
+        # differ from this one) so the response log stays correlated to its
+        # request.
+        captured = bytearray()
+        original_iter = response.body_iterator
+
+        async def logged_iter():
+            bind_context(request_id=request_id)
+            try:
+                async for chunk in original_iter:
+                    if isinstance(chunk, (bytes, bytearray)):
+                        captured.extend(chunk)
+                    elif isinstance(chunk, str):
+                        captured.extend(chunk.encode("utf-8"))
+                    yield chunk
+                frontend_response_log(response.status_code, response.headers, bytes(captured))
+            finally:
+                clear_context()
+
+        response.body_iterator = logged_iter()
         response.headers["x-request-id"] = request_id
         return response
 

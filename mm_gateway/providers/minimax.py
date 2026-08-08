@@ -27,6 +27,7 @@ from mm_gateway.core.exceptions import (
     TaskFailedError,
 )
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.providers._http import _map_status
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 
@@ -57,6 +58,7 @@ class MiniMaxProvider(MusicProvider):
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             },
+            event_hooks=backend_event_hooks(),
         )
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:

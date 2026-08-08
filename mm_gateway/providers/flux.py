@@ -11,10 +11,13 @@ import asyncio
 import time
 from typing import Any
 
+from runapi.core.http_client import HttpClient
+from runapi.core.options import ClientOptions
 from runapi.flux_2 import Flux2Client
 
 from mm_gateway.core.base import ImageProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.observability.httplog import backend_sync_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
@@ -22,6 +25,29 @@ from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest,
 log = get_logger("provider.flux")
 
 _T2I = ("flux-2-flex-text-to-image", "flux-2-max-text-to-image", "flux-2-pro-text-to-image")
+
+
+class _LoggedHttpClient(HttpClient):
+    """runapi ``HttpClient`` subclass that registers backend logging event
+    hooks on the SDK's internal ``httpx.Client`` instances.
+
+    The runapi SDK builds its ``httpx.Client`` instances inside
+    ``HttpClient.__init__`` (one for API calls, one for pre-authorized
+    uploads). ``httpx`` exposes
+    ``client.event_hooks`` as a mutable mapping, so rather than rebuild the
+    clients we just extend the request/response hook lists after the parent
+    constructor has wired up auth headers, base url, timeout and retries. The
+    SDK's retry/multipart logic in ``request()`` / ``upload()`` is left
+    untouched.
+    """
+
+    def __init__(self, options: ClientOptions, *, transport=None) -> None:
+        super().__init__(options, transport=transport)
+        hooks = backend_sync_event_hooks()
+        self._client.event_hooks["request"].extend(hooks["request"])
+        self._client.event_hooks["response"].extend(hooks["response"])
+        self._upload_client.event_hooks["request"].extend(hooks["request"])
+        self._upload_client.event_hooks["response"].extend(hooks["response"])
 
 
 class FluxProvider(SyncImageTaskMixin, ImageProvider):
@@ -34,7 +60,6 @@ class FluxProvider(SyncImageTaskMixin, ImageProvider):
         super().__init__(backend)
         if not backend.api_key:
             raise ProviderNotConfiguredError("flux")
-        kwargs: dict[str, Any] = {"api_key": backend.api_key}
         if backend.base_url:
             # runapi uses a global configure; set via core if a base url override is provided.
             try:
@@ -42,7 +67,12 @@ class FluxProvider(SyncImageTaskMixin, ImageProvider):
                 configure(base_url=backend.base_url)
             except Exception:  # noqa: BLE001
                 pass
-        self._client = Flux2Client(**kwargs)
+        # Inject an HttpClient whose httpx.Clients carry backend logging
+        # hooks. ``ClientOptions`` resolves its own base_url fallback from the
+        # global config set above, so passing base_url only when the operator
+        # pinned one mirrors the SDK's own defaulting.
+        options = ClientOptions(api_key=backend.api_key, base_url=backend.base_url or None)
+        self._client = Flux2Client(api_key=backend.api_key, http_client=_LoggedHttpClient(options))
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         is_remix = request.model.endswith("remix-image") or bool(request.input_images())

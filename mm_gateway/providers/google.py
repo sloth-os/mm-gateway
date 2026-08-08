@@ -24,6 +24,7 @@ from google.genai import types
 
 from mm_gateway.core.base import ImageProvider, MusicProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
@@ -69,8 +70,13 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
     @staticmethod
     def _build_genai_client(api_key: str, base_url: str | None):
         kwargs: dict[str, Any] = {"api_key": api_key}
-        if base_url:
-            kwargs["http_options"] = types.HttpOptions(base_url=base_url)
+        http_kwargs: dict[str, Any] = {
+            # Inject an httpx client whose event hooks log the backend request/
+            # response (curl format + masked sensitive headers).
+            "httpxAsyncClient": httpx.AsyncClient(event_hooks=backend_event_hooks()),
+        }
+        kwargs["http_options"] = types.HttpOptions(base_url=base_url, **http_kwargs) if base_url \
+            else types.HttpOptions(**http_kwargs)
         return genai.Client(**kwargs)
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
@@ -231,7 +237,7 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
             body = self._lyria_body(request)
             url = (f"{self._music_base}/v1beta/models/{rec['model']}:predictInteractions"
                    f"?key={self._api_key}")
-            async with httpx.AsyncClient(timeout=240.0) as c:
+            async with httpx.AsyncClient(timeout=240.0, event_hooks=backend_event_hooks()) as c:
                 resp = await c.post(url, json=body, headers={"Content-Type": "application/json"})
         except httpx.HTTPError as exc:
             rec["status"] = "failed"; rec["error"] = str(exc)

@@ -56,6 +56,8 @@ omits it.
 
 from __future__ import annotations
 
+import collections.abc
+import json
 import time
 from typing import Any
 
@@ -63,6 +65,7 @@ import dashscope
 from dashscope.aigc.image_generation import AioImageGeneration
 from dashscope.aigc.image_synthesis import AioImageSynthesis
 from dashscope.aigc.video_synthesis import AioVideoSynthesis
+from dashscope.api_entities.http_request import HttpRequest
 
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import (
@@ -70,6 +73,7 @@ from mm_gateway.core.exceptions import (
     ProviderRequestError,
     TaskFailedError,
 )
+from mm_gateway.observability.httplog import log_backend_request, log_backend_response
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
@@ -81,6 +85,85 @@ from mm_gateway.schemas.image import (
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 log = get_logger("provider.dashscope")
+
+
+# -- Backend request/response logging --------------------------------------- #
+# DashScope's SDK speaks aiohttp internally and exposes no httpx injection
+# point, so we can't attach httpx event hooks like the other providers. Every
+# async/sync call, wait and fetch funnels through ``HttpRequest.aio_call``
+# (``BaseAsyncAioApi.async_call``/``.call`` and ``AsyncAioTaskGetMixin`` both
+# end in ``await request.aio_call()``), so monkeypatching that one method is
+# the single chokepoint that covers all five call types the adapter uses.
+# Idempotent: a marker on the wrapper prevents double-wrapping on re-import.
+
+
+def _dashscope_request_content(request: HttpRequest) -> bytes | None:
+    """Best-effort backend request body for logging.
+
+    Only POST bodies are rendered (GET task queries carry their id in the URL).
+    ``get_aiohttp_payload`` resolves the input via ``InputResolver.__next__``,
+    which is re-callable for our dict/list inputs, so calling it here before the
+    real send is safe. Multipart form payloads aren't JSON-renderable and are
+    skipped.
+    """
+    data = getattr(request, "data", None)
+    if data is None or str(request.method).upper() != "POST":
+        return None
+    try:
+        is_form, obj = data.get_aiohttp_payload()
+    except Exception:  # noqa: BLE001
+        return None
+    if is_form:
+        return None
+    try:
+        return json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _dashscope_log_response(resp: Any, url: str) -> None:
+    """Log a backend response from a ``DashScopeAPIResponse``."""
+    status = getattr(resp, "status_code", None)
+    headers = getattr(resp, "headers", None) or {}
+    body_obj = {
+        "request_id": getattr(resp, "request_id", None),
+        "code": getattr(resp, "code", None),
+        "message": getattr(resp, "message", None),
+        "output": getattr(resp, "output", None),
+        "usage": getattr(resp, "usage", None),
+    }
+    try:
+        content = json.dumps(body_obj, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        content = str(body_obj)
+    log_backend_response(status, url, headers, content)
+
+
+def _install_dashscope_logging() -> None:
+    if getattr(HttpRequest.aio_call, "_mm_gateway_logged", False):
+        return
+    orig_aio_call = HttpRequest.aio_call
+
+    async def _logged_aio_call(self):  # type: ignore[no-untyped-def]
+        content = _dashscope_request_content(self)
+        log_backend_request(str(self.method), self.url, self.headers, content)
+        result = await orig_aio_call(self)
+        if isinstance(result, collections.abc.AsyncGenerator):
+            # Streaming (SSE) — log each yielded response as it arrives.
+            async def _logged_stream():
+                async for item in result:
+                    _dashscope_log_response(item, self.url)
+                    yield item
+            return _logged_stream()
+        _dashscope_log_response(result, self.url)
+        return result
+
+    _logged_aio_call._mm_gateway_logged = True  # type: ignore[attr-defined]
+    HttpRequest.aio_call = _logged_aio_call
+
+
+_install_dashscope_logging()
+
 
 _STATUS_MAP = {
     "PENDING": "pending",

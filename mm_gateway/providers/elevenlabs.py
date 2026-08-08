@@ -16,8 +16,11 @@ import time
 import uuid
 from typing import Any, ClassVar
 
+import httpx
+
 from mm_gateway.core.base import MusicProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.schemas.music import UnifiedMusicRequest, UnifiedMusicTask, MusicUsage
 
@@ -52,6 +55,7 @@ class ElevenLabsProvider(MusicProvider):
             api_key=backend.api_key,
             base_url=backend.base_url or None,
             timeout=240.0,
+            httpx_client=httpx.AsyncClient(event_hooks=backend_event_hooks()),
         )
 
     @staticmethod

@@ -11,10 +11,14 @@ from __future__ import annotations
 import httpx
 
 from mm_gateway.core.exceptions import ProviderRequestError, ProviderTimeoutError
+from mm_gateway.observability.httplog import backend_event_hooks
 
 
 def make_client(base_url: str, *, timeout: float, headers: dict[str, str] | None = None) -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=base_url, timeout=timeout, headers=headers or {})
+    return httpx.AsyncClient(
+        base_url=base_url, timeout=timeout, headers=headers or {},
+        event_hooks=backend_event_hooks(),
+    )
 
 
 async def request_json(client: httpx.AsyncClient, method: str, url: str, *,

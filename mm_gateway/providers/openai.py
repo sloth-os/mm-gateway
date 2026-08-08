@@ -6,16 +6,22 @@ import base64
 import time
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI
 
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
+from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 log = get_logger("provider.openai")
+
+
+def _logged_httpx() -> httpx.AsyncClient:
+    return httpx.AsyncClient(event_hooks=backend_event_hooks())
 
 
 class OpenAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
@@ -36,8 +42,8 @@ class OpenAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         # them apart.
         image_base = backend.base_url or None
         video_base = backend.extra.get("video_base_url") or image_base
-        self._client = AsyncOpenAI(api_key=backend.api_key, base_url=image_base)
-        self._client_video = AsyncOpenAI(api_key=backend.api_key, base_url=video_base)
+        self._client = AsyncOpenAI(api_key=backend.api_key, base_url=image_base, http_client=_logged_httpx())
+        self._client_video = AsyncOpenAI(api_key=backend.api_key, base_url=video_base, http_client=_logged_httpx())
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
