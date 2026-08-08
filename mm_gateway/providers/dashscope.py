@@ -65,7 +65,13 @@ import dashscope
 from dashscope.aigc.image_generation import AioImageGeneration
 from dashscope.aigc.image_synthesis import AioImageSynthesis
 from dashscope.aigc.video_synthesis import AioVideoSynthesis
+from dashscope.api_entities.dashscope_response import (
+    ImageGenerationResponse,
+    ImageSynthesisResponse,
+    VideoSynthesisResponse,
+)
 from dashscope.api_entities.http_request import HttpRequest
+from dashscope.client.base_api import BaseAsyncAioApi
 
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import (
@@ -163,6 +169,71 @@ def _install_dashscope_logging() -> None:
 
 
 _install_dashscope_logging()
+
+
+# -- Patch wait/fetch to forward base_address -------------------------------- #
+# DashScope's async task methods (``wait``/``fetch``) drop ``base_address``:
+# ``AioImageGeneration.wait``/``AioImageSynthesis.wait``/``AioVideoSynthesis.fetch``
+# call ``super().wait(task, api_key, workspace=..., wait_timeout=...)`` /
+# ``super().fetch(task, api_key=..., workspace=...)`` with no ``**kwargs``, so
+# the proxy base URL never reaches ``AsyncAioTaskGetMixin._get``. Every poll
+# falls back to the module-global ``dashscope.base_http_api_url`` — the real
+# ``dashscope.aliyuncs.com`` host — even when ``async_call``/``call`` submitted
+# the task through a proxy. With split sync/async base URLs the poll then hits
+# the wrong host: the proxy key is invalid there (401 InvalidApiKey) and the
+# task is unreachable (404), so generation always fails after submit succeeds.
+# We re-bind each surface's ``wait``/``fetch`` to forward ``base_address`` and
+# re-run ``from_api_response`` to keep the typed response class the adapter
+# reads. Bound at import time, once, via a marker.
+
+_BASE_WAIT = BaseAsyncAioApi.wait.__func__
+_BASE_FETCH = BaseAsyncAioApi.fetch.__func__
+
+
+def _make_forwarding_wait(resp_cls):
+    @classmethod  # type: ignore[misc]
+    async def wait(cls_, task, api_key=None, workspace=None,
+                   wait_timeout=-1, **kwargs):
+        r = await _BASE_WAIT(
+            cls_, task, api_key, workspace=workspace,
+            wait_timeout=wait_timeout, **kwargs,
+        )
+        return resp_cls.from_api_response(r)
+    return wait
+
+
+def _make_forwarding_fetch(resp_cls):
+    @classmethod  # type: ignore[misc]
+    async def fetch(cls_, task, api_key=None, workspace=None, **kwargs):
+        r = await _BASE_FETCH(
+            cls_, task, api_key=api_key, workspace=workspace, **kwargs,
+        )
+        return resp_cls.from_api_response(r)
+    return fetch
+
+
+def _install_base_url_forwarding() -> None:
+    for cls, resp_cls in (
+        (AioImageGeneration, ImageGenerationResponse),
+        (AioImageSynthesis, ImageSynthesisResponse),
+        (AioVideoSynthesis, VideoSynthesisResponse),
+    ):
+        # Read the marker off the raw classmethod object stored in the class
+        # dict. Going through ``cls.wait`` would trigger the classmethod
+        # descriptor, which returns a bound method whose attribute lookup
+        # delegates to ``__func__`` — not the wrapper the marker is set on —
+        # so the guard would never see it and would re-patch every call.
+        existing = cls.__dict__.get("wait")
+        if getattr(existing, "_mm_gateway_forwarding", False):
+            continue
+        wait = _make_forwarding_wait(resp_cls)
+        fetch = _make_forwarding_fetch(resp_cls)
+        wait._mm_gateway_forwarding = True  # type: ignore[attr-defined]
+        cls.wait = wait
+        cls.fetch = fetch
+
+
+_install_base_url_forwarding()
 
 
 _STATUS_MAP = {

@@ -621,6 +621,84 @@ def test_split_sync_async_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     assert vid.fetch_kwargs["base_address"] == "https://video.test"
 
 
+def test_poll_routes_through_image_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: after an async image task is created, polling for its
+    result must hit ``DASHSCOPE_IMAGE_BASE_URL`` (the proxy), not the SDK's
+    hardcoded ``https://dashscope.aliyuncs.com/api/v1/tasks/`` default.
+
+    The root cause was that the SDK's ``AioImageGeneration.wait`` /
+    ``AioImageSynthesis.wait`` / ``AioVideoSynthesis.fetch`` overrides called
+    ``super().wait(task, api_key, workspace=..., wait_timeout=...)`` /
+    ``super().fetch(task, api_key=..., workspace=...)`` with no ``**kwargs``, so
+    a per-call ``base_address=`` never reached ``AsyncAioTaskGetMixin._get`` and
+    the poll fell back to the module-global ``dashscope.base_http_api_url``. With
+    split sync/async URLs the proxy key is invalid at the real host (401
+    InvalidApiKey), so generation always failed after submit succeeded.
+
+    This drives the *real* patched SDK classes (not the fakes, which replace
+    them) and asserts the single poll request URL is the proxy.
+    """
+    from dashscope.api_entities.dashscope_response import DashScopeAPIResponse
+    from dashscope.api_entities.http_request import HttpRequest
+
+    captured: list[str] = []
+
+    async def fake_aio_call(self):  # type: ignore[no-untyped-def]
+        captured.append(self.url)
+        return DashScopeAPIResponse(
+            request_id="r", status_code=200, code=None, message=None,
+            output={"task_status": "SUCCEEDED", "task_id": "t",
+                    "results": [{"url": "https://x/y.png"}],
+                    "video_url": "https://x/v.mp4", "model": "m"},
+        )
+
+    monkeypatch.setattr(HttpRequest, "aio_call", fake_aio_call)
+
+    base = "https://ai.ctaigw.cn/v1"
+    asyncio.run(dashscope_mod.AioImageSynthesis.wait(
+        "syn-1", api_key="k", base_address=base))
+    asyncio.run(dashscope_mod.AioImageGeneration.wait(
+        "gen-1", api_key="k", base_address=base))
+    asyncio.run(dashscope_mod.AioVideoSynthesis.fetch(
+        "vid-1", api_key="k", base_address=base))
+
+    assert captured, "no poll request was issued"
+    assert all(u.startswith(base) for u in captured), (
+        f"polls bypassed the proxy base URL: {captured}")
+    assert not any("dashscope.aliyuncs.com" in u for u in captured), (
+        f"polls hit the hardcoded default host instead of the proxy: {captured}")
+    assert all("/tasks/" in u for u in captured), (
+        f"polls did not hit the tasks endpoint: {captured}")
+
+
+def test_base_url_forwarding_install_is_idempotent() -> None:
+    """``_install_base_url_forwarding`` must be a no-op on a second call.
+
+    The marker guard reads the raw classmethod object from the class dict
+    (not ``cls.wait``, which triggers the classmethod descriptor and hides the
+    marker). Re-calling the installer must leave the bound ``wait``/``fetch``
+    wrappers untouched — otherwise the "Bound at import time, once" contract is
+    violated and a hot-reload / explicit re-call would silently re-patch.
+    """
+    surfaces = (
+        dashscope_mod.AioImageGeneration,
+        dashscope_mod.AioImageSynthesis,
+        dashscope_mod.AioVideoSynthesis,
+    )
+    before = [(cls.__dict__.get("wait"), cls.__dict__.get("fetch")) for cls in surfaces]
+    dashscope_mod._install_base_url_forwarding()
+    dashscope_mod._install_base_url_forwarding()
+    after = [(cls.__dict__.get("wait"), cls.__dict__.get("fetch")) for cls in surfaces]
+    assert before == after, (
+        "idempotency guard failed: _install_base_url_forwarding() re-patched "
+        f"an already-patched surface instead of skipping (before={before}, "
+        f"after={after})"
+    )
+    assert all(
+        getattr(w, "_mm_gateway_forwarding", False) for w, _ in after
+    ), "forwarding marker missing from an installed wait wrapper"
+
+
 def test_video_create_maps_params_and_response(provider: DashScopeProvider) -> None:
     req = UnifiedVideoRequest(
         model="wanx2.1-t2v-turbo",
