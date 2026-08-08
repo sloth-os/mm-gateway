@@ -15,6 +15,7 @@ import pytest
 
 from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
+from mm_gateway.providers import volcengine as volc_mod
 from mm_gateway.providers.volcengine import VolcengineProvider
 from mm_gateway.schemas.image import UnifiedImageRequest, text_part as image_text_part
 from mm_gateway.schemas.video import UnifiedVideoRequest, audio_part, image_part, text_part, video_part
@@ -58,13 +59,61 @@ class FakeArk:
 @pytest.fixture
 def provider() -> VolcengineProvider:
     p = VolcengineProvider(BackendConfig(name="volcengine", type="volcengine", api_key="ark-key"))
-    p._ark = FakeArk()
+    ark = FakeArk()
+    p._ark = ark
+    p._ark_video = ark  # same fake serves image + video in the basic tests
     return p
 
 
 def test_provider_requires_api_key() -> None:
     with pytest.raises(ProviderNotConfiguredError):
         VolcengineProvider(BackendConfig(name="volcengine", type="volcengine"))
+
+
+def test_split_sync_async_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Image (Seedream) and video (Seedance) get separate Ark clients on their
+    respective sync/async base URLs (``*_IMAGE_BASE_URL`` / ``*_VIDEO_BASE_URL``,
+    the latter carried via ``extra["video_base_url"]`` when it differs)."""
+    captured: list[dict[str, Any]] = []
+
+    class CapturingArk:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+            self.content_generation = SimpleNamespace(tasks=FakeTasks())
+            self.images = SimpleNamespace(generate=self._img)
+
+        async def _img(self, **kwargs: Any) -> Any:
+            return SimpleNamespace(data=[], usage=None, created_at=0)
+
+    monkeypatch.setattr(volc_mod, "AsyncArk", CapturingArk)
+    VolcengineProvider(
+        BackendConfig(
+            name="volcengine",
+            type="volcengine",
+            api_key="ark-key",
+            base_url="https://image.test",
+            extra={"video_base_url": "https://video.test"},
+        )
+    )
+    assert [c["base_url"] for c in captured] == ["https://image.test", "https://video.test"]
+
+
+def test_single_base_url_when_not_split(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a separate video base, both clients share the image base."""
+    captured: list[dict[str, Any]] = []
+
+    class CapturingArk:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+
+    monkeypatch.setattr(volc_mod, "AsyncArk", CapturingArk)
+    VolcengineProvider(
+        BackendConfig(
+            name="volcengine", type="volcengine", api_key="ark-key",
+            base_url="https://ark.test",
+        )
+    )
+    assert [c["base_url"] for c in captured] == ["https://ark.test", "https://ark.test"]
 
 
 # -- image --------------------------------------------------------------- #

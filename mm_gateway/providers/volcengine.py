@@ -57,8 +57,17 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         super().__init__(backend)
         if not backend.api_key:
             raise ProviderNotConfiguredError("volcengine")
-        base = backend.base_url or _BASE
-        self._ark = AsyncArk(api_key=backend.api_key, base_url=base)
+        # Per-modality clients honor the sync/async URL split resolved by
+        # ``config.py``: image (Seedream) uses ``base_url`` (the
+        # ``*_IMAGE_BASE_URL`` sync endpoint, preferred); video (Seedance) uses
+        # ``extra["video_base_url"]`` (the ``*_VIDEO_BASE_URL`` async endpoint)
+        # when it differs from the image one. For the real Ark API both share
+        # one host, so the two clients collapse to the same base unless an
+        # operator pins them apart.
+        image_base = backend.base_url or _BASE
+        video_base = backend.extra.get("video_base_url") or image_base
+        self._ark = AsyncArk(api_key=backend.api_key, base_url=image_base)
+        self._ark_video = AsyncArk(api_key=backend.api_key, base_url=video_base)
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
@@ -127,7 +136,7 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             kwargs["priority"] = v
 
         try:
-            result = await self._ark.content_generation.tasks.create(**kwargs)
+            result = await self._ark_video.content_generation.tasks.create(**kwargs)
         except Exception as exc:  # noqa: BLE001
             raise ProviderRequestError(f"volcengine video create failed: {exc}", provider="volcengine") from exc
 
@@ -138,7 +147,7 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
 
     async def get_video_task(self, task_id: str) -> UnifiedVideoTask:
         try:
-            result = await self._ark.content_generation.tasks.get(task_id=task_id)
+            result = await self._ark_video.content_generation.tasks.get(task_id=task_id)
         except Exception as exc:  # noqa: BLE001
             raise ProviderRequestError(f"volcengine video poll failed: {exc}", provider="volcengine") from exc
 
