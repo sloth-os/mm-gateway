@@ -74,6 +74,99 @@ def test_lyria_unknown_fields_go_to_extra():
     assert unified.extra["style"] == "edm"
 
 
+def test_lyria_request_config_object_merges_knobs():
+    # The Gemini Interactions `config` object is the abstraction over all
+    # backend music functions: known knobs merge onto the unified flat fields.
+    unified = lyria_compat.from_lyria({
+        "model": "lyria-3", "input": "a happy song",
+        "config": {
+            "negative_prompt": "drums", "duration": 30, "bpm": 120,
+            "key_scale": "C major", "time_signature": "4/4",
+            "vocal_language": "en", "audio_format": "wav",
+            "audio_quality": "44100_128", "is_instrumental": False,
+            "generate_audio": True, "seed": 7, "guidance_scale": 3.0,
+            "n": 2,
+        },
+    })
+    assert unified.negative_prompt == "drums"
+    assert unified.duration == 30
+    assert unified.bpm == 120
+    assert unified.key_scale == "C major"
+    assert unified.time_signature == "4/4"
+    assert unified.vocal_language == "en"
+    assert unified.audio_format == "wav"
+    assert unified.audio_quality == "44100_128"
+    assert unified.is_instrumental is False
+    assert unified.generate_audio is True
+    assert unified.seed == 7
+    assert unified.guidance_scale == 3.0
+    assert unified.n == 2
+
+
+def test_lyria_request_config_unknown_keys_go_to_extra():
+    # Provider-specific knobs (ElevenLabs finetune_id, ACE-Step inference_steps,
+    # Lyria lyria_config, ...) pass through to providers via extra.
+    unified = lyria_compat.from_lyria({
+        "model": "lyria-3", "input": "x",
+        "config": {
+            "finetune_id": "ft-123", "inference_steps": 50,
+            "lyria_config": {"denoising": 0.8},
+        },
+    })
+    assert unified.extra["finetune_id"] == "ft-123"
+    assert unified.extra["inference_steps"] == 50
+    assert unified.extra["lyria_config"] == {"denoising": 0.8}
+
+
+def test_lyria_request_config_overrides_flat_knobs():
+    # config is the canonical (new) shape; where a knob is set in both places,
+    # config wins.
+    unified = lyria_compat.from_lyria({
+        "model": "lyria-3", "input": "x", "duration": 10,
+        "config": {"duration": 45},
+    })
+    assert unified.duration == 45
+
+
+def test_lyria_request_config_response_format_envelope():
+    # Lyria's response_format envelope inside config maps to audio_format/quality.
+    unified = lyria_compat.from_lyria({
+        "model": "lyria-3", "input": "x",
+        "config": {"response_format": {"type": "audio", "quality": "44100_128"}},
+    })
+    assert unified.audio_format == "wav"
+    assert unified.audio_quality == "44100_128"
+
+
+def test_lyria_request_config_and_flat_both_accepted():
+    # A body mixing flat knobs (legacy) and config (new) merges both.
+    unified = lyria_compat.from_lyria({
+        "model": "lyria-3", "input": "x", "bpm": 90,
+        "config": {"seed": 11},
+    })
+    assert unified.bpm == 90
+    assert unified.seed == 11
+
+
+def test_lyria_request_provider_directive_is_dropped():
+    # ``provider`` is a routing directive dict ({tag}/{backend}) read from the
+    # raw body by ``routing_overrides``; it must NOT be assigned to the unified
+    # ``provider: str`` field (would fail validation) nor leak into ``extra``.
+    unified = lyria_compat.from_lyria(
+        {"model": "lyria-3", "input": "x", "provider": {"backend": "mm-a"}}
+    )
+    assert unified.provider is None
+    assert "provider" not in unified.extra
+
+
+def test_lyria_request_config_provider_directive_is_dropped():
+    unified = lyria_compat.from_lyria(
+        {"model": "lyria-3", "input": "x", "config": {"provider": {"tag": "t"}}}
+    )
+    assert unified.provider is None
+    assert "provider" not in unified.extra
+
+
 def test_lyria_request_missing_model_raises():
     import pytest
 

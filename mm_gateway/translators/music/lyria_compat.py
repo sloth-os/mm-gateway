@@ -1,10 +1,30 @@
 """Gemini Lyria 3-compatible music translator.
 
-The Lyria 3 REST shape (``POST /v1beta/interactions``) is::
+The Lyria 3 REST shape (``POST /v1beta/interactions``) is the **Interactions**
+surface — ``{model, input, config}`` — the same envelope Imagen and Lyria's
+``predictInteractions`` speak::
 
     { "model": "lyria-3-pro-preview",
       "input": "a string prompt" | [ {type:"text", text} | {type:"image", mime_type, data} ... ],
-      "response_format": {"type": "audio"} }   # optional, "audio" => WAV
+      "config": { "negative_prompt": ..., "duration": ..., "bpm": ...,
+                  "key_scale": ..., "time_signature": ..., "vocal_language": ...,
+                  "audio_format": ..., "audio_quality": ..., "is_instrumental": ...,
+                  "generate_audio": ..., "seed": ..., "guidance_scale": ...,
+                  "n": ..., "response_format": {"type": "audio", "quality": ...},
+                  ...any provider-specific knob } }
+
+``config`` is the abstraction over **all** backend music functions: every knob
+every provider reads (ElevenLabs' ``finetune_id``/``music_length``/``seed``,
+MiniMax's ``lyrics``/``lyrics_optimizer``/``cover_feature_id``, udioapi's
+``style``/``title``/``gender``/``style_weight``, Mureka's ``title``/
+``audio_config``/``voice_id``, ACE-Step's ``inference_steps``/``batch_size``/
+``task_type``/``reference_audio_path``, Lyria's ``number_of_outputs``/
+``lyria_config``) has a home in the unified flat fields or rides through as a
+provider-specific ``extra`` key. ``config`` is the canonical place to set them;
+the flat knobs remain accepted at the top level for backwards compatibility.
+Where a knob is set in both places, ``config`` wins. ``response_format`` is
+accepted at the top level (the legacy Lyria shape) and inside ``config`` (the
+Interactions shape).
 
 The response is a ``steps`` array whose ``model_output`` steps carry a
 ``content`` array of typed blocks (``{type:"text", text}`` for lyrics/structure
@@ -23,25 +43,56 @@ from typing import Any
 
 from mm_gateway.core.exceptions import ValidationError
 from mm_gateway.schemas.music import (
+    UnifiedMusicRequest,
     UnifiedMusicTask,
     audio_part,
     image_part,
     text_part,
 )
-from mm_gateway.schemas.music import UnifiedMusicRequest
 
-# Top-level fields the unified model owns; everything else -> extra.
+# Top-level fields the unified model owns; everything else -> extra. These are
+# the keys the abstraction accepts in both the flat top-level form and inside
+# ``config`` — the union of knobs every backend music provider reads.
 _KNOWN = {
     "model", "content", "negative_prompt", "duration", "bpm", "key_scale",
     "key", "scale", "time_signature", "vocal_language", "audio_format",
     "audio_quality", "is_instrumental", "generate_audio", "seed",
-    "guidance_scale", "n", "callback_url",
+    "guidance_scale", "n", "callback_url", "provider",
 }
+
+# Flat generation knobs copied from the top-level form (the legacy shape, still
+# accepted). The same names are also read from ``config``. ``provider`` is NOT a
+# generation knob — it is a routing directive dict ({tag}/{backend}) read from
+# the raw body by ``routing_overrides`` — so it stays out of the unified fields.
+_FLAT_KNOBS = (
+    "negative_prompt", "duration", "bpm", "key_scale", "key", "scale",
+    "time_signature", "vocal_language", "audio_format", "audio_quality",
+    "is_instrumental", "generate_audio", "seed", "guidance_scale", "n",
+    "callback_url",
+)
 
 # Lyria `input` text part -> unified; image part (mime_type+data) -> image_url
 # is not a 1:1 fit (Lyria carries inline base64 images), so we stash inline
 # images in extra["images"] for providers that can consume them (e.g. ACE-Step
 # image-to-music fetches its own URL; the data form is a gateway extension).
+
+
+def _apply_response_format(rf: Any, kwargs: dict[str, Any]) -> None:
+    """Map a Lyria ``response_format`` envelope onto audio_format/quality.
+
+    ``{"type": "audio"}`` selects WAV; any other string ``type`` sets
+    ``audio_format`` to it; ``quality`` sets ``audio_quality``. Uses
+    ``setdefault`` so an explicit flat/config value wins over a later call.
+    """
+    if not isinstance(rf, dict):
+        return
+    rtype = rf.get("type")
+    if rtype == "audio":
+        kwargs.setdefault("audio_format", "wav")
+    elif isinstance(rtype, str):
+        kwargs.setdefault("audio_format", rtype)
+    if rf.get("quality"):
+        kwargs.setdefault("audio_quality", rf.get("quality"))
 
 
 def from_lyria(body: dict[str, Any]) -> UnifiedMusicRequest:
@@ -85,32 +136,44 @@ def from_lyria(body: dict[str, Any]) -> UnifiedMusicRequest:
     if parts:
         kwargs["content"] = parts
 
-    # Flat generation knobs (gateway extension beyond the minimal Lyria shape).
-    for k in ("negative_prompt", "duration", "bpm", "key_scale", "key", "scale",
-              "time_signature", "vocal_language", "audio_format", "audio_quality",
-              "is_instrumental", "generate_audio", "seed", "guidance_scale", "n",
-              "callback_url"):
+    # Flat generation knobs (legacy top-level form). These are the fallback;
+    # ``config`` below overrides them where both are present.
+    for k in _FLAT_KNOBS:
         if (v := body.get(k)) is not None:
             kwargs[k] = v
 
-    # response_format {"type": "audio"} selects WAV output. Map the Lyria hint
-    # to audio_format ('wav' for 'audio', else 'mp3' default).
-    rf = body.get("response_format")
-    if isinstance(rf, dict):
-        rtype = rf.get("type")
-        if rtype == "audio":
-            kwargs.setdefault("audio_format", "wav")
-        elif isinstance(rtype, str):
-            kwargs.setdefault("audio_format", rtype)
-        if rf.get("quality"):
-            kwargs.setdefault("audio_quality", rf.get("quality"))
+    # response_format {"type": "audio"} selects WAV output (legacy Lyria shape).
+    _apply_response_format(body.get("response_format"), kwargs)
 
-    extra: dict[str, Any] = kwargs.get("extra", {})
+    # ``config`` is the Gemini Interactions abstraction over all backend music
+    # functions. Known keys (the union every provider reads) merge onto the
+    # unified flat fields, overriding the legacy top-level form; unknown keys
+    # drop into ``extra`` and pass through to providers that accept them
+    # (best-effort policy). This lets a single front-end body reach every
+    # backend knob without per-provider shapes.
+    config = body.get("config")
+    if isinstance(config, dict):
+        for k, v in config.items():
+            if v is None:
+                continue
+            if k == "response_format":
+                _apply_response_format(v, kwargs)
+                continue
+            if k == "provider":
+                # Routing directive, not a generation knob (and may be a dict);
+                # ``routing_overrides`` reads it from the raw body, not here.
+                continue
+            if k in _KNOWN:
+                kwargs[k] = v
+            else:
+                kwargs.setdefault("extra", {})[k] = v
+
+    extra: dict[str, Any] = {}
     for k, v in body.items():
-        if k not in _KNOWN and k not in ("input", "response_format"):
+        if k not in _KNOWN and k not in ("input", "response_format", "config"):
             extra[k] = v
     if extra:
-        kwargs["extra"] = extra
+        kwargs["extra"] = {**kwargs.get("extra", {}), **extra}
     return UnifiedMusicRequest(**kwargs)
 
 

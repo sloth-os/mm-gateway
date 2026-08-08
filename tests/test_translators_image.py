@@ -68,8 +68,93 @@ def test_request_response_format_string_mapped():
     assert unified.response_format == "b64_json"
 
 
+def test_request_config_object_merges_known_knobs():
+    # The Gemini Interactions `config` object is the abstraction over all
+    # backend image functions: known knobs merge onto the unified flat fields.
+    unified = gemini_compat.from_gemini({
+        "model": "gpt-image-1", "input": "a cat",
+        "config": {
+            "negative_prompt": "blurry", "n": 3, "size": "1024x1024",
+            "seed": 7, "guidance_scale": 7.5, "aspect_ratio": "16:9",
+            "output_format": "png", "background": "transparent", "user": "u1",
+        },
+    })
+    assert unified.negative_prompt == "blurry"
+    assert unified.n == 3
+    assert unified.size == "1024x1024"
+    assert unified.seed == 7
+    assert unified.guidance_scale == 7.5
+    assert unified.aspect_ratio == "16:9"
+    assert unified.output_format == "png"
+    assert unified.background == "transparent"
+    assert unified.user == "u1"
+
+
+def test_request_config_unknown_keys_go_to_extra():
+    # Provider-specific knobs the unified model doesn't name pass through to
+    # providers via extra (best-effort policy).
+    unified = gemini_compat.from_gemini({
+        "model": "gpt-image-1", "input": "a cat",
+        "config": {"thinking_mode": True, "motion_bucket_id": 127},
+    })
+    assert unified.extra["thinking_mode"] is True
+    assert unified.extra["motion_bucket_id"] == 127
+
+
+def test_request_config_overrides_flat_knobs():
+    # config is the canonical (new) shape; where a knob is set in both places,
+    # config wins.
+    unified = gemini_compat.from_gemini({
+        "model": "gpt-image-1", "input": "a cat", "n": 1,
+        "config": {"n": 4},
+    })
+    assert unified.n == 4
+
+
+def test_request_config_response_format_envelope():
+    # Imagen/Lyria-style response_format envelope inside config.
+    unified = gemini_compat.from_gemini({
+        "model": "imagen-4.0-generate-001", "input": "a cat",
+        "config": {"response_format": {"type": "b64_json", "quality": "high"}},
+    })
+    assert unified.response_format == "b64_json"
+    assert unified.quality == "high"
+
+
+def test_request_config_and_flat_both_accepted():
+    # A body mixing flat knobs (legacy) and config (new) merges both.
+    unified = gemini_compat.from_gemini({
+        "model": "gpt-image-1", "input": "a cat", "style": "vivid",
+        "config": {"seed": 11},
+    })
+    assert unified.style == "vivid"
+    assert unified.seed == 11
+
+
+def test_request_provider_directive_is_dropped():
+    # ``provider`` is a routing directive dict ({tag}/{backend}) read from the
+    # raw body by ``routing_overrides``; it must NOT be assigned to the unified
+    # ``provider: str`` field (would fail validation) nor leak into ``extra``.
+    unified = gemini_compat.from_gemini(
+        {"model": "gpt-image-1", "input": "a cat", "provider": {"backend": "img-b"}}
+    )
+    assert unified.provider is None
+    assert "provider" not in unified.extra
+
+
+def test_request_config_provider_directive_is_dropped():
+    # The routing directive is honoured at the top level only; a provider inside
+    # ``config`` has no routing effect and must not break the translation.
+    unified = gemini_compat.from_gemini(
+        {"model": "gpt-image-1", "input": "a cat", "config": {"provider": {"tag": "t"}}}
+    )
+    assert unified.provider is None
+    assert "provider" not in unified.extra
+
+
 def test_request_missing_model_raises():
     import pytest
+
     from mm_gateway.core.exceptions import ValidationError
     with pytest.raises(ValidationError):
         gemini_compat.from_gemini({"input": "a cat"})
