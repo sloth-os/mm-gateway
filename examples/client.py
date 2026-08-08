@@ -25,12 +25,13 @@ _TERMINAL = ("succeeded", "failed", "cancelled", "expired")
 
 
 def generate_image(c: httpx.Client) -> None:
-    # Gemini shape: POST /v1/images with {model, input} returns a task id; poll
+    # Gemini shape: POST /v1/images with {model, input} returns a task id; the
+    # sync frontend (?wait=true) blocks until completion, then poll
     # GET /v1/images/{id} for the steps[].content[] image block (url or base64).
     r = c.post("/v1/images", json={
         "model": "gateway-image-pro",
         "input": "a cat in a spacesuit, cinematic",
-    }, params={"wait": "false"})
+    }, params={"wait": "true"})
     r.raise_for_status()
     task_id = r.json()["id"]
     print("image created:", task_id)

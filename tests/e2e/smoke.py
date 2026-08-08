@@ -194,11 +194,19 @@ def choose_models(client: httpx.Client, cands: list[tuple[str, str, str]]) -> li
 
 
 def generate_image(client: httpx.Client, model: str) -> dict[str, Any]:
-    """Create a Gemini-shape image task and poll until it has an image block."""
+    """Create a Gemini-shape image task via the sync frontend and read the
+    finished image.
+
+    ``?wait=true`` makes create block until the task reaches a terminal state
+    (succeeded/failed) before returning ``{"id": ...}``; the follow-up GET then
+    carries the image block. This exercises the synchronous front-end path
+    end-to-end. A short poll loop stays as a safety net for the rare case where
+    the sync wait times out and create returns a still-running task.
+    """
     create = client.post(
         "/v1/images",
         headers={**auth_headers(), "content-type": "application/json"},
-        params={"wait": "false"},
+        params={"wait": "true"},
         json={"model": model, "input": PROMPT},
         timeout=TIMEOUT,
     )
