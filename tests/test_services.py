@@ -21,7 +21,7 @@ class _BoomImage(ImageProvider):
     def __init__(self):
         super().__init__(BackendConfig(name="boom", type="boom", api_key="k"))
 
-    async def create_image_task(self, request):
+    async def create_image_task(self, request, *, sync=None):
         raise RuntimeError("upstream exploded")
 
     async def get_image_task(self, task_id):  # pragma: no cover - not reached

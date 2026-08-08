@@ -17,11 +17,23 @@ family:
   stays on the **image-synthesis** surface (``/services/aigc/text2image/...``)
   via ``AioImageSynthesis``.
 
-Image generation uses DashScope's **native async task API** directly when the
-backend supports it — ``async_call`` submits a task (returns a real
-``task_id``) and ``wait`` blocks until the images are ready. This is the
-unrestricted path: it serves every model including ``qwen-image-2.0-pro``,
-which the synchronous inline path does not advertise.
+Image generation uses DashScope's **native async task API** by default —
+``async_call`` submits a task (returns a real ``task_id``) and ``wait`` blocks
+until the images are ready. This is the unrestricted path: it serves every
+model including ``qwen-image-2.0-pro``, which the synchronous inline path does
+not advertise.
+
+When the front end asks to block (``wait=true`` or the
+``image_sync_default`` setting), the adapter instead uses the **synchronous
+inline API** directly — ``AioImageSynthesis.sync_call`` (``BaseAioApi.call``,
+no ``X-DashScope-Async`` header) on the synthesis surface, or
+``AioImageGeneration.call`` on the multimodal-generation surface. Both return
+finished images in a single request with no task poll. This matters on
+third-party DashScope-compatible gateways whose async task *poll* endpoint is
+broken (``GET /v1/tasks/{id}/`` returns ``500 SYSTEM_ERROR``) even though
+async submit succeeds: there the native async path submits fine but can never
+resolve, so a ``wait=true`` request would hang to the sync deadline and fail.
+The sync inline path skips the poll entirely.
 
 Some backends reject async task submission — third-party DashScope-compatible
 gateways and API keys without the async entitlement return
@@ -59,7 +71,7 @@ from __future__ import annotations
 import collections.abc
 import json
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import dashscope
 from dashscope.aigc.image_generation import AioImageGeneration
@@ -265,6 +277,14 @@ class _AsyncNotSupported(Exception):
 
 class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "dashscope"
+    # DashScope exposes both a synchronous inline API (``sync_call`` /
+    # ``AioImageGeneration.call``) and a native async task API (``async_call`` +
+    # ``wait``). The mixin threads the front-end's resolved ``sync`` intent to
+    # ``_generate_image`` so a ``wait=true`` request hits the synchronous inline
+    # path — important on third-party DashScope-compatible gateways whose async
+    # task poll endpoint is broken (returns 500 SYSTEM_ERROR on the very poll
+    # the gateway needs to resolve).
+    _sync_aware_image: ClassVar[bool] = True
     image_models = [
         "wanx2.1-t2i-turbo",
         "wanx2.1-t2i-plus",
@@ -448,21 +468,28 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             ) from exc
 
     async def _generate_image_generation(
-        self, request: UnifiedImageRequest
+        self, request: UnifiedImageRequest, *, sync: bool | None = None,
     ) -> UnifiedImageResponse:
         """Generate via the multimodal-generation surface (Wan2.x-image family).
 
-        Native async first, sync inline on rejection — same shape as the
-        synthesis path. A non-200 response or no image content surfaces as a
-        clean ``TaskFailedError``.
+        ``sync=True`` goes straight to the synchronous inline call (the path
+        that returns finished images in one request, no task poll) — the front
+        end asked to block, and on some third-party DashScope-compatible
+        gateways the async task poll endpoint itself is broken. ``sync`` absent
+        or ``False`` keeps the native async task path first, falling back to
+        sync inline only when the backend rejects async submission. A non-200
+        response or no image content surfaces as a clean ``TaskFailedError``.
         """
         kwargs = self._image_generation_kwargs(request)
-        try:
-            resp = await self._image_generation_native_async(kwargs)
-        except _AsyncNotSupported:
-            log.info("dashscope_image_async_unsupported_fallback_sync",
-                     model=request.model)
+        if sync:
             resp = await self._image_generation_sync_inline(kwargs)
+        else:
+            try:
+                resp = await self._image_generation_native_async(kwargs)
+            except _AsyncNotSupported:
+                log.info("dashscope_image_async_unsupported_fallback_sync",
+                         model=request.model)
+                resp = await self._image_generation_sync_inline(kwargs)
 
         status_code = getattr(resp, "status_code", None)
         data = self._extract_generation_images(resp)
@@ -544,18 +571,19 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             ) from exc
 
     async def _generate_image(
-        self, request: UnifiedImageRequest
+        self, request: UnifiedImageRequest, *, sync: bool | None = None,
     ) -> UnifiedImageResponse:
         """Generate one image set, routed by model family to its surface.
 
         Wan2.x-image generation models (``*-image`` excluding ``*-t2i-*``) go to
         the multimodal-generation surface; everything else (wanx2.1-t2i-* /
-        qwen-image-*) goes to the image-synthesis surface. Both surfaces try
-        native async first, falling back to a synchronous inline call when the
-        backend rejects async task submission.
+        qwen-image-*) goes to the image-synthesis surface. ``sync=True`` selects
+        the synchronous inline call on either surface (the front end asked to
+        block); absent/``False`` keeps the native async task path first,
+        falling back to sync inline when the backend rejects async submission.
         """
         if self._is_generation_model(request.model):
-            return await self._generate_image_generation(request)
+            return await self._generate_image_generation(request, sync=sync)
 
         # Synthesis path. ``size`` uses DashScope's ``"*"`` separator
         # (``1024*1024``). Both paths return ``ImageSynthesisResponse`` with
@@ -563,12 +591,15 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         # a non-SUCCEEDED status or missing results surfaces as a clean
         # ``TaskFailedError``.
         kwargs = self._image_kwargs(request)
-        try:
-            resp = await self._image_native_async(kwargs)
-        except _AsyncNotSupported:
-            log.info("dashscope_image_async_unsupported_fallback_sync",
-                     model=request.model)
+        if sync:
             resp = await self._image_sync_inline(kwargs)
+        else:
+            try:
+                resp = await self._image_native_async(kwargs)
+            except _AsyncNotSupported:
+                log.info("dashscope_image_async_unsupported_fallback_sync",
+                         model=request.model)
+                resp = await self._image_sync_inline(kwargs)
 
         status_code = getattr(resp, "status_code", None)
         output = getattr(resp, "output", None)

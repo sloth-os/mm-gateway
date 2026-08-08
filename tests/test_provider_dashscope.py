@@ -14,17 +14,21 @@ DashScope serves two image surfaces, and the adapter routes by model family:
   stays on the **image-synthesis** surface (``AioImageSynthesis``) — a
   prompt-shaped body, with finished images in ``output.results[].url``.
 
-Both surfaces try the **native async task path** first (``async_call`` submits
-a real task id, ``wait`` blocks until SUCCEEDED) — the unrestricted route that
-serves every model including ``qwen-image-2.0-pro``. When the backend rejects
-async submission (403 / "does not support asynchronous calls") the adapter
-falls back to the synchronous inline path (``sync_call`` on the synthesis
-surface, ``call`` on the generation surface — both headerless). Both are wrapped
-as a synthetic in-memory task by ``SyncImageTaskMixin``: ``create_image_task``
-mints a gateway-local ``img-`` id and returns ``pending``; the first
-``get_image_task`` poll runs the blocking generation and moves the task to
-``succeeded``/``failed``. Video stays on the native ``async_call`` / ``fetch``
-flow, which is unaffected.
+Both surfaces try the **native async task path** by default (``async_call``
+submits a real task id, ``wait`` blocks until SUCCEEDED) — the unrestricted
+route that serves every model including ``qwen-image-2.0-pro``. When the
+backend rejects async submission (403 / "does not support asynchronous calls")
+the adapter falls back to the synchronous inline path (``sync_call`` on the
+synthesis surface, ``call`` on the generation surface — both headerless). When
+the front end asks to block (``sync=True`` from ``wait=true`` or the
+``image_sync_default`` setting) the adapter uses the synchronous inline path
+*directly*, skipping async submit/wait — important on third-party
+DashScope-compatible gateways whose async task poll endpoint is broken. Both
+are wrapped as a synthetic in-memory task by ``SyncImageTaskMixin``:
+``create_image_task`` mints a gateway-local ``img-`` id and returns
+``pending``; the first ``get_image_task`` poll runs the blocking generation and
+moves the task to ``succeeded``/``failed``. Video stays on the native
+``async_call`` / ``fetch`` flow, which is unaffected.
 
 Regression note: ``_generate_image`` must not touch ``request.prompt_extend`` —
 ``UnifiedImageRequest`` has no such field, and the old code raised
@@ -319,6 +323,47 @@ def test_image_falls_back_to_sync_when_async_raises_rejection(
     assert task.status == "succeeded"
 
 
+def test_image_sync_intent_uses_sync_inline(provider: DashScopeProvider) -> None:
+    """A ``sync=True`` create goes straight to the synchronous inline
+    ``sync_call`` (``BaseAioApi.call``, no ``X-DashScope-Async`` header) and
+    never touches the native async submit/wait path.
+
+    This is the ``wait=true`` path: the front end asked to block, so the adapter
+    must use DashScope's synchronous API — not submit an async task and poll it
+    (which is the path that breaks on third-party gateways whose task poll
+    endpoint returns 500 SYSTEM_ERROR).
+    """
+    img = provider._fake_image  # type: ignore[attr-defined]
+    req = UnifiedImageRequest(
+        model="wanx2.1-t2i-turbo", content=[image_text_part("a cat")]
+    )
+    task = asyncio.run(provider.create_image_task(req, sync=True))
+    assert task.status == "pending" and img.async_calls == 0 and img.sync_calls == 0
+    task = asyncio.run(provider.get_image_task(task.task_id))
+    # sync_call used directly; native async submit/wait never attempted.
+    assert img.async_calls == 0 and img.wait_calls == []
+    assert img.sync_calls == 1
+    assert img.sync_kwargs["model"] == "wanx2.1-t2i-turbo"
+    assert img.sync_kwargs["base_address"] is None  # default image base (no override)
+    assert task.status == "succeeded"
+    assert task.images[0].url == "https://dashscope.test/img.png"
+
+
+def test_image_sync_intent_is_native_async_when_false(
+    provider: DashScopeProvider,
+) -> None:
+    """``sync=False`` (or absent) keeps the native async task path — existing
+    behavior preserved for clients that want a task id back to poll themselves."""
+    img = provider._fake_image  # type: ignore[attr-defined]
+    req = UnifiedImageRequest(
+        model="wanx2.1-t2i-turbo", content=[image_text_part("a cat")]
+    )
+    task = asyncio.run(provider.create_image_task(req, sync=False))
+    task = asyncio.run(provider.get_image_task(task.task_id))
+    assert img.async_calls == 1 and img.wait_calls == ["ds-task-1"]
+    assert img.sync_calls == 0
+
+
 def test_image_failed_status_is_clean_error(provider: DashScopeProvider) -> None:
     """A wait whose response is not SUCCEEDED (e.g. an upstream error or a
     non-DashScope-shaped body when base_url is pointed elsewhere) surfaces as a
@@ -502,6 +547,28 @@ def test_generation_falls_back_to_sync_when_async_raises_rejection(
     task = asyncio.run(provider.get_image_task(task.task_id))
     assert gen.async_calls == 1 and gen.sync_calls == 1
     assert task.status == "succeeded"
+
+
+def test_generation_sync_intent_uses_sync_inline(
+    provider: DashScopeProvider,
+) -> None:
+    """A ``sync=True`` create on the generation surface goes straight to
+    ``AioImageGeneration.call`` (the synchronous inline multimodal-generation
+    path) and never touches async submit/wait."""
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    req = UnifiedImageRequest(
+        model="wan2.7-image", content=[image_text_part("a cat")]
+    )
+    task = asyncio.run(provider.create_image_task(req, sync=True))
+    task = asyncio.run(provider.get_image_task(task.task_id))
+    assert gen.async_calls == 0 and gen.wait_calls == []
+    assert gen.sync_calls == 1
+    assert gen.sync_kwargs["model"] == "wan2.7-image"
+    assert gen.sync_kwargs["messages"] == [
+        {"role": "user", "content": [{"text": "a cat"}]}
+    ]
+    assert task.status == "succeeded"
+    assert task.images[0].url == "https://dashscope.test/gen.png"
 
 
 def test_generation_failed_status_is_clean_error(provider: DashScopeProvider) -> None:

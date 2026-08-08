@@ -51,12 +51,19 @@ class Provider(ABC):
 
 class ImageProvider(Provider):
     @abstractmethod
-    async def create_image_task(self, request: UnifiedImageRequest) -> UnifiedImageTask:
+    async def create_image_task(
+        self, request: UnifiedImageRequest, *, sync: bool | None = None,
+    ) -> UnifiedImageTask:
         """Submit an image generation task; return a handle the gateway can poll.
 
         For synchronous providers (OpenAI, Imagen, Stability, xAI, Volcengine,
         FLUX) the adapter mints a synthetic in-memory task id and runs the
         blocking call on the first poll, so the create/poll surface is uniform.
+
+        ``sync`` carries the front-end's resolved sync/async intent (``wait=true``
+        or the ``image_sync_default`` setting → ``True``). Providers that expose
+        both a synchronous inline API and a native async task API (DashScope) use
+        it to pick; providers with a single path ignore it.
         """
         ...
 

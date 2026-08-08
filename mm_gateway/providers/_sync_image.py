@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 from mm_gateway.core.exceptions import (
     GatewayError,
@@ -36,16 +36,26 @@ class SyncImageTaskMixin:
     runs) and implement ``async def _generate_image(request) -> UnifiedImageResponse``.
     """
 
+    # Providers whose ``_generate_image`` selects between a synchronous inline
+    # upstream API and a native async task API from the ``sync`` intent
+    # (DashScope) set this True so the mixin threads ``sync`` through. Providers
+    # with a single path leave it False and keep the ``_generate_image(request)``
+    # signature.
+    _sync_aware_image: ClassVar[bool] = False
+
     def __init__(self, backend: Any) -> None:
         super().__init__(backend)  # type: ignore[misc]
         self._image_tasks: dict[str, dict[str, Any]] = {}
 
-    async def create_image_task(self, request: UnifiedImageRequest) -> UnifiedImageTask:
+    async def create_image_task(
+        self, request: UnifiedImageRequest, *, sync: bool | None = None,
+    ) -> UnifiedImageTask:
         task_id = f"img-{uuid.uuid4().hex}"
         created_at = int(time.time())
         self._image_tasks[task_id] = {
             "model": request.model,
             "request": request,
+            "sync": sync,
             "status": "pending",
             "created_at": created_at,
         }
@@ -68,11 +78,20 @@ class SyncImageTaskMixin:
                 error=rec.get("error"), usage=rec.get("usage"),
                 created_at=rec["created_at"], completed_at=rec.get("completed_at"),
             )
-        # Run the blocking generation now.
+        # Run the blocking generation now. ``sync`` carries the front-end's
+        # resolved sync/async intent; providers that expose both a synchronous
+        # inline API and a native async task API (DashScope) opt in via
+        # ``_sync_aware_image`` and use it to pick the upstream path.
         rec["status"] = "running"
         request: UnifiedImageRequest = rec["request"]
+        sync = rec.get("sync")
         try:
-            resp: UnifiedImageResponse = await self._generate_image(request)  # type: ignore[attr-defined]
+            if self._sync_aware_image:
+                resp: UnifiedImageResponse = await self._generate_image(  # type: ignore[attr-defined,call-arg]
+                    request, sync=sync,
+                )
+            else:
+                resp = await self._generate_image(request)  # type: ignore[attr-defined]
         except TaskFailedError as exc:
             rec["status"] = "failed"; rec["error"] = exc.message
             raise

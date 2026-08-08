@@ -49,7 +49,9 @@ class FakeProvider(ImageProvider, VideoProvider, MusicProvider):
         # routing/store layers can look the owning backend up by it.
         return self.backend.name
 
-    async def create_image_task(self, request: UnifiedImageRequest) -> UnifiedImageTask:
+    async def create_image_task(
+        self, request: UnifiedImageRequest, *, sync: bool | None = None,
+    ) -> UnifiedImageTask:
         self.image_calls.append(request)
         task_id = f"img-{len(self.image_calls)}"
         self._tasks[task_id] = "pending"

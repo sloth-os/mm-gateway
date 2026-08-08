@@ -61,9 +61,15 @@ class ImageService:
                 code="unsupported_feature", status_code=400,
             )
         routed = request.model_copy(update={"model": real_model, "provider": backend})
+        # Resolve the front-end's sync/async intent once here: ``wait`` wins when
+        # explicit, else the ``image_sync_default`` setting. Passed down to the
+        # provider so a sync-aware adapter (DashScope) can pick its synchronous
+        # inline upstream API instead of a native async task when the caller
+        # asked to block.
+        want_sync = wait if wait is not None else self.sync_default
         with timed(backend, "image"):
             try:
-                task = await provider_obj.create_image_task(routed)
+                task = await provider_obj.create_image_task(routed, sync=want_sync)
             except GatewayError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -71,7 +77,7 @@ class ImageService:
                                    code="provider_error", status_code=502) from exc
         # Stamp the owning backend so the poll route can route correctly.
         task.provider = backend
-        if (wait if wait is not None else self.sync_default):
+        if want_sync:
             task = await self._await_or_timeout(provider_obj, task)
         return task
 
