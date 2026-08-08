@@ -438,6 +438,42 @@ For OpenAI (and OpenAI-compatible endpoints), the base URL should **include
 Without `DOCKERHUB_*` the image is published to GHCR only, so the workflow stays
 green before any secrets are configured.
 
+## API docs (OpenAPI)
+
+The gateway's FastAPI app auto-generates an OpenAPI 3.x (Swagger) spec from its
+routes and Pydantic models. The schema is **independent of provider
+configuration** — the routes are registered unconditionally in `create_app`, and
+provider credentials only affect runtime behaviour (which models
+`GET /v1/models` lists), not the route and response shapes — so the spec is
+generated headlessly with no secrets or network.
+
+`.github/workflows/openapi.yml` runs on push/PR to `main` (when routes, schemas,
+`config.py`, or the generator change) and on manual dispatch:
+
+1. **Generate** — `scripts/generate_openapi.py` builds the app with an empty
+   `Settings()` and dumps `app.openapi()` to `docs/openapi.json`, sanity-checking
+   that the expected paths are present so a broken route module can't publish an
+   empty spec.
+2. **Commit** (push to `main` only) — regenerates the spec in-place and commits
+   it back to `main` when it changed, so the checked-in `docs/openapi.json` stays
+   in sync with the code. The auto-commit only touches `docs/openapi.json`
+   (outside the trigger paths), so it does not re-trigger this workflow.
+3. **Deploy to GitHub Pages** (push to `main` only) — publishes the spec + a
+   static Swagger UI page to `https://<owner>.github.io/<repo>/`. This requires a
+   one-time setup: **Settings → Pages → Source = "GitHub Actions"**. Until Pages
+   is enabled the deploy job is the only step that fails; the spec is still
+   committed and uploaded as a run artifact. On a PR only the generate step
+   runs (a sanity check that the spec still builds).
+
+Generate it locally:
+
+```bash
+python scripts/generate_openapi.py docs/openapi.json
+```
+
+A running gateway also serves the spec at `/openapi.json`, plus interactive
+Swagger UI at `/docs` and ReDoc at `/redoc` (FastAPI defaults).
+
 ## License
 
 Apache-2.0.
