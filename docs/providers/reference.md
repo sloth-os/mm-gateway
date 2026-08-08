@@ -60,6 +60,12 @@ Models/params marked *(docs)* are from official docs, not the installed SDK.
     - `error` (`ContentGenerationError`): `message`, `code`.
     - `usage` (`Usage`): `completion_tokens`, `total_tokens`.
   - `tasks` also exposes `.list(page_num=, page_size=, status=, task_ids=, model=, service_tier=)` and `.delete(task_id=)`; there is **no** `.cancel`.
+- **Sync vs async URL**: two `AsyncArk` clients — image (Seedream) on
+  `base_url` (the `*_IMAGE_BASE_URL` sync endpoint) and video (Seedance) on
+  `backend.extra["video_base_url"]` (the `*_VIDEO_BASE_URL` async endpoint,
+  set by `config.py` when it differs from the image one). For the real Ark
+  API both share one host, so the two clients collapse to the same base
+  unless an operator pins them apart.
 
 ## runapi-flux-2 — `runapi.flux_2.Flux2Client` v0.3.1 (sync)
 
@@ -77,10 +83,25 @@ Models/params marked *(docs)* are from official docs, not the installed SDK.
 
 ## dashscope — `dashscope` v1.26.5 (env `DASHSCOPE_API_KEY`)
 
-- **Image (Wanx)**: `dashscope.ImageSynthesis.async_call(model, prompt, n, size="W*H", seed, negative_prompt, prompt_extend)` → `{output:{task_id, task_status:"PENDING"}}`. Poll `fetch(task_id)`/`wait()`; result `output.results[].url` (temp OSS URL).
-  - Models: `wanx2.1-t2i-turbo`, `wanx2.1-t2i-plus`.
-- **Video (Wan)**: `dashscope.VideoSynthesis.async_call(model, prompt, size, duration, img_url, prompt_extend)` → task; result `output.video_url` (single temp OSS URL).
-  - Models: `wanx2.1-t2v-turbo`, `wanx2.1-i2v-turbo`. Use `AioVideoSynthesis` for async.
+- **Image (Wanx/Qwen-Image)**: native async task path first —
+  `AioImageSynthesis.async_call(model, prompt, n, size="W*H", seed, negative_prompt)` →
+  task, then `AioImageSynthesis.wait(task_id)` blocks until
+  `{output:{task_status:"SUCCEEDED", results:[{url}]}}`. This is the
+  unrestricted route serving every model incl. `qwen-image-2.0-pro`. Falls
+  back to `AioImageSynthesis.sync_call(...)` (the headerless inline path via
+  `BaseAioApi.call`, no `X-DashScope-Async: enable`) when the backend rejects
+  async task submission (403 / `AccessDenied` / "does not support asynchronous
+  calls"); the gateway wraps both as a synthetic in-memory task.
+  - Models: `wanx2.1-t2i-turbo`, `wanx2.1-t2i-plus`, `wanx2.1-t2i-flash`,
+    `qwen-image-2.0-pro`.
+- **Video (Wan)**: `AioVideoSynthesis.async_call(model, prompt, size, duration, img_url, prompt_extend)` → task; poll `AioVideoSynthesis.fetch(task_id)`; result `output.video_url` (single temp OSS URL).
+  - Models: `wanx2.1-t2v-turbo`, `wanx2.1-i2v-turbo`, `wanx2.1-t2v-plus`, `wanx2.1-i2v-plus`.
+- **Sync vs async URL**: image calls carry `base_address=backend.base_url`
+  (the `*_IMAGE_BASE_URL` sync endpoint); video calls carry
+  `base_address=backend.extra["video_base_url"]` (the `*_VIDEO_BASE_URL` async
+  endpoint, set by `config.py` when it differs from the image one). Per-call
+  `base_address=` replaces the old module-global
+  `dashscope.base_http_api_url` mutation.
 
 ## stability-sdk — `stability-sdk` v0.2.2 (legacy gRPC)
 

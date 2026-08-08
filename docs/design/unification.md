@@ -19,7 +19,7 @@ unified through a single `UnifiedMusicRequest`/`UnifiedMusicTask` schema and the
 | Volcengine Ark (Seedream/Seedance) | ✅ | ✅ | ❌ | task+poll | `data[].url|b64_json` | `ARK_API_KEY` |
 | FLUX.2 (runapi) | ✅ | ❌ | ❌ | n/a | `images[].url` | `RUNAPI_API_KEY` |
 | OpenRouter (unified) | ✅ | ✅ | ❌ | job+poll | `data[].b64_json` | `OPENROUTER_API_KEY` |
-| DashScope (Wanx/Wan) | ✅ | ✅ | ❌ | task+poll | `results[].url` / `video_url` | `DASHSCOPE_API_KEY` |
+| DashScope (Wanx/Qwen-Image/Wan) | ✅ | ✅ | ❌ | task+poll | native async `results[].url` (sync_call fallback) / `video_url` | `DASHSCOPE_API_KEY` |
 | Stability (SD/SVD) | ✅ | ✅ | ❌ | sync image / async video | base64 / MP4 bytes | `STABILITY_API_KEY` |
 | ElevenLabs (music) | ❌ | ❌ | ✅ | n/a | streamed bytes → base64 (`audio/mpeg`) | `ELEVENLABS_API_KEY` |
 | MiniMax (music) | ❌ | ❌ | ✅ | n/a | 24h URL (default) → `audio_urls`, or hex bytes → base64 | `MINIMAX_API_KEY` |
@@ -44,10 +44,13 @@ so a client never has to learn provider-specific shapes.
    bytes), URL (DALL·E, FLUX, DashScope, Volcengine, xAI). The adapter
    normalises to whichever `response_format` the client asked for: a URL result
    is downloaded+base64-encoded for `b64_json`; a b64 result can stay as-is.
-2. **Sync vs async video** — image gen is synchronous everywhere; video gen is
-   *always* async (task + poll) on every provider. The unified video API
-   therefore exposes a task lifecycle (`pending → running → succeeded | failed`)
-   and the gateway optionally blocks (sync-style) up to `MAX_SYNC_WAIT`.
+2. **Sync vs async video** — image gen is synchronous on most providers;
+   DashScope is the exception (native async task API for image, with a
+   `sync_call` fallback when the backend rejects async submission — see the
+   DashScope adapter docstring). Video gen is *always* async (task + poll) on
+   every provider. The unified video API therefore exposes a task lifecycle
+   (`pending → running → succeeded | failed`) and the gateway optionally blocks
+   (sync-style) up to `MAX_SYNC_WAIT`.
 3. **Polling shape** — OpenAI `videos.retrieve`, Google `operations.get`,
    Volcengine `GET .../tasks/{id}`, DashScope `fetch`, xAI `video.get`,
    OpenRouter `GET /videos/{id}`, FLUX `text_to_image.get`. The adapter hides
@@ -242,8 +245,10 @@ forwards a curated set of provider-specific extras verbatim:
   the legacy un-split `*_API_KEY` / `*_BASE_URL` / `*_MODEL`. The shared
   `base_url` is resolved modality-first (`*_IMAGE_BASE_URL` → legacy
   `*_BASE_URL` → `*_VIDEO_BASE_URL` → `*_MUSIC_BASE_URL`, preferring image as
-  the primary surface); the split `*_MUSIC_BASE_URL`, when it differs from
-  `base_url`, is separately recorded as `backend.extra["music_base_url"]`
+  the primary surface); the split `*_VIDEO_BASE_URL` and `*_MUSIC_BASE_URL`,
+  when they differ from `base_url`, are separately recorded as
+  `backend.extra["video_base_url"]` (consumed by the DashScope and Volcengine
+  adapters as the async task endpoint) and `backend.extra["music_base_url"]`
   (consumed by the Google provider's `_music_base`). ACE-Step requires
   `ACESTEP_BASE_URL` (self-hosted, no default host); its API key is optional
   at the adapter level, but a backend only registers when at least one
