@@ -49,8 +49,9 @@ Both paths are wrapped as a synthetic task by ``SyncImageTaskMixin``:
 ``create_image_task`` mints a gateway-local ``img-`` id and returns ``pending``;
 the first ``get_image_task`` poll runs the blocking generation (native async
 ``wait``, or the ``sync_call`` fallback) and moves the task to
-``succeeded``/``failed``. Video stays on the native ``async_call`` / ``fetch``
-flow, which is unaffected.
+``succeeded``/``failed``. Video submits via the SDK's native ``async_call`` (the
+``X-DashScope-Async`` task path) but polls by hand over httpx — see
+``get_video_task`` for why the SDK's ``fetch`` is bypassed.
 
 Sync vs async base URL: the SDK honours a per-call ``base_address=`` kwarg
 (verified in the installed ``dashscope`` source — ``_build_api_request`` pops
@@ -74,6 +75,7 @@ import time
 from typing import Any, ClassVar
 
 import dashscope
+import httpx
 from dashscope.aigc.image_generation import AioImageGeneration
 from dashscope.aigc.image_synthesis import AioImageSynthesis
 from dashscope.aigc.video_synthesis import AioVideoSynthesis
@@ -89,10 +91,16 @@ from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import (
     ProviderNotConfiguredError,
     ProviderRequestError,
+    ProviderTimeoutError,
     TaskFailedError,
 )
-from mm_gateway.observability.httplog import log_backend_request, log_backend_response
+from mm_gateway.observability.httplog import (
+    backend_event_hooks,
+    log_backend_request,
+    log_backend_response,
+)
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._http import _map_status
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
     ImageData,
@@ -100,7 +108,7 @@ from mm_gateway.schemas.image import (
     UnifiedImageRequest,
     UnifiedImageResponse,
 )
-from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
+from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask, VideoUsage
 
 log = get_logger("provider.dashscope")
 
@@ -172,6 +180,7 @@ def _install_dashscope_logging() -> None:
                 async for item in result:
                     _dashscope_log_response(item, self.url)
                     yield item
+
             return _logged_stream()
         _dashscope_log_response(result, self.url)
         return result
@@ -204,13 +213,17 @@ _BASE_FETCH = BaseAsyncAioApi.fetch.__func__
 
 def _make_forwarding_wait(resp_cls):
     @classmethod  # type: ignore[misc]
-    async def wait(cls_, task, api_key=None, workspace=None,
-                   wait_timeout=-1, **kwargs):
+    async def wait(cls_, task, api_key=None, workspace=None, wait_timeout=-1, **kwargs):
         r = await _BASE_WAIT(
-            cls_, task, api_key, workspace=workspace,
-            wait_timeout=wait_timeout, **kwargs,
+            cls_,
+            task,
+            api_key,
+            workspace=workspace,
+            wait_timeout=wait_timeout,
+            **kwargs,
         )
         return resp_cls.from_api_response(r)
+
     return wait
 
 
@@ -218,9 +231,14 @@ def _make_forwarding_fetch(resp_cls):
     @classmethod  # type: ignore[misc]
     async def fetch(cls_, task, api_key=None, workspace=None, **kwargs):
         r = await _BASE_FETCH(
-            cls_, task, api_key=api_key, workspace=workspace, **kwargs,
+            cls_,
+            task,
+            api_key=api_key,
+            workspace=workspace,
+            **kwargs,
         )
         return resp_cls.from_api_response(r)
+
     return fetch
 
 
@@ -320,7 +338,21 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         # host when the two differ.
         dashscope.api_key = backend.api_key
         self._image_base = backend.base_url or None
-        self._video_base = backend.extra.get("video_base_url") or backend.base_url or None
+        self._video_base = (
+            backend.extra.get("video_base_url") or backend.base_url or None
+        )
+        # Dedicated httpx client for the video *poll*. The SDK's
+        # ``AioVideoSynthesis.fetch`` is bypassed here (see ``get_video_task``):
+        # its ``_build_api_request`` re-appends a trailing slash to the task URL,
+        # which the third-party proxy rejects with ``500 SYSTEM_ERROR``. The
+        # client carries no ``base_url`` — the full slashless URL is built per
+        # call so httpx's relative-URL path-joining cannot silently drop the
+        # ``/v1`` segment. The auth header rides on the client.
+        self._client_video = httpx.AsyncClient(
+            timeout=300.0,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            event_hooks=backend_event_hooks(),
+        )
 
     @staticmethod
     def _is_generation_model(model: str) -> bool:
@@ -409,9 +441,7 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
                     urls.append(url)
         return [ImageData(url=u) for u in urls]
 
-    async def _image_generation_native_async(
-        self, kwargs: dict[str, Any]
-    ) -> Any:
+    async def _image_generation_native_async(self, kwargs: dict[str, Any]) -> Any:
         """Submit a multimodal-generation task and block until it finishes.
 
         Mirrors ``_image_native_async`` but on the generation surface: the
@@ -423,7 +453,7 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             )
         except _AsyncNotSupported:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if _is_async_rejection(None, type(exc).__name__, str(exc)):
                 raise _AsyncNotSupported() from exc
             raise ProviderRequestError(
@@ -448,27 +478,28 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             resp = await AioImageGeneration.wait(
                 task_id, api_key=self._api_key, base_address=self._image_base
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(
                 f"dashscope image wait failed: {exc}", provider="dashscope"
             ) from exc
         return resp
 
-    async def _image_generation_sync_inline(
-        self, kwargs: dict[str, Any]
-    ) -> Any:
+    async def _image_generation_sync_inline(self, kwargs: dict[str, Any]) -> Any:
         """Synchronous multimodal-generation call — finished images inline."""
         try:
             return await AioImageGeneration.call(
                 api_key=self._api_key, base_address=self._image_base, **kwargs
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(
                 f"dashscope image failed: {exc}", provider="dashscope"
             ) from exc
 
     async def _generate_image_generation(
-        self, request: UnifiedImageRequest, *, sync: bool | None = None,
+        self,
+        request: UnifiedImageRequest,
+        *,
+        sync: bool | None = None,
     ) -> UnifiedImageResponse:
         """Generate via the multimodal-generation surface (Wan2.x-image family).
 
@@ -487,8 +518,10 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             try:
                 resp = await self._image_generation_native_async(kwargs)
             except _AsyncNotSupported:
-                log.info("dashscope_image_async_unsupported_fallback_sync",
-                         model=request.model)
+                log.info(
+                    "dashscope_image_async_unsupported_fallback_sync",
+                    model=request.model,
+                )
                 resp = await self._image_generation_sync_inline(kwargs)
 
         status_code = getattr(resp, "status_code", None)
@@ -522,7 +555,7 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             )
         except _AsyncNotSupported:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             if _is_async_rejection(None, type(exc).__name__, str(exc)):
                 raise _AsyncNotSupported() from exc
             raise ProviderRequestError(
@@ -548,7 +581,7 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             resp = await AioImageSynthesis.wait(
                 task_id, api_key=self._api_key, base_address=self._image_base
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(
                 f"dashscope image wait failed: {exc}", provider="dashscope"
             ) from exc
@@ -565,13 +598,16 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             return await AioImageSynthesis.sync_call(
                 api_key=self._api_key, base_address=self._image_base, **kwargs
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(
                 f"dashscope image failed: {exc}", provider="dashscope"
             ) from exc
 
     async def _generate_image(
-        self, request: UnifiedImageRequest, *, sync: bool | None = None,
+        self,
+        request: UnifiedImageRequest,
+        *,
+        sync: bool | None = None,
     ) -> UnifiedImageResponse:
         """Generate one image set, routed by model family to its surface.
 
@@ -597,8 +633,10 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             try:
                 resp = await self._image_native_async(kwargs)
             except _AsyncNotSupported:
-                log.info("dashscope_image_async_unsupported_fallback_sync",
-                         model=request.model)
+                log.info(
+                    "dashscope_image_async_unsupported_fallback_sync",
+                    model=request.model,
+                )
                 resp = await self._image_sync_inline(kwargs)
 
         status_code = getattr(resp, "status_code", None)
@@ -656,27 +694,92 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         )
 
     async def get_video_task(self, task_id: str) -> UnifiedVideoTask:
+        # Poll by hand over httpx rather than via ``AioVideoSynthesis.fetch``.
+        # The SDK's ``_build_api_request`` re-appends a trailing slash to the
+        # task URL (``/v1/tasks/{id}/``) after ``_normalization_url``/``join_url``
+        # strip it; the third-party DashScope-compatible proxy
+        # ``ai.ctaigw.cn`` answers ``GET /v1/tasks/{id}`` with 200 but
+        # ``GET /v1/tasks/{id}/`` with ``500 SYSTEM_ERROR``. A slashed URL
+        # therefore makes every poll 500 upstream; ``from_api_response`` then
+        # omits ``output`` on the non-200, so ``status.output.task_status``
+        # raises ``AttributeError`` and surfaces as a 502 here. Issuing the GET
+        # ourselves (no trailing slash) matches the working curl example and
+        # lets us defend against non-200 / missing-output bodies cleanly.
+        base = (self._video_base or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
+        url = f"{base}/tasks/{task_id}"
         try:
-            status = await AioVideoSynthesis.fetch(
-                task_id, api_key=self._api_key, base_address=self._video_base
-            )
-        except Exception as exc:
-            raise ProviderRequestError(
-                f"dashscope video poll failed: {exc}", provider="dashscope"
+            resp = await self._client_video.get(url)
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError(
+                f"dashscope video poll timed out: {exc}", provider="dashscope"
             ) from exc
-        st = _STATUS_MAP.get(status.output.task_status, "running")
-        model = getattr(status.output, "model", "") or ""
+        except httpx.HTTPError as exc:
+            raise ProviderRequestError(
+                f"dashscope video poll transport error: {exc}", provider="dashscope"
+            ) from exc
+
+        if resp.status_code >= 400:
+            raise ProviderRequestError(
+                f"dashscope video poll returned HTTP {resp.status_code}",
+                provider="dashscope",
+                status_code=_map_status(resp.status_code),
+                details={
+                    "upstream_status": resp.status_code,
+                    "upstream_body": resp.text[:1000],
+                },
+            )
+
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise ProviderRequestError(
+                f"dashscope video poll returned non-JSON body: {exc}",
+                provider="dashscope",
+                details={
+                    "upstream_status": resp.status_code,
+                    "upstream_body": resp.text[:1000],
+                },
+            ) from exc
+
+        output = data.get("output") if isinstance(data, dict) else None
+        if not isinstance(output, dict):
+            # No ``output`` block (e.g. an upstream error envelope) — surface it
+            # instead of dereferencing None and crashing.
+            code = data.get("code") if isinstance(data, dict) else None
+            message = data.get("message") if isinstance(data, dict) else None
+            raise ProviderRequestError(
+                f"dashscope video poll returned no output: code={code} message={message}",
+                provider="dashscope",
+                details={
+                    "upstream_status": resp.status_code,
+                    "upstream_body": str(data)[:1000],
+                },
+            )
+
+        task_status = output.get("task_status")
+        st = _STATUS_MAP.get(task_status, "running")
         task = UnifiedVideoTask(
-            task_id=task_id, provider=self.name, model=model, status=st
+            task_id=task_id,
+            provider=self.name,
+            model=output.get("model") or "",
+            status=st,
+            raw=data,
         )  # type: ignore[arg-type]
         if st == "succeeded":
-            url = getattr(status.output, "video_url", None)
-            if url:
-                task.video_urls = [url]
-            if getattr(status, "usage", None):
-                task.usage = None  # populated if present
+            video_url = output.get("video_url")
+            if video_url:
+                task.video_urls = [video_url]
+            usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
+            if usage:
+                task.usage = VideoUsage(
+                    video_count=usage.get("video_count"),
+                    video_duration=usage.get("video_duration"),
+                    extra={
+                        k: v
+                        for k, v in usage.items()
+                        if k not in ("video_count", "video_duration")
+                    },
+                )
         elif st in ("failed", "cancelled", "expired"):
-            task.error = (
-                getattr(status.output, "message", None) or status.output.task_status
-            )
+            task.error = output.get("message") or task_status or st
         return task

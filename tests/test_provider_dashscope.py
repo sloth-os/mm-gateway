@@ -41,6 +41,7 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from mm_gateway.config import BackendConfig
@@ -102,7 +103,9 @@ class FakeImageSynthesis:
                 message="current user api does not support asynchronous calls",
                 output=None,
             )
-        return SimpleNamespace(status_code=200, output=SimpleNamespace(task_id="ds-task-1"))
+        return SimpleNamespace(
+            status_code=200, output=SimpleNamespace(task_id="ds-task-1")
+        )
 
     async def wait(self, task_id: str, **kwargs: Any) -> Any:
         self.wait_kwargs = kwargs
@@ -165,7 +168,9 @@ class FakeImageGeneration:
                 message="current user api does not support asynchronous calls",
                 output=None,
             )
-        return SimpleNamespace(status_code=200, output=SimpleNamespace(task_id="gen-task-1"))
+        return SimpleNamespace(
+            status_code=200, output=SimpleNamespace(task_id="gen-task-1")
+        )
 
     async def wait(self, task_id: str, **kwargs: Any) -> Any:
         self.wait_kwargs = kwargs
@@ -216,6 +221,25 @@ def provider(monkeypatch: pytest.MonkeyPatch) -> DashScopeProvider:
     p._fake_image_gen = gen  # type: ignore[attr-defined]
     p._fake_video = vid  # type: ignore[attr-defined]
     return p
+
+
+def _mount_video(provider: DashScopeProvider, handler) -> list[str]:
+    """Replace the provider's video-poll httpx client with a ``MockTransport``
+    driven by ``handler``; return the list of polled URLs (captured in order).
+
+    The video *poll* is hand-rolled over httpx (see ``get_video_task``): it no
+    longer goes through the SDK's ``AioVideoSynthesis.fetch``, so video-poll
+    tests script the response here rather than queueing ``_fake_video`` results.
+    The client carries no base_url — the adapter builds the full slashless URL.
+    """
+    captured: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(str(request.url))
+        return handler(request)
+
+    provider._client_video = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    return captured
 
 
 def test_provider_requires_api_key() -> None:
@@ -438,9 +462,7 @@ def test_generation_routes_wan27_image_to_generation_surface(
     synthesis surface — it must hit ``AioImageGeneration`` and never
     ``AioImageSynthesis`` (the regression: routing it through synthesis returns
     ``400 InvalidParameter: url error``)."""
-    req = UnifiedImageRequest(
-        model="wan2.7-image", content=[image_text_part("a cat")]
-    )
+    req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("a cat")])
     task = asyncio.run(provider.create_image_task(req))
     task = asyncio.run(provider.get_image_task(task.task_id))
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
@@ -503,9 +525,7 @@ def test_generation_image_extracted_from_choices_content(
     ``output.results[].url``."""
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
     gen._wait_result = _generation_succeeded("https://dashscope.test/a.png")
-    req = UnifiedImageRequest(
-        model="wan2.7-image", content=[image_text_part("x")]
-    )
+    req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("x")])
     task = asyncio.run(provider.create_image_task(req))
     task = asyncio.run(provider.get_image_task(task.task_id))
     assert task.images[0].url == "https://dashscope.test/a.png"
@@ -519,9 +539,7 @@ def test_generation_falls_back_to_sync_when_async_rejected(
     inline ``call`` (``BaseAioApi.call``, no ``X-DashScope-Async`` header)."""
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
     gen.reject_async = True
-    req = UnifiedImageRequest(
-        model="wan2.7-image", content=[image_text_part("a cat")]
-    )
+    req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("a cat")])
     task = asyncio.run(provider.create_image_task(req))
     task = asyncio.run(provider.get_image_task(task.task_id))
     assert gen.async_calls == 1 and gen.sync_calls == 1
@@ -540,9 +558,7 @@ def test_generation_falls_back_to_sync_when_async_raises_rejection(
     also triggers the sync fallback on the generation surface."""
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
     gen.raise_async = "AccessDenied: does not support asynchronous calls"
-    req = UnifiedImageRequest(
-        model="wan2.7-image", content=[image_text_part("a cat")]
-    )
+    req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("a cat")])
     task = asyncio.run(provider.create_image_task(req))
     task = asyncio.run(provider.get_image_task(task.task_id))
     assert gen.async_calls == 1 and gen.sync_calls == 1
@@ -556,9 +572,7 @@ def test_generation_sync_intent_uses_sync_inline(
     ``AioImageGeneration.call`` (the synchronous inline multimodal-generation
     path) and never touches async submit/wait."""
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
-    req = UnifiedImageRequest(
-        model="wan2.7-image", content=[image_text_part("a cat")]
-    )
+    req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("a cat")])
     task = asyncio.run(provider.create_image_task(req, sync=True))
     task = asyncio.run(provider.get_image_task(task.task_id))
     assert gen.async_calls == 0 and gen.wait_calls == []
@@ -579,9 +593,7 @@ def test_generation_failed_status_is_clean_error(provider: DashScopeProvider) ->
     gen._wait_result = SimpleNamespace(
         status_code=400, code="Bad Request", message="no image", output=None
     )
-    req = UnifiedImageRequest(
-        model="wan2.7-image", content=[image_text_part("x")]
-    )
+    req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("x")])
     task = asyncio.run(provider.create_image_task(req))
     with pytest.raises(TaskFailedError) as ei:
         asyncio.run(provider.get_image_task(task.task_id))
@@ -594,12 +606,12 @@ def test_generation_empty_choices_is_failed(provider: DashScopeProvider) -> None
     """A 200 response with no image items surfaces as a clean TaskFailedError."""
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
     gen._wait_result = SimpleNamespace(
-        status_code=200, code=None, message=None,
+        status_code=200,
+        code=None,
+        message=None,
         output=SimpleNamespace(choices=[]),
     )
-    req = UnifiedImageRequest(
-        model="wan2.7-image", content=[image_text_part("x")]
-    )
+    req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("x")])
     task = asyncio.run(provider.create_image_task(req))
     with pytest.raises(TaskFailedError):
         asyncio.run(provider.get_image_task(task.task_id))
@@ -612,9 +624,7 @@ def test_generation_propagates_non_rejection_submit_error(
     ProviderRequestError (no silent fallback) on the generation surface too."""
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
     gen.raise_async = "model not found"  # no rejection markers
-    req = UnifiedImageRequest(
-        model="wan2.7-image", content=[image_text_part("x")]
-    )
+    req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("x")])
     task = asyncio.run(provider.create_image_task(req))
     with pytest.raises(ProviderRequestError):
         asyncio.run(provider.get_image_task(task.task_id))
@@ -628,9 +638,11 @@ def test_generation_routes_other_image_models_to_synthesis(
     ``AioImageGeneration``."""
     for model in ("wanx2.1-t2i-turbo", "qwen-image-2.0-pro"):
         req = UnifiedImageRequest(model=model, content=[image_text_part("a cat")])
-        asyncio.run(provider.get_image_task(
-            asyncio.run(provider.create_image_task(req)).task_id
-        ))
+        asyncio.run(
+            provider.get_image_task(
+                asyncio.run(provider.create_image_task(req)).task_id
+            )
+        )
     syn = provider._fake_image  # type: ignore[attr-defined]
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
     assert syn.async_calls == 2  # both models went through synthesis
@@ -662,7 +674,9 @@ def test_split_sync_async_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     # Image native-async path: async_call + wait both carry the image base.
     itask = asyncio.run(
         p.create_image_task(
-            UnifiedImageRequest(model="wanx2.1-t2i-turbo", content=[image_text_part("x")])
+            UnifiedImageRequest(
+                model="wanx2.1-t2i-turbo", content=[image_text_part("x")]
+            )
         )
     )
     asyncio.run(p.get_image_task(itask.task_id))
@@ -672,20 +686,29 @@ def test_split_sync_async_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     img.reject_async = True
     itask2 = asyncio.run(
         p.create_image_task(
-            UnifiedImageRequest(model="wanx2.1-t2i-turbo", content=[image_text_part("x")])
+            UnifiedImageRequest(
+                model="wanx2.1-t2i-turbo", content=[image_text_part("x")]
+            )
         )
     )
     asyncio.run(p.get_image_task(itask2.task_id))
     assert img.sync_kwargs["base_address"] == "https://image.test"
-    # Video async_call + fetch carry the video base.
+    # Video async_call carries the video base; the poll is hand-rolled over
+    # httpx (no SDK fetch) and must hit the video base too — slashless.
     vtask = asyncio.run(
         p.create_video_task(
             UnifiedVideoRequest(model="wanx2.1-t2v-turbo", content=[text_part("x")])
         )
     )
+    polled = _mount_video(
+        p,
+        lambda req: httpx.Response(200, json={"output": {"task_status": "SUCCEEDED"}}),
+    )
     asyncio.run(p.get_video_task(vtask.task_id))
     assert vid.call_kwargs["base_address"] == "https://video.test"
-    assert vid.fetch_kwargs["base_address"] == "https://video.test"
+    assert polled, "video poll issued no request"
+    assert polled[0] == "https://video.test/tasks/vid-task-1"
+    assert not polled[0].endswith("/"), f"trailing slash re-introduced: {polled[0]}"
 
 
 def test_poll_routes_through_image_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -713,29 +736,42 @@ def test_poll_routes_through_image_base_url(monkeypatch: pytest.MonkeyPatch) -> 
     async def fake_aio_call(self):  # type: ignore[no-untyped-def]
         captured.append(self.url)
         return DashScopeAPIResponse(
-            request_id="r", status_code=200, code=None, message=None,
-            output={"task_status": "SUCCEEDED", "task_id": "t",
-                    "results": [{"url": "https://x/y.png"}],
-                    "video_url": "https://x/v.mp4", "model": "m"},
+            request_id="r",
+            status_code=200,
+            code=None,
+            message=None,
+            output={
+                "task_status": "SUCCEEDED",
+                "task_id": "t",
+                "results": [{"url": "https://x/y.png"}],
+                "video_url": "https://x/v.mp4",
+                "model": "m",
+            },
         )
 
     monkeypatch.setattr(HttpRequest, "aio_call", fake_aio_call)
 
     base = "https://ai.ctaigw.cn/v1"
-    asyncio.run(dashscope_mod.AioImageSynthesis.wait(
-        "syn-1", api_key="k", base_address=base))
-    asyncio.run(dashscope_mod.AioImageGeneration.wait(
-        "gen-1", api_key="k", base_address=base))
-    asyncio.run(dashscope_mod.AioVideoSynthesis.fetch(
-        "vid-1", api_key="k", base_address=base))
+    asyncio.run(
+        dashscope_mod.AioImageSynthesis.wait("syn-1", api_key="k", base_address=base)
+    )
+    asyncio.run(
+        dashscope_mod.AioImageGeneration.wait("gen-1", api_key="k", base_address=base)
+    )
+    asyncio.run(
+        dashscope_mod.AioVideoSynthesis.fetch("vid-1", api_key="k", base_address=base)
+    )
 
     assert captured, "no poll request was issued"
     assert all(u.startswith(base) for u in captured), (
-        f"polls bypassed the proxy base URL: {captured}")
+        f"polls bypassed the proxy base URL: {captured}"
+    )
     assert not any("dashscope.aliyuncs.com" in u for u in captured), (
-        f"polls hit the hardcoded default host instead of the proxy: {captured}")
+        f"polls hit the hardcoded default host instead of the proxy: {captured}"
+    )
     assert all("/tasks/" in u for u in captured), (
-        f"polls did not hit the tasks endpoint: {captured}")
+        f"polls did not hit the tasks endpoint: {captured}"
+    )
 
 
 def test_base_url_forwarding_install_is_idempotent() -> None:
@@ -761,9 +797,9 @@ def test_base_url_forwarding_install_is_idempotent() -> None:
         f"an already-patched surface instead of skipping (before={before}, "
         f"after={after})"
     )
-    assert all(
-        getattr(w, "_mm_gateway_forwarding", False) for w, _ in after
-    ), "forwarding marker missing from an installed wait wrapper"
+    assert all(getattr(w, "_mm_gateway_forwarding", False) for w, _ in after), (
+        "forwarding marker missing from an installed wait wrapper"
+    )
 
 
 def test_video_create_maps_params_and_response(provider: DashScopeProvider) -> None:
@@ -789,14 +825,18 @@ def test_video_create_maps_params_and_response(provider: DashScopeProvider) -> N
 
 
 def test_video_poll_reads_model_from_response(provider: DashScopeProvider) -> None:
-    provider._fake_video.queue(  # type: ignore[attr-defined]
-        SimpleNamespace(
-            output=SimpleNamespace(
-                task_status="SUCCEEDED",
-                video_url="https://dashscope.test/v.mp4",
-                model="wanx2.1-t2v-plus",
-            )
-        )
+    _mount_video(
+        provider,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "video_url": "https://dashscope.test/v.mp4",
+                    "model": "wanx2.1-t2v-plus",
+                },
+            },
+        ),
     )
     task = asyncio.run(provider.get_video_task("vid-task-1"))
     assert task.status == "succeeded"
@@ -805,8 +845,115 @@ def test_video_poll_reads_model_from_response(provider: DashScopeProvider) -> No
 
 
 def test_video_poll_failed(provider: DashScopeProvider) -> None:
-    provider._fake_video.queue(  # type: ignore[attr-defined]
-        SimpleNamespace(output=SimpleNamespace(task_status="FAILED", message="boom"))
+    _mount_video(
+        provider,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "output": {"task_status": "FAILED", "message": "boom"},
+            },
+        ),
     )
     task = asyncio.run(provider.get_video_task("vid-task-1"))
     assert task.status == "failed" and task.error == "boom"
+
+
+def test_video_poll_slashed_url_does_not_500(provider: DashScopeProvider) -> None:
+    """Regression for the CI E2E failure (run 31263106466, job
+    93117291883): the proxy ``ai.ctaigw.cn`` returns ``500 SYSTEM_ERROR`` for
+    ``GET /v1/tasks/{id}/`` (trailing slash) but 200 for the slashless form.
+    The SDK's ``_build_api_request`` re-appended the slash, so every poll 500'd
+    upstream; ``from_api_response`` then omitted ``output`` and the adapter
+    crashed on ``status.output.task_status`` (502 to the frontend). The poll now
+    goes out slashless over httpx.
+    """
+    captured = _mount_video(
+        provider,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "output": {"task_status": "SUCCEEDED", "video_url": "https://x/v.mp4"},
+            },
+        ),
+    )
+    asyncio.run(provider.get_video_task("c39ebb62"))
+    assert captured, "no poll request issued"
+    assert not captured[0].endswith("/"), f"trailing slash re-introduced: {captured[0]}"
+    assert "/tasks/c39ebb62" in captured[0]
+
+
+def test_video_poll_upstream_500_yields_clean_502(
+    provider: DashScopeProvider,
+) -> None:
+    """When the upstream poll returns non-200 (the 500 SYSTEM_ERROR shape),
+    the adapter must raise a clean ``ProviderRequestError`` rather than
+    dereference a missing ``output`` and crash with ``AttributeError``.
+    """
+    _mount_video(
+        provider,
+        lambda req: httpx.Response(
+            500, json={"code": "SYSTEM_ERROR", "message": "internal"}
+        ),
+    )
+    with pytest.raises(ProviderRequestError) as exc:
+        asyncio.run(provider.get_video_task("vid-task-1"))
+    assert "HTTP 500" in str(exc.value)
+
+
+def test_video_poll_missing_output_yields_clean_502(
+    provider: DashScopeProvider,
+) -> None:
+    """A 200 with no ``output`` block (an upstream error envelope) must surface
+    as a ``ProviderRequestError``, not crash on ``None.task_status``.
+    """
+    _mount_video(
+        provider,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "code": "AccessDenied",
+                "message": "no output for you",
+            },
+        ),
+    )
+    with pytest.raises(ProviderRequestError) as exc:
+        asyncio.run(provider.get_video_task("vid-task-1"))
+    assert "no output" in str(exc.value)
+
+
+def test_video_poll_non_json_body_yields_clean_502(
+    provider: DashScopeProvider,
+) -> None:
+    """A non-JSON upstream body must not crash ``resp.json()``; it surfaces as a
+    ``ProviderRequestError``."""
+    _mount_video(
+        provider,
+        lambda req: httpx.Response(
+            200, content=b"<html>bad</html>", headers={"content-type": "text/html"}
+        ),
+    )
+    with pytest.raises(ProviderRequestError) as exc:
+        asyncio.run(provider.get_video_task("vid-task-1"))
+    assert "non-JSON" in str(exc.value)
+
+
+def test_video_poll_maps_usage(provider: DashScopeProvider) -> None:
+    _mount_video(
+        provider,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "video_url": "https://x/v.mp4",
+                    "model": "wanx2.1-t2v-turbo",
+                },
+                "usage": {"video_count": 1, "video_duration": 5, "video_ratio": "16:9"},
+            },
+        ),
+    )
+    task = asyncio.run(provider.get_video_task("vid-task-1"))
+    assert task.status == "succeeded"
+    assert task.usage is not None
+    assert task.usage.video_count == 1 and task.usage.video_duration == 5
+    assert task.usage.extra == {"video_ratio": "16:9"}
