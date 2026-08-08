@@ -27,10 +27,17 @@ class OpenAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         super().__init__(backend)
         if not backend.api_key:
             raise ProviderNotConfiguredError("openai")
-        self._client = AsyncOpenAI(
-            api_key=backend.api_key,
-            base_url=backend.base_url or None,
-        )
+        # Per-modality clients honor the sync/async URL split resolved by
+        # ``config.py``: image (DALL·E/GPT-Image) uses ``base_url`` (the
+        # ``*_IMAGE_BASE_URL`` sync endpoint); video (Sora) uses
+        # ``extra["video_base_url"]`` (the ``*_VIDEO_BASE_URL`` async endpoint)
+        # when it differs from the image one. The real api.openai.com serves
+        # both at one host, so the two clients collapse unless an operator pins
+        # them apart.
+        image_base = backend.base_url or None
+        video_base = backend.extra.get("video_base_url") or image_base
+        self._client = AsyncOpenAI(api_key=backend.api_key, base_url=image_base)
+        self._client_video = AsyncOpenAI(api_key=backend.api_key, base_url=video_base)
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
@@ -89,21 +96,21 @@ class OpenAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         kwargs.update(request.extra)
 
         try:
-            video = await self._client.videos.create(**kwargs)
+            video = await self._client_video.videos.create(**kwargs)
         except Exception as exc:  # noqa: BLE001
             raise ProviderRequestError(f"openai video create failed: {exc}", provider="openai") from exc
         return self._to_task(video)
 
     async def get_video_task(self, task_id: str) -> UnifiedVideoTask:
         try:
-            video = await self._client.videos.retrieve(task_id)
+            video = await self._client_video.videos.retrieve(task_id)
         except Exception as exc:  # noqa: BLE001
             raise ProviderRequestError(f"openai video poll failed: {exc}", provider="openai") from exc
         task = self._to_task(video)
         # Sora does not put the URL on the job object; fetch on completion.
         if task.status == "succeeded" and not task.video_urls:
             try:
-                content = await self._client.videos.download_content(task_id)
+                content = await self._client_video.videos.download_content(task_id)
                 blob = await content.aread()
                 data_url = "data:video/mp4;base64," + base64.b64encode(blob).decode()
                 task.video_urls = [data_url]

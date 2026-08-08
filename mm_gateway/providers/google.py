@@ -49,15 +49,29 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
         super().__init__(backend)
         if not backend.api_key:
             raise ProviderNotConfiguredError("google")
-        kwargs: dict[str, Any] = {"api_key": backend.api_key}
-        if backend.base_url:
-            kwargs["http_options"] = types.HttpOptions(base_url=backend.base_url)
-        self._client = genai.Client(**kwargs)
+        # Per-modality genai clients honor the sync/async URL split resolved by
+        # ``config.py``: image (Imagen/generate_content) uses ``base_url`` (the
+        # ``*_IMAGE_BASE_URL`` sync endpoint); video (Veo) uses
+        # ``extra["video_base_url"]`` (the ``*_VIDEO_BASE_URL`` async endpoint)
+        # when it differs from the image one. The real
+        # generativelanguage.googleapis.com serves both at one host, so the two
+        # clients collapse unless an operator pins them apart.
+        image_base = backend.base_url or None
+        video_base = backend.extra.get("video_base_url") or image_base
+        self._client = self._build_genai_client(backend.api_key, image_base)
+        self._client_video = self._build_genai_client(backend.api_key, video_base)
         # Lyria REST surface. Prefer a music-specific base_url if the operator
         # split Google's modalities; otherwise the same host the SDK uses.
         self._music_base = (backend.extra.get("music_base_url")
                             or backend.base_url or _GLM_BASE).rstrip("/")
         self._api_key = backend.api_key
+
+    @staticmethod
+    def _build_genai_client(api_key: str, base_url: str | None):
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["http_options"] = types.HttpOptions(base_url=base_url)
+        return genai.Client(**kwargs)
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         model = request.model
@@ -144,7 +158,7 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
         config = types.GenerateVideosConfig(**cfg)
 
         try:
-            op = await self._client.aio.models.generate_videos(
+            op = await self._client_video.aio.models.generate_videos(
                 model=request.model, source=source, config=config
             )
         except Exception as exc:  # noqa: BLE001
@@ -159,7 +173,7 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
         # Reconstruct a handle for the LRO so we can poll by name.
         op = types.Operation(name=task_id)  # type: ignore[arg-type]
         try:
-            op = await self._client.aio.operations.get(op)
+            op = await self._client_video.aio.operations.get(op)
         except Exception as exc:  # noqa: BLE001
             raise ProviderRequestError(f"google video poll failed: {exc}", provider="google") from exc
         status: str = "running" if not op.done else "succeeded"

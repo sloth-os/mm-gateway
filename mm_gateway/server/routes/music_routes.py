@@ -2,16 +2,22 @@
 
 Lyria 3 shape (``POST /v1beta/interactions`` mirrored at ``/v1/music``):
 
-- ``POST /v1/music``        -> create task, returns ``{"id": ...}``
-- ``GET  /v1/music/{id}``   -> poll task; response carries ``steps[].content[]``
-                               audio/text blocks plus ``output_audio`` /
-                               ``output_text`` / ``output_audio_url`` helpers.
+- ``POST /v1/music``         -> create task, returns ``{"id": ...}``
+- ``POST /v1/music/async``   -> same, but always async (``wait=False``); the URL
+                                  itself encodes the intent, so ``?wait`` /
+                                  ``Prefer`` are ignored on this path.
+- ``GET  /v1/music/{id}``    -> poll task; response carries ``steps[].content[]``
+                                  audio/text blocks plus ``output_audio`` /
+                                  ``output_text`` / ``output_audio_url`` helpers.
 
-Sync vs async is controlled by the ``Prefer: respond-async`` header or the
-``?wait=true`` query param. Without either, the ``music_sync_default`` setting
-governs. The backend that owns a task id is recorded in the task store at
-creation time so subsequent polls route correctly even though task ids are
-opaque to the gateway. All routes require a valid front-end API key.
+On the base ``/v1/music`` path, sync vs async is controlled by the
+``Prefer: respond-async`` header or the ``?wait=true`` query param. Without
+either, the ``music_sync_default`` setting governs. The ``/async`` sibling is
+the explicit async URL: clients that always want a task id back (and will poll
+themselves) hit it directly and never block. The backend that owns a task id is
+recorded in the task store at creation time so subsequent polls route correctly
+even though task ids are opaque to the gateway. All routes require a valid
+front-end API key.
 """
 
 from __future__ import annotations
@@ -46,23 +52,35 @@ async def _remember(store, task: UnifiedMusicTask) -> None:
     ))
 
 
+async def _create(request: Request, key: KeyConfig, *, wait: bool) -> Any:
+    body = await request.json()
+    unified = lyria_compat.from_lyria(body)
+    tag, backend_name = routing_overrides(request, body)
+    service = request.app.state.music_service
+    task = await service.create(
+        unified, key=key, tag=tag, backend_name=backend_name, wait=wait,
+    )
+    await _remember(request.app.state.task_store, task)
+    out = lyria_compat.to_lyria_create(task)
+    return JSONResponse(content=out)
+
+
 @router.post("/v1/music", tags=["music"])
 async def music_create(
     request: Request,
     key: KeyConfig = Depends(get_api_key),
     wait: bool | None = Query(default=None),
 ) -> Any:
-    body = await request.json()
-    unified = lyria_compat.from_lyria(body)
-    tag, backend_name = routing_overrides(request, body)
-    service = request.app.state.music_service
-    task = await service.create(
-        unified, key=key, tag=tag, backend_name=backend_name,
-        wait=not _is_async(request, wait),
-    )
-    await _remember(request.app.state.task_store, task)
-    out = lyria_compat.to_lyria_create(task)
-    return JSONResponse(content=out)
+    return await _create(request, key, wait=not _is_async(request, wait))
+
+
+@router.post("/v1/music/async", tags=["music"])
+async def music_create_async(
+    request: Request,
+    key: KeyConfig = Depends(get_api_key),
+) -> Any:
+    # The /async URL is unconditionally async — ?wait / Prefer are ignored.
+    return await _create(request, key, wait=False)
 
 
 @router.get("/v1/music/{task_id}", tags=["music"])
@@ -77,3 +95,4 @@ async def music_get(
     task = await service.get(task_id, backend_name=record.provider if record else None)
     out = lyria_compat.to_lyria_task(task)
     return JSONResponse(content=out)
+

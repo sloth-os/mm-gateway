@@ -69,14 +69,35 @@ class XAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         # (the real https://api.x.ai, or a proxy like https://ai.xmiaom.com)
         # is what the spec assumes; strip a trailing "/v1" an operator may have
         # copied from another provider so we always build "/v1/..." ourselves.
-        base = (backend.base_url or "https://api.x.ai").rstrip("/")
-        base = base.removesuffix("/v1")
-        self._base = base
+        # Per-modality clients honor the sync/async URL split resolved by
+        # ``config.py``: image (Grok Imagine image) uses ``base_url`` (the
+        # ``*_IMAGE_BASE_URL`` sync endpoint); video (Grok Imagine video) uses
+        # ``extra["video_base_url"]`` (the ``*_VIDEO_BASE_URL`` async endpoint)
+        # when it differs from the image one. The real api.x.ai serves both at
+        # one host, so the two clients collapse unless an operator pins them
+        # apart.
+        image_base = self._normalise_base(backend.base_url)
+        video_base_url = backend.extra.get("video_base_url")
+        video_base = (self._normalise_base(video_base_url) if video_base_url
+                      else image_base)
+        self._base = image_base
         self._client = make_client(
-            self._base,
+            image_base,
             timeout=180.0,
             headers={"authorization": f"Bearer {backend.api_key}"},
         )
+        self._client_video = make_client(
+            video_base,
+            timeout=180.0,
+            headers={"authorization": f"Bearer {backend.api_key}"},
+        )
+
+    @staticmethod
+    def _normalise_base(base_url: str | None) -> str:
+        # Strip a trailing "/v1" an operator may have copied from another
+        # provider so the adapter always builds "/v1/..." paths itself.
+        base = (base_url or "https://api.x.ai").rstrip("/")
+        return base.removesuffix("/v1")
 
     async def _generate_image(
         self, request: UnifiedImageRequest
@@ -143,7 +164,7 @@ class XAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         body.update(request.extra)
 
         data = await request_json(
-            self._client,
+            self._client_video,
             "POST",
             "/v1/videos/generations",
             provider="xai",
@@ -175,7 +196,7 @@ class XAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         # Poll by hand rather than via request_json: a 202 means "still in
         # progress" and may carry no JSON body, which resp.json() cannot parse.
         try:
-            resp = await self._client.get(f"/v1/videos/{task_id}")
+            resp = await self._client_video.get(f"/v1/videos/{task_id}")
         except httpx.TimeoutException as exc:
             raise ProviderTimeoutError(
                 f"xai video poll timed out: {exc}", provider="xai"

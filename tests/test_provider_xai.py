@@ -29,17 +29,24 @@ def _backend(base_url: str | None = None, *, api_key: str = "xai-key") -> Backen
 
 
 def _mount(provider: XAIProvider, handler) -> None:
-    """Replace the provider's httpx client with one driven by ``handler``.
+    """Replace the provider's httpx clients with one driven by ``handler``.
 
     ``handler`` is an ``httpx.MockTransport`` callable: ``(request) -> Response``.
     Each request the adapter makes flows through it, so the test can both
     inspect the outgoing body and script the response.
+
+    Both the image (``_client``) and video (``_client_video``) clients are
+    pointed at the same mock — the construction split tests below assert the two
+    are wired to distinct bases, but the per-call behaviour tests only care
+    that the request the adapter builds is correct, so one transport suffices.
     """
-    provider._client = httpx.AsyncClient(
+    client = httpx.AsyncClient(
         base_url=provider._base,
         transport=httpx.MockTransport(handler),
         headers={"authorization": "Bearer xai-key"},
     )
+    provider._client = client
+    provider._client_video = client
 
 
 def _body(request: httpx.Request) -> dict[str, Any]:
@@ -83,6 +90,29 @@ def test_init_attaches_bearer_auth_header() -> None:
     # header or the "Bearer " prefix) fails this test, not just the live API.
     p = XAIProvider(_backend(api_key="secret-key"))
     assert p._client.headers["authorization"] == "Bearer secret-key"
+
+
+def test_split_sync_async_base_urls() -> None:
+    """Image and video get separate httpx clients on their respective sync/async
+    base URLs (``base_url`` image/sync; ``extra["video_base_url"]`` video/async,
+    recorded by ``config.py`` when it differs)."""
+    p = XAIProvider(BackendConfig(
+        name="xai", type="xai", api_key="xai-key",
+        base_url="https://image.test/v1/",
+        extra={"video_base_url": "https://video.test/v1"},
+    ))
+    assert p._base == "https://image.test"
+    assert str(p._client.base_url).rstrip("/") == "https://image.test"
+    assert str(p._client_video.base_url).rstrip("/") == "https://video.test"
+    # Both clients carry the Bearer auth header (every endpoint requires it).
+    assert p._client_video.headers["authorization"] == "Bearer xai-key"
+
+
+def test_single_base_url_when_not_split() -> None:
+    """Without a separate video base, both clients share the image base."""
+    p = XAIProvider(_backend("https://ai.xmiaom.com/v1"))
+    assert p._base == "https://ai.xmiaom.com"
+    assert str(p._client.base_url) == str(p._client_video.base_url)
 
 
 # -- image --------------------------------------------------------------- #

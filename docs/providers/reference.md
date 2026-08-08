@@ -9,6 +9,12 @@ Models/params marked *(docs)* are from official docs, not the installed SDK.
 ## openai — `openai` v2.53.0
 
 - **Client**: `from openai import AsyncOpenAI; AsyncOpenAI(api_key=, base_url=)` (env `OPENAI_API_KEY`, `OPENAI_BASE_URL`).
+- **Sync vs async URL**: two `AsyncOpenAI` instances — image (DALL·E/GPT-Image)
+  on `base_url` (the `OPENAI_IMAGE_BASE_URL` sync endpoint) and video (Sora) on
+  `backend.extra["video_base_url"]` (the `OPENAI_VIDEO_BASE_URL` async
+  endpoint, set by `config.py` when it differs from the image one). For the
+  real api.openai.com both share one host, so the two clients collapse to the
+  same base (or `None`, the SDK default) unless an operator pins them apart.
 - **Image**: `client.images.generate(model, prompt, n, size, quality, response_format, style, background, output_format, user, ...)`.
   - Models: `gpt-image-1`, `gpt-image-1-mini`, `gpt-image-2`, `dall-e-2`, `dall-e-3`.
   - GPT-image models **always** return `data[].b64_json`; `dall-e-2/3` return `data[].url` (default) or `b64_json`.
@@ -20,6 +26,14 @@ Models/params marked *(docs)* are from official docs, not the installed SDK.
 ## google-genai — `google-genai` v2.16.0
 
 - **Client**: `from google import genai; client = genai.Client(api_key=)` (env `GOOGLE_API_KEY`/`GEMINI_API_KEY`). Async via `client.aio.models.*`.
+- **Sync vs async URL**: two `genai.Client` instances — image (Imagen /
+  generate_content) on `base_url` (the `GOOGLE_IMAGE_BASE_URL` sync endpoint)
+  and video (Veo) on `backend.extra["video_base_url"]` (the
+  `GOOGLE_VIDEO_BASE_URL` async endpoint, set by `config.py` when it differs
+  from the image one). For the real generativelanguage.googleapis.com both
+  share one host, so the two clients collapse unless an operator pins them
+  apart. Music (Lyria) stays on its own REST base `_music_base`
+  (`music_base_url` → `base_url` → SDK default), independent of both.
 - **Image (Imagen)**: `client.aio.models.generate_images(model, prompt, config=GenerateImagesConfig(...))`.
   - Models: `imagen-4.0-generate-001`, `imagen-3.0-generate-001`.
   - Response: `resp.generated_images[i].image.image_bytes` (bytes; **no URL** on dev API).
@@ -36,6 +50,17 @@ Models/params marked *(docs)* are from official docs, not the installed SDK.
 ## xai-sdk — `xai_sdk` v1.17.0 (gRPC)
 
 - **Client**: `from xai_sdk import AsyncClient` (env `XAI_API_KEY`).
+- **Adapter note**: the adapter no longer imports `xai_sdk`; it speaks the xAI
+  REST API (`POST /v1/images/generations`, `POST /v1/videos/generations` +
+  `GET /v1/videos/{id}`) over httpx, so an operator can point the gateway at any
+  xAI-compatible HTTP endpoint (`XAI_BASE_URL`) — the same 1:1 env contract every
+  other REST adapter honours.
+- **Sync vs async URL**: two `httpx` clients — image (Grok Imagine image) on
+  `base_url` (the `XAI_IMAGE_BASE_URL` sync endpoint) and video (Grok Imagine
+  video) on `backend.extra["video_base_url"]` (the `XAI_VIDEO_BASE_URL` async
+  endpoint, set by `config.py` when it differs from the image one). For the real
+  api.x.ai both share one host, so the two clients collapse unless an operator
+  pins them apart.
 - **Image**: `await client.image.sample(prompt, model, image_format="url|base64", aspect_ratio, resolution)` → `.url` / `.base64` / `.image` (bytes).
   - Models: `grok-imagine-image`, `-pro`, `-quality`. Legacy `grok-2-image-1212` via REST `POST https://api.x.ai/v1/images/generations` only.
 - **Video**: `client.video.start(prompt, model, ...)` → `request_id`; poll `client.video.get(request_id)` until `DONE`. Models: `grok-imagine-video`, `grok-imagine-video-1.5-preview`. Result `.url` (24h TTL). Params: `duration`, `aspect_ratio`, `resolution`, `image_url` (i2v).
@@ -80,6 +105,12 @@ Models/params marked *(docs)* are from official docs, not the installed SDK.
 - **Client**: `OpenRouter(api_key=, server_url=)` (env `OPENROUTER_API_KEY`). Headers `HTTP-Referer`, `X-OpenRouter-Title`.
 - **Unified image API**: `POST /api/v1/images` body `{model, prompt, aspect_ratio, n, output_format, quality, resolution, size, seed, background, input_references:[{type:"image_url",image_url:{url}}], provider:{only,options}}` → `{created, data:[{b64_json, media_type}], usage}` (always base64).
 - **Unified video API**: `POST /api/v1/videos` body `{model, prompt, aspect_ratio, resolution, size, duration, generate_audio, seed, frame_images:[{type:"image_url",image_url:{url},frame_type}], input_references, callback_url}` → `{id, polling_url, status:"pending|in_progress|completed|failed|cancelled|expired", unsigned_urls:[...], usage}`. Poll `GET /api/v1/videos/{id}`; download `GET /api/v1/videos/{id}/content`.
+- **Sync vs async URL**: two `httpx` clients — image on `base_url` (the
+  `OPENROUTER_IMAGE_BASE_URL` sync endpoint) and video on
+  `backend.extra["video_base_url"]` (the `OPENROUTER_VIDEO_BASE_URL` async
+  endpoint, set by `config.py` when it differs from the image one). For the
+  real openrouter.ai both share one host, so the two clients collapse unless an
+  operator pins them apart.
 
 ## dashscope — `dashscope` v1.26.5 (env `DASHSCOPE_API_KEY`)
 
@@ -106,6 +137,7 @@ Models/params marked *(docs)* are from official docs, not the installed SDK.
 ## stability-sdk — `stability-sdk` v0.2.2 (legacy gRPC)
 
 - **Client**: prefer REST `https://api.stability.ai/v2beta/...` via httpx (env `STABILITY_API_KEY`).
+- **Sync vs async URL**: two `httpx.AsyncClient` instances — image (SD3/SDXL/Core/Ultra) on `base_url` (the `STABILITY_IMAGE_BASE_URL` sync endpoint) and video (SVD) on `backend.extra["video_base_url"]` (the `STABILITY_VIDEO_BASE_URL` async endpoint, set by `config.py` when it differs from the image one). For the real api.stability.ai both share one host, so the two clients collapse unless an operator pins them apart.
 - **Image**: `POST /v2beta/stable-image/generate/sd3` (multipart: `prompt`, `model`, `seed`, `aspect_ratio`, `output_format`). Models: `sd3.5-large`, `sd3.5-medium`, `stable-image-core`, `sdxl`. Returns `image` (base64) + `finish_reason`.
 - **Video (SVD)**: `POST /v2beta/stable-video-generation` (multipart: `image`, `motion_bucket_id`, `fps`, `seed`). Async seed → poll for result (raw MP4 bytes).
 

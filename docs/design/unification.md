@@ -79,9 +79,15 @@ fulfilled by any provider:
 
 | Modality | Front-end shape |
 |---|---|
-| Image | **Gemini-compatible** `POST /v1/images` (`{model,input:string|parts[]}` → `{id}`) + `GET /v1/images/{id}` (`{id,model,status,steps:[{type:"model_output",content:[{type:"image",data,url,mime_type}|{type:"text",text}]}],output_image|output_image_url,error,usage}`) |
-| Video | **Seedance-compatible** `POST /v1/videos` (`{model,content:[{type:text|image_url}],duration,resolution,ratio,camera_fixed,seed,watermark}` → `{id,status,...}`) + `GET /v1/videos/{id}` |
-| Music | **Gemini Lyria 3-compatible** `POST /v1/music` (`{model,input:string|parts[],negative_prompt,duration,bpm,key_scale,key,scale,time_signature,vocal_language,audio_format,audio_quality,is_instrumental,generate_audio,seed,guidance_scale,n,callback_url,response_format}` → `{id}`) + `GET /v1/music/{id}` (`{id,model,status,steps:[{type:"model_output",content:[{type:"audio",data,url,mime_type}|{type:"text",text}]}],output_audio|output_audio_url,output_text,error,usage}`) |
+| Image | **Gemini-compatible** `POST /v1/images[/async]` (`{model,input:string|parts[]}` → `{id}`) + `GET /v1/images/{id}` (`{id,model,status,steps:[{type:"model_output",content:[{type:"image",data,url,mime_type}|{type:"text",text}]}],output_image|output_image_url,error,usage}`) |
+| Video | **Seedance-compatible** `POST /v1/videos[/async]` (`{model,content:[{type:text|image_url}],duration,resolution,ratio,camera_fixed,seed,watermark}` → `{id,status,...}`) + `GET /v1/videos/{id}` |
+| Music | **Gemini Lyria 3-compatible** `POST /v1/music[/async]` (`{model,input:string|parts[],negative_prompt,duration,bpm,key_scale,key,scale,time_signature,vocal_language,audio_format,audio_quality,is_instrumental,generate_audio,seed,guidance_scale,n,callback_url,response_format}` → `{id}`) + `GET /v1/music/{id}` (`{id,model,status,steps:[{type:"model_output",content:[{type:"audio",data,url,mime_type}|{type:"text",text}]}],output_audio|output_audio_url,output_text,error,usage}`) |
+
+The `[/async]` suffix marks an explicit async sibling: `POST /v1/images/async`,
+`/v1/videos/async`, `/v1/music/async` unconditionally return a task id and never
+block — the URL encodes "respond-async", so `?wait` / `Prefer` are ignored on it.
+The base paths negotiate sync/async with `Prefer: respond-async` / `?wait` /
+the `*_SYNC_DEFAULT` setting. Both paths feed the same poll endpoint.
 
 Translators are pure functions (no I/O) living under `translators/`, one file
 per (modality × shape) direction. Adding a second front-end shape (e.g. a
@@ -175,9 +181,10 @@ upstream task id, `get` polls it:
 | ACE-Step 1.5 | `POST /release_task` | `POST /query_result` + `GET /v1/audio?path=` | `data.task_id` |
 
 Sync-vs-async for the *client* is governed by `Prefer: respond-async`, the
-`?wait` query param, or the `MUSIC_SYNC_DEFAULT` setting (default `true`). When
-blocking, `MusicService._await_or_timeout` polls up to `MAX_SYNC_WAIT` (default
-300s) at `POLL_INTERVAL` (default 2.0s).
+`?wait` query param, the `MUSIC_SYNC_DEFAULT` setting (default `true`), or the
+explicit `/v1/music/async` URL (which always returns the task id and never
+blocks). When blocking, `MusicService._await_or_timeout` polls up to
+`MAX_SYNC_WAIT` (default 300s) at `POLL_INTERVAL` (default 2.0s).
 
 ### Audio delivery normalization
 
@@ -236,7 +243,10 @@ forwards a curated set of provider-specific extras verbatim:
   `{"id":...}`; `GET /v1/music/{task_id}` → Lyria steps/content. Both require
   `get_api_key` auth; `GET` enforces `authorize_task`'s cross-tenant guard.
   The owning backend is recorded in the task store at create time so polls
-  route correctly.
+  route correctly. `POST /v1/music/async` is the explicit async sibling —
+  it always returns the task id and never blocks (the URL encodes
+  "respond-async"); the base path negotiates sync/async via `Prefer` / `?wait`
+  / `MUSIC_SYNC_DEFAULT`.
 - **Config** (`config.py`): `Settings.music_sync_default` (env
   `MUSIC_SYNC_DEFAULT`, default `true`); `KeyConfig.default_music_tag` /
   `default_music_backend` (legacy env `DEFAULT_MUSIC_PROVIDER` sets the
@@ -247,8 +257,10 @@ forwards a curated set of provider-specific extras verbatim:
   `*_BASE_URL` → `*_VIDEO_BASE_URL` → `*_MUSIC_BASE_URL`, preferring image as
   the primary surface); the split `*_VIDEO_BASE_URL` and `*_MUSIC_BASE_URL`,
   when they differ from `base_url`, are separately recorded as
-  `backend.extra["video_base_url"]` (consumed by the DashScope and Volcengine
-  adapters as the async task endpoint) and `backend.extra["music_base_url"]`
+  `backend.extra["video_base_url"]` (consumed by the openai/google/xai/
+  openrouter/stability/volcengine/dashscope adapters as the async video
+  endpoint — each builds a separate per-modality client on its split base) and
+  `backend.extra["music_base_url"]`
   (consumed by the Google provider's `_music_base`). ACE-Step requires
   `ACESTEP_BASE_URL` (self-hosted, no default host); its API key is optional
   at the adapter level, but a backend only registers when at least one

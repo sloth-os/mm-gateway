@@ -48,10 +48,18 @@ class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         if not backend.api_key:
             raise ProviderNotConfiguredError("stability")
         self._api_key = backend.api_key
-        self._client = httpx.AsyncClient(
-            base_url=backend.base_url or _BASE, timeout=300,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-        )
+        # Per-modality clients honor the sync/async URL split resolved by
+        # ``config.py``: image (SD3/SDXL/Core/Ultra) uses ``base_url`` (the
+        # ``*_IMAGE_BASE_URL`` sync endpoint); video (SVD) uses
+        # ``extra["video_base_url"]`` (the ``*_VIDEO_BASE_URL`` async endpoint)
+        # when it differs from the image one. The real api.stability.ai serves
+        # both at one host, so the two clients collapse unless an operator pins
+        # them apart.
+        image_base = backend.base_url or _BASE
+        video_base = backend.extra.get("video_base_url") or image_base
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        self._client = httpx.AsyncClient(base_url=image_base, timeout=300, headers=headers)
+        self._client_video = httpx.AsyncClient(base_url=video_base, timeout=300, headers=headers)
 
     def _image_path(self, model: str) -> str:
         if model in _IMAGE_PATHS:
@@ -152,7 +160,7 @@ class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         }
         files = {"image": ("init.png", rec["image_bytes"], rec["mime"])}
         try:
-            resp = await self._client.post(
+            resp = await self._client_video.post(
                 "/stable-video-generation/image-to-video",
                 data=data, files=files, headers={"Accept": "application/json"},
             )

@@ -7,11 +7,11 @@ translating each provider's native SDK shape into one canonical internal schema.
 
 ```
             ┌─────────────────────────── mm-gateway ───────────────────────────┐
- Gemini     │  POST /v1/images              GET  /v1/images/{id}               │
+ Gemini     │  POST /v1/images[/async]        GET  /v1/images/{id}               │
  image  ───▶│                                                               │
-            │  POST /v1/videos              GET  /v1/videos/{id}               │
+            │  POST /v1/videos[/async]       GET  /v1/videos/{id}               │
  Seedance   │                                                               │
- video  ───▶│  POST /v1/music               GET  /v1/music/{id}               │
+ video  ───▶│  POST /v1/music[/async]        GET  /v1/music/{id}               │
             │       translators → unified schema → services → registry         │
  Gemini     │                          → provider adapters → SDKs              │
  Lyria 3    └──────────────────────────────────────────────────────────────────┘
@@ -39,18 +39,29 @@ code-verified facts are in [`docs/providers/reference.md`](docs/providers/refere
 Plus `GET /health`, `GET /v1/models` (and `/api/v1/models`), `GET /metrics`
 (Prometheus text).
 
+**Sync vs async URLs.** Each modality has two create paths: the base path
+(`POST /v1/images`, `/v1/videos`, `/v1/music`) negotiates sync/async with the
+`Prefer: respond-async` header or the `?wait=true|false` query param (falling
+back to the `*_SYNC_DEFAULT=true` setting); and an explicit **`/async` sibling**
+(`POST /v1/images/async`, `/v1/videos/async`, `/v1/music/async`) that
+unconditionally returns a task id immediately and never blocks — the URL itself
+encodes "respond-async", so `?wait` / `Prefer` are ignored on it. Use the
+`/async` URLs when you always want to poll yourself; use the base path when you
+want a single call to block until completion.
+
 Image sync vs async: by default the create call blocks until the task completes
 (`IMAGE_SYNC_DEFAULT=true`). Send `Prefer: respond-async` or `?wait=false` to
-get a polling handle back immediately.
+get a polling handle back immediately (or hit `/v1/images/async`).
 
 Video sync vs async: the same trade-off, governed by
 `VIDEO_SYNC_DEFAULT=true`. Send `Prefer: respond-async` or `?wait=false` to
 get a polling handle back immediately and poll `GET /v1/videos/{id}`;
-`?wait=true` forces blocking.
+`?wait=true` forces blocking (or hit `/v1/videos/async` to skip negotiation).
 
 Music sync vs async: the same trade-off, governed by `MUSIC_SYNC_DEFAULT=true`.
 Send `Prefer: respond-async` or `?wait=false` to get the interaction id back
-immediately and poll `GET /v1/music/{id}`; `?wait=true` forces blocking.
+immediately and poll `GET /v1/music/{id}`; `?wait=true` forces blocking (or hit
+`/v1/music/async` to skip negotiation).
 
 Music responses: `GET /v1/music/{id}` returns the Gemini Lyria `steps[].content[]`
 envelope — `{type:"audio",data|url,mime_type}` blocks plus `{type:"text",text}`

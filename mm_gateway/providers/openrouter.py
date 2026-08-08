@@ -38,10 +38,17 @@ class OpenRouterProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         super().__init__(backend)
         if not backend.api_key:
             raise ProviderNotConfiguredError("openrouter")
-        self._client = make_client(
-            backend.base_url or _BASE, timeout=120,
-            headers={"Authorization": f"Bearer {backend.api_key}"},
-        )
+        # Per-modality clients honor the sync/async URL split resolved by
+        # ``config.py``: image uses ``base_url`` (the ``*_IMAGE_BASE_URL``
+        # sync endpoint); video uses ``extra["video_base_url"]`` (the
+        # ``*_VIDEO_BASE_URL`` async endpoint) when it differs from the image
+        # one. The real openrouter.ai serves both at one host, so the two
+        # clients collapse unless an operator pins them apart.
+        image_base = backend.base_url or _BASE
+        video_base = backend.extra.get("video_base_url") or image_base
+        headers = {"Authorization": f"Bearer {backend.api_key}"}
+        self._client = make_client(image_base, timeout=120, headers=headers)
+        self._client_video = make_client(video_base, timeout=120, headers=headers)
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         body = _image_body(request)
@@ -58,7 +65,7 @@ class OpenRouterProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
 
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
         body = _video_body(request)
-        result = await request_json(self._client, "POST", "/videos", provider="openrouter", json=body)
+        result = await request_json(self._client_video, "POST", "/videos", provider="openrouter", json=body)
         task_id = result.get("id", "")
         if not task_id:
             raise ProviderRequestError("openrouter video create returned no id", provider="openrouter")
@@ -69,7 +76,7 @@ class OpenRouterProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         return task
 
     async def get_video_task(self, task_id: str) -> UnifiedVideoTask:
-        result = await request_json(self._client, "GET", f"/videos/{task_id}", provider="openrouter")
+        result = await request_json(self._client_video, "GET", f"/videos/{task_id}", provider="openrouter")
         status = _STATUS_MAP.get(result.get("status", ""), "running")
         task = UnifiedVideoTask(
             task_id=task_id, provider=self.name,

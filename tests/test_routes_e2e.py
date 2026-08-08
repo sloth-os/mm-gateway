@@ -85,6 +85,25 @@ def test_image_poll_unknown_task_is_404(client):
     assert r.status_code == 404
 
 
+def test_image_async_url_never_blocks(client, fake_provider):
+    # The /async sibling is unconditionally async: even with
+    # image_sync_default=True (the fixture default), create returns a task id
+    # immediately without waiting for the provider to finish. ?wait is ignored.
+    r = client.post("/v1/images/async?wait=true",
+                    json={"model": "fake-image-1", "input": "a cat"})
+    assert r.status_code == 200, r.text
+    task_id = r.json()["id"]
+    # The task was created but not yet driven to success — poll to complete it.
+    for _ in range(10):
+        poll = client.get(f"/v1/images/{task_id}")
+        assert poll.status_code == 200, poll.text
+        if poll.json()["status"] == "succeeded":
+            break
+    assert poll.json()["status"] == "succeeded"
+    assert len(fake_provider.image_calls) == 1
+
+
+
 # -- Video routes ------------------------------------------------------------ #
 
 def test_video_seedance_create_sync_returns_completed(client, fake_provider):
@@ -119,6 +138,24 @@ def test_video_seedance_async_then_poll(client, fake_provider):
     assert body["id"] == task_id
     # The video url rides the content envelope.
     assert body["content"]["video_url"] == "https://example.test/out.mp4"
+
+
+def test_video_async_url_never_blocks(client, fake_provider):
+    # The /async sibling is unconditionally async: create returns a handle
+    # immediately even though video_sync_default=True (fixture default). ?wait
+    # and Prefer are ignored on this path.
+    r = client.post("/v1/videos/async?wait=true", json={
+        "model": "fake-video-1",
+        "content": [{"type": "text", "text": "a cat playing"}],
+    }, headers={"prefer": "respond=wait"})
+    assert r.status_code == 200, r.text
+    task_id = r.json()["id"]
+    for _ in range(10):
+        poll = client.get(f"/v1/videos/{task_id}")
+        assert poll.status_code == 200, poll.text
+        if poll.json()["status"] == "succeeded":
+            break
+    assert poll.json()["status"] == "succeeded"
 
 
 # -- Music routes (Gemini Lyria 3 shape) ------------------------------------- #
@@ -183,3 +220,21 @@ def test_music_poll_unknown_task_is_404(client):
     # No record in the task store -> the service surfaces a not-found error.
     r = client.get("/v1/music/no-such-task")
     assert r.status_code == 404
+
+
+def test_music_async_url_never_blocks(client, fake_provider):
+    # The /async sibling is unconditionally async: create returns a task id
+    # immediately even though music_sync_default defaults to True. ?wait is
+    # ignored on this path.
+    r = client.post("/v1/music/async?wait=true",
+                    json={"model": "fake-music-1", "input": "a sad ballad"})
+    assert r.status_code == 200, r.text
+    task_id = r.json()["id"]
+    for _ in range(10):
+        poll = client.get(f"/v1/music/{task_id}")
+        assert poll.status_code == 200, poll.text
+        if poll.json()["status"] == "succeeded":
+            break
+    assert poll.json()["status"] == "succeeded"
+    assert len(fake_provider.music_calls) == 1
+
