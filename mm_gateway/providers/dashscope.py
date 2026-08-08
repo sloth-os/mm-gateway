@@ -1,10 +1,27 @@
 """DashScope provider — Wanx/Wan + Qwen-Image (image) and Wan (video).
 
+DashScope serves two distinct image surfaces, and the adapter routes by model
+family:
+
+* **Wan2.x-image generation** (``wan2.7-image`` / ``wan2.6-image`` / ...) lives
+  on the **multimodal-generation** surface — a messages-shaped body posted to
+  ``/services/aigc/multimodal-generation/generation``. The SDK exposes it as
+  ``AioImageGeneration``: ``call`` (sync, inline) or ``async_call`` (submit a
+  real task id) + ``fetch``/``wait``. The finished images come back as
+  ``output.choices[].message.content[]`` items with ``{"image": "<url>"}``.
+  This is the surface the working ``ai.ctaigw.cn`` example targets — routing a
+  ``wan2.7-image`` call through the older synthesis surface returns
+  ``400 InvalidParameter: url error, please check url`` because that path is
+  not wired for the model.
+* **Wanx2.1 / Qwen-Image synthesis** (``wanx2.1-t2i-*``, ``qwen-image-2.0-pro``)
+  stays on the **image-synthesis** surface (``/services/aigc/text2image/...``)
+  via ``AioImageSynthesis``.
+
 Image generation uses DashScope's **native async task API** directly when the
-backend supports it — ``AioImageSynthesis.async_call`` submits a task (returns a
-real ``task_id``) and ``AioImageSynthesis.wait`` blocks until the images are
-ready. This is the unrestricted path: it serves every model including
-``qwen-image-2.0-pro``, which the synchronous inline path does not advertise.
+backend supports it — ``async_call`` submits a task (returns a real
+``task_id``) and ``wait`` blocks until the images are ready. This is the
+unrestricted path: it serves every model including ``qwen-image-2.0-pro``,
+which the synchronous inline path does not advertise.
 
 Some backends reject async task submission — third-party DashScope-compatible
 gateways and API keys without the async entitlement return
@@ -43,6 +60,7 @@ import time
 from typing import Any
 
 import dashscope
+from dashscope.aigc.image_generation import AioImageGeneration
 from dashscope.aigc.image_synthesis import AioImageSynthesis
 from dashscope.aigc.video_synthesis import AioVideoSynthesis
 
@@ -100,6 +118,11 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         # Qwen-Image — the native async task path (async_call + wait) is the
         # unrestricted route; sync_call's docstring restricts it to wan2.2-t2i-*.
         "qwen-image-2.0-pro",
+        # Wan2.x-image generation family — served on the multimodal-generation
+        # surface (messages-shaped), not the image-synthesis surface. Operators
+        # may also pin other ``*-image`` slugs via DASHSCOPE_IMAGE_MODEL.
+        "wan2.7-image",
+        "wan2.6-image",
     ]
     video_models = [
         "wanx2.1-t2v-turbo",
@@ -126,6 +149,21 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         self._video_base = backend.extra.get("video_base_url") or backend.base_url or None
 
     @staticmethod
+    def _is_generation_model(model: str) -> bool:
+        """True iff the model is served on the multimodal-generation surface
+        (messages-shaped ``AioImageGeneration``) rather than the
+        image-synthesis surface (``AioImageSynthesis``).
+
+        The synthesis surface only serves wanx2.1-t2i-* / qwen-image-*; the
+        Wan2.x-image generation family (``wan2.7-image``, ``wan2.6-image``,
+        and operator-pinned ``wan*-image`` slugs) lives on the generation
+        surface, and routing them through synthesis returns
+        ``400 InvalidParameter: url error``.
+        """
+        m = (model or "").lower()
+        return m.endswith("-image") and "t2i" not in m
+
+    @staticmethod
     def _image_kwargs(request: UnifiedImageRequest) -> dict[str, Any]:
         """Build the kwargs shared by async_call/sync_call for image gen."""
         kwargs: dict[str, Any] = {
@@ -142,6 +180,153 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             kwargs["negative_prompt"] = request.negative_prompt
         kwargs.update(request.extra)
         return kwargs
+
+    @staticmethod
+    def _image_generation_kwargs(request: UnifiedImageRequest) -> dict[str, Any]:
+        """Build the kwargs for the multimodal-generation image surface.
+
+        The Wan2.x-image family takes a messages-shaped input
+        (``messages=[{role:"user", content:[{text:...}|{image:url}]}]``) and
+        the generation knobs ride as top-level kwargs the SDK folds into
+        ``parameters`` (size, n, seed, watermark, thinking_mode, ...). ``size``
+        is passed through verbatim — these models accept resolution tokens like
+        ``"2K"`` as well as ``"1024*1024"``.
+        """
+        content: list[dict[str, Any]] = []
+        for part in request.content:
+            p = part.root
+            if getattr(p, "type", None) == "text" and getattr(p, "text", ""):
+                content.append({"text": p.text})
+            elif getattr(p, "type", None) == "image" and getattr(p, "url", None):
+                content.append({"image": p.url})
+        if not content:
+            content = [{"text": request.prompt() or ""}]
+
+        kwargs: dict[str, Any] = {
+            "model": request.model,
+            "messages": [{"role": "user", "content": content}],
+        }
+        if request.size:
+            kwargs["size"] = request.size
+        if request.n:
+            kwargs["n"] = request.n
+        if request.seed is not None:
+            kwargs["seed"] = request.seed
+        if request.negative_prompt:
+            kwargs["negative_prompt"] = request.negative_prompt
+        if request.watermark is not None:
+            kwargs["watermark"] = request.watermark
+        kwargs.update(request.extra)
+        return kwargs
+
+    @staticmethod
+    def _extract_generation_images(resp: Any) -> list[ImageData]:
+        """Pull image URLs out of ``output.choices[].message.content[]``."""
+        urls: list[str] = []
+        output = getattr(resp, "output", None)
+        for choice in getattr(output, "choices", None) or []:
+            msg = getattr(choice, "message", None)
+            for item in getattr(msg, "content", None) or []:
+                if isinstance(item, dict):
+                    url = item.get("image")
+                else:
+                    url = getattr(item, "image", None)
+                if url:
+                    urls.append(url)
+        return [ImageData(url=u) for u in urls]
+
+    async def _image_generation_native_async(
+        self, kwargs: dict[str, Any]
+    ) -> Any:
+        """Submit a multimodal-generation task and block until it finishes.
+
+        Mirrors ``_image_native_async`` but on the generation surface: the
+        finished images ride ``output.choices[].message.content[]``.
+        """
+        try:
+            create = await AioImageGeneration.async_call(
+                api_key=self._api_key, base_address=self._image_base, **kwargs
+            )
+        except _AsyncNotSupported:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if _is_async_rejection(None, type(exc).__name__, str(exc)):
+                raise _AsyncNotSupported() from exc
+            raise ProviderRequestError(
+                f"dashscope image submit failed: {exc}", provider="dashscope"
+            ) from exc
+
+        status_code = getattr(create, "status_code", 200)
+        output = getattr(create, "output", None)
+        task_id = getattr(output, "task_id", None) if output else None
+        if status_code != 200 or not task_id:
+            code = getattr(create, "code", None)
+            message = getattr(create, "message", None)
+            if _is_async_rejection(status_code, code, message):
+                raise _AsyncNotSupported()
+            raise TaskFailedError(
+                f"dashscope image submit failed: status_code={status_code} "
+                f"code={code} message={message}",
+                provider="dashscope",
+            )
+
+        try:
+            resp = await AioImageGeneration.wait(
+                task_id, api_key=self._api_key, base_address=self._image_base
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderRequestError(
+                f"dashscope image wait failed: {exc}", provider="dashscope"
+            ) from exc
+        return resp
+
+    async def _image_generation_sync_inline(
+        self, kwargs: dict[str, Any]
+    ) -> Any:
+        """Synchronous multimodal-generation call — finished images inline."""
+        try:
+            return await AioImageGeneration.call(
+                api_key=self._api_key, base_address=self._image_base, **kwargs
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ProviderRequestError(
+                f"dashscope image failed: {exc}", provider="dashscope"
+            ) from exc
+
+    async def _generate_image_generation(
+        self, request: UnifiedImageRequest
+    ) -> UnifiedImageResponse:
+        """Generate via the multimodal-generation surface (Wan2.x-image family).
+
+        Native async first, sync inline on rejection — same shape as the
+        synthesis path. A non-200 response or no image content surfaces as a
+        clean ``TaskFailedError``.
+        """
+        kwargs = self._image_generation_kwargs(request)
+        try:
+            resp = await self._image_generation_native_async(kwargs)
+        except _AsyncNotSupported:
+            log.info("dashscope_image_async_unsupported_fallback_sync",
+                     model=request.model)
+            resp = await self._image_generation_sync_inline(kwargs)
+
+        status_code = getattr(resp, "status_code", None)
+        data = self._extract_generation_images(resp)
+        if status_code != 200 or not data:
+            code = getattr(resp, "code", None)
+            message = getattr(resp, "message", None)
+            err = (
+                f"dashscope image task: status_code={status_code} "
+                f"code={code} message={message}"
+            )
+            raise TaskFailedError(err, provider="dashscope")
+        return UnifiedImageResponse(
+            created=int(time.time()),
+            data=data,
+            model=request.model,
+            provider=self.name,
+            usage=ImageUsage(),
+        )
 
     async def _image_native_async(self, kwargs: dict[str, Any]) -> Any:
         """Submit an image task and block until it finishes (native async).
@@ -207,13 +392,22 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     async def _generate_image(
         self, request: UnifiedImageRequest
     ) -> UnifiedImageResponse:
-        """Generate one image set: native async first, sync inline on rejection.
+        """Generate one image set, routed by model family to its surface.
 
-        ``size`` uses DashScope's ``"*"`` separator (``1024*1024``). Both paths
-        return ``ImageSynthesisResponse`` with ``output.task_status`` ==
-        ``SUCCEEDED`` and ``output.results[].url``; a non-SUCCEEDED status or
-        missing results surfaces as a clean ``TaskFailedError``.
+        Wan2.x-image generation models (``*-image`` excluding ``*-t2i-*``) go to
+        the multimodal-generation surface; everything else (wanx2.1-t2i-* /
+        qwen-image-*) goes to the image-synthesis surface. Both surfaces try
+        native async first, falling back to a synchronous inline call when the
+        backend rejects async task submission.
         """
+        if self._is_generation_model(request.model):
+            return await self._generate_image_generation(request)
+
+        # Synthesis path. ``size`` uses DashScope's ``"*"`` separator
+        # (``1024*1024``). Both paths return ``ImageSynthesisResponse`` with
+        # ``output.task_status`` == ``SUCCEEDED`` and ``output.results[].url``;
+        # a non-SUCCEEDED status or missing results surfaces as a clean
+        # ``TaskFailedError``.
         kwargs = self._image_kwargs(request)
         try:
             resp = await self._image_native_async(kwargs)

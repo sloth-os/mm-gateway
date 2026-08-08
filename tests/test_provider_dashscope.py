@@ -1,20 +1,30 @@
 """Tests for the DashScope provider (Wanx/Qwen-Image image + Wan video).
 
 The provider talks to the async AIO SDK classes (``AioImageSynthesis`` /
-``AioVideoSynthesis``); we swap fakes onto the module so no network is made.
-Responses are read via attribute access, so plain ``SimpleNamespace`` objects
-stand in for the SDK's DictMixin models.
+``AioImageGeneration`` / ``AioVideoSynthesis``); we swap fakes onto the module
+so no network is made. Responses are read via attribute access, so plain
+``SimpleNamespace`` objects stand in for the SDK's DictMixin models.
 
-Image generation tries the **native async task path** first
-(``async_call`` submits a real task id, ``wait`` blocks until SUCCEEDED) — the
-unrestricted route that serves every model including ``qwen-image-2.0-pro``.
-When the backend rejects async submission (403 / "does not support asynchronous
-calls") the adapter falls back to ``sync_call`` (the headerless inline path).
-Both are wrapped as a synthetic in-memory task by ``SyncImageTaskMixin``:
-``create_image_task`` mints a gateway-local ``img-`` id and returns ``pending``;
-the first ``get_image_task`` poll runs the blocking generation and moves the
-task to ``succeeded``/``failed``. Video stays on the native ``async_call`` /
-``fetch`` flow.
+DashScope serves two image surfaces, and the adapter routes by model family:
+
+* **Wan2.x-image generation** (``wan2.7-image`` / ``wan2.6-image``) lives on the
+  **multimodal-generation** surface (``AioImageGeneration``) — a messages-shaped
+  body, with finished images in ``output.choices[].message.content[]``.
+* **Wanx2.1 / Qwen-Image synthesis** (``wanx2.1-t2i-*``, ``qwen-image-2.0-pro``)
+  stays on the **image-synthesis** surface (``AioImageSynthesis``) — a
+  prompt-shaped body, with finished images in ``output.results[].url``.
+
+Both surfaces try the **native async task path** first (``async_call`` submits
+a real task id, ``wait`` blocks until SUCCEEDED) — the unrestricted route that
+serves every model including ``qwen-image-2.0-pro``. When the backend rejects
+async submission (403 / "does not support asynchronous calls") the adapter
+falls back to the synchronous inline path (``sync_call`` on the synthesis
+surface, ``call`` on the generation surface — both headerless). Both are wrapped
+as a synthetic in-memory task by ``SyncImageTaskMixin``: ``create_image_task``
+mints a gateway-local ``img-`` id and returns ``pending``; the first
+``get_image_task`` poll runs the blocking generation and moves the task to
+``succeeded``/``failed``. Video stays on the native ``async_call`` / ``fetch``
+flow, which is unaffected.
 
 Regression note: ``_generate_image`` must not touch ``request.prompt_extend`` —
 ``UnifiedImageRequest`` has no such field, and the old code raised
@@ -38,6 +48,7 @@ from mm_gateway.core.exceptions import (
 from mm_gateway.providers import dashscope as dashscope_mod
 from mm_gateway.providers.dashscope import DashScopeProvider
 from mm_gateway.schemas.image import UnifiedImageRequest
+from mm_gateway.schemas.image import image_part as image_image_part
 from mm_gateway.schemas.image import text_part as image_text_part
 from mm_gateway.schemas.video import UnifiedVideoRequest, image_part, text_part
 
@@ -100,6 +111,69 @@ class FakeImageSynthesis:
         return self._wait_result
 
 
+def _generation_succeeded(url: str = "https://dashscope.test/gen.png") -> Any:
+    """A successful multimodal-generation response — image in choices[].content."""
+    return SimpleNamespace(
+        status_code=200,
+        code=None,
+        message=None,
+        output=SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=[{"image": url}],
+                    ),
+                ),
+            ],
+        ),
+    )
+
+
+class FakeImageGeneration:
+    """Fake for the multimodal-generation surface (``AioImageGeneration``).
+
+    Mirrors ``FakeImageSynthesis`` but on the messages-shaped surface:
+    ``async_call``+``wait`` is the native path, ``call`` is the sync fallback,
+    and the finished image rides ``output.choices[].message.content[]`` as a
+    ``{"image": url}`` item (matching the SDK's ``ImageGenerationResponse``).
+    """
+
+    def __init__(self) -> None:
+        self.async_kwargs: dict[str, Any] | None = None
+        self.sync_kwargs: dict[str, Any] | None = None
+        self.wait_kwargs: dict[str, Any] | None = None
+        self.async_calls: int = 0
+        self.sync_calls: int = 0
+        self.wait_calls: list[str] = []
+        self.reject_async: bool = False
+        self.raise_async: str | None = None
+        self._wait_result: Any = _generation_succeeded()
+
+    async def async_call(self, **kwargs: Any) -> Any:
+        self.async_kwargs = kwargs
+        self.async_calls += 1
+        if self.raise_async is not None:
+            raise RuntimeError(self.raise_async)
+        if self.reject_async:
+            return SimpleNamespace(
+                status_code=403,
+                code="AccessDenied",
+                message="current user api does not support asynchronous calls",
+                output=None,
+            )
+        return SimpleNamespace(status_code=200, output=SimpleNamespace(task_id="gen-task-1"))
+
+    async def wait(self, task_id: str, **kwargs: Any) -> Any:
+        self.wait_kwargs = kwargs
+        self.wait_calls.append(task_id)
+        return self._wait_result
+
+    async def call(self, **kwargs: Any) -> Any:
+        self.sync_kwargs = kwargs
+        self.sync_calls += 1
+        return self._wait_result
+
+
 class FakeVideoSynthesis:
     def __init__(self) -> None:
         self.call_kwargs: dict[str, Any] | None = None
@@ -126,13 +200,16 @@ class FakeVideoSynthesis:
 @pytest.fixture
 def provider(monkeypatch: pytest.MonkeyPatch) -> DashScopeProvider:
     img = FakeImageSynthesis()
+    gen = FakeImageGeneration()
     vid = FakeVideoSynthesis()
     monkeypatch.setattr(dashscope_mod, "AioImageSynthesis", img)
+    monkeypatch.setattr(dashscope_mod, "AioImageGeneration", gen)
     monkeypatch.setattr(dashscope_mod, "AioVideoSynthesis", vid)
     p = DashScopeProvider(
         BackendConfig(name="dashscope", type="dashscope", api_key="ds-key")
     )
     p._fake_image = img  # type: ignore[attr-defined]
+    p._fake_image_gen = gen  # type: ignore[attr-defined]
     p._fake_video = vid  # type: ignore[attr-defined]
     return p
 
@@ -302,6 +379,195 @@ def test_image_poll_unknown_task_is_404(provider: DashScopeProvider) -> None:
     with pytest.raises(ProviderRequestError) as ei:
         asyncio.run(provider.get_image_task("no-such-task"))
     assert "404" in str(ei.value) or "not found" in str(ei.value)
+
+
+# --------------------------------------------------------------------------- #
+# Wan2.x-image generation path (multimodal-generation surface)
+# --------------------------------------------------------------------------- #
+
+
+def test_generation_routes_wan27_image_to_generation_surface(
+    provider: DashScopeProvider,
+) -> None:
+    """``wan2.7-image`` lives on the multimodal-generation surface, not the
+    synthesis surface — it must hit ``AioImageGeneration`` and never
+    ``AioImageSynthesis`` (the regression: routing it through synthesis returns
+    ``400 InvalidParameter: url error``)."""
+    req = UnifiedImageRequest(
+        model="wan2.7-image", content=[image_text_part("a cat")]
+    )
+    task = asyncio.run(provider.create_image_task(req))
+    task = asyncio.run(provider.get_image_task(task.task_id))
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    syn = provider._fake_image  # type: ignore[attr-defined]
+    # Generation surface used; synthesis surface untouched.
+    assert gen.async_calls == 1 and gen.sync_calls == 0
+    assert syn.async_calls == 0 and syn.sync_calls == 0
+    assert task.status == "succeeded"
+    assert task.images[0].url == "https://dashscope.test/gen.png"
+    assert task.model == "wan2.7-image" and task.provider == "dashscope"
+
+
+def test_generation_native_async_builds_messages_shaped_kwargs(
+    provider: DashScopeProvider,
+) -> None:
+    """The generation surface takes a messages body: text parts become
+    ``{"text": ...}``` items and image parts become ``{"image": url}`` items
+    inside ``messages=[{role:"user", content:[...]}]``. The generation knobs
+    (size, n, seed, negative_prompt, watermark) ride as top-level kwargs."""
+    req = UnifiedImageRequest(
+        model="wan2.7-image",
+        content=[
+            image_text_part("a cat"),
+            image_image_part("https://x.test/ref.png"),
+        ],
+        size="2K",
+        n=2,
+        seed=9,
+        negative_prompt="blurry",
+        watermark=False,
+    )
+    task = asyncio.run(provider.create_image_task(req))
+    asyncio.run(provider.get_image_task(task.task_id))
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    kw = gen.async_kwargs
+    assert kw["model"] == "wan2.7-image"
+    assert kw["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"text": "a cat"},
+                {"image": "https://x.test/ref.png"},
+            ],
+        }
+    ]
+    # size passes through verbatim (these models accept tokens like "2K").
+    assert kw["size"] == "2K"
+    assert kw["n"] == 2 and kw["seed"] == 9
+    assert kw["negative_prompt"] == "blurry"
+    assert kw["watermark"] is False
+    # wait was driven against the returned task id, on the generation surface.
+    assert gen.wait_calls == ["gen-task-1"]
+
+
+def test_generation_image_extracted_from_choices_content(
+    provider: DashScopeProvider,
+) -> None:
+    """The finished image rides ``output.choices[].message.content[]`` as a
+    ``{"image": url}`` item (matching the SDK's ``ImageGenerationResponse``), not
+    ``output.results[].url``."""
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    gen._wait_result = _generation_succeeded("https://dashscope.test/a.png")
+    req = UnifiedImageRequest(
+        model="wan2.7-image", content=[image_text_part("x")]
+    )
+    task = asyncio.run(provider.create_image_task(req))
+    task = asyncio.run(provider.get_image_task(task.task_id))
+    assert task.images[0].url == "https://dashscope.test/a.png"
+
+
+def test_generation_falls_back_to_sync_when_async_rejected(
+    provider: DashScopeProvider,
+) -> None:
+    """When the backend rejects async submission (403 AccessDenied "does not
+    support asynchronous calls") the generation path falls back to the sync
+    inline ``call`` (``BaseAioApi.call``, no ``X-DashScope-Async`` header)."""
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    gen.reject_async = True
+    req = UnifiedImageRequest(
+        model="wan2.7-image", content=[image_text_part("a cat")]
+    )
+    task = asyncio.run(provider.create_image_task(req))
+    task = asyncio.run(provider.get_image_task(task.task_id))
+    assert gen.async_calls == 1 and gen.sync_calls == 1
+    assert gen.sync_kwargs["model"] == "wan2.7-image"
+    assert gen.sync_kwargs["messages"] == [
+        {"role": "user", "content": [{"text": "a cat"}]}
+    ]
+    assert task.status == "succeeded"
+    assert task.images[0].url == "https://dashscope.test/gen.png"
+
+
+def test_generation_falls_back_to_sync_when_async_raises_rejection(
+    provider: DashScopeProvider,
+) -> None:
+    """An async rejection that *raises* (rather than returning an error body)
+    also triggers the sync fallback on the generation surface."""
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    gen.raise_async = "AccessDenied: does not support asynchronous calls"
+    req = UnifiedImageRequest(
+        model="wan2.7-image", content=[image_text_part("a cat")]
+    )
+    task = asyncio.run(provider.create_image_task(req))
+    task = asyncio.run(provider.get_image_task(task.task_id))
+    assert gen.async_calls == 1 and gen.sync_calls == 1
+    assert task.status == "succeeded"
+
+
+def test_generation_failed_status_is_clean_error(provider: DashScopeProvider) -> None:
+    """A non-200 response or no image content surfaces as a clean
+    ``TaskFailedError`` — not an opaque AttributeError (the original CI
+    failure mode for misrouted calls)."""
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    gen._wait_result = SimpleNamespace(
+        status_code=400, code="Bad Request", message="no image", output=None
+    )
+    req = UnifiedImageRequest(
+        model="wan2.7-image", content=[image_text_part("x")]
+    )
+    task = asyncio.run(provider.create_image_task(req))
+    with pytest.raises(TaskFailedError) as ei:
+        asyncio.run(provider.get_image_task(task.task_id))
+    msg = str(ei.value)
+    assert "dashscope image task" in msg
+    assert "Bad Request" in msg
+
+
+def test_generation_empty_choices_is_failed(provider: DashScopeProvider) -> None:
+    """A 200 response with no image items surfaces as a clean TaskFailedError."""
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    gen._wait_result = SimpleNamespace(
+        status_code=200, code=None, message=None,
+        output=SimpleNamespace(choices=[]),
+    )
+    req = UnifiedImageRequest(
+        model="wan2.7-image", content=[image_text_part("x")]
+    )
+    task = asyncio.run(provider.create_image_task(req))
+    with pytest.raises(TaskFailedError):
+        asyncio.run(provider.get_image_task(task.task_id))
+
+
+def test_generation_propagates_non_rejection_submit_error(
+    provider: DashScopeProvider,
+) -> None:
+    """A submit error that is NOT an async rejection surfaces as
+    ProviderRequestError (no silent fallback) on the generation surface too."""
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    gen.raise_async = "model not found"  # no rejection markers
+    req = UnifiedImageRequest(
+        model="wan2.7-image", content=[image_text_part("x")]
+    )
+    task = asyncio.run(provider.create_image_task(req))
+    with pytest.raises(ProviderRequestError):
+        asyncio.run(provider.get_image_task(task.task_id))
+
+
+def test_generation_routes_other_image_models_to_synthesis(
+    provider: DashScopeProvider,
+) -> None:
+    """Routing guard: ``wanx2.1-t2i-*`` (``*-t2i-*``) and ``qwen-image-*``
+    (not ``*-image``) stay on the synthesis surface — they must NOT touch
+    ``AioImageGeneration``."""
+    for model in ("wanx2.1-t2i-turbo", "qwen-image-2.0-pro"):
+        req = UnifiedImageRequest(model=model, content=[image_text_part("a cat")])
+        asyncio.run(provider.get_image_task(
+            asyncio.run(provider.create_image_task(req)).task_id
+        ))
+    syn = provider._fake_image  # type: ignore[attr-defined]
+    gen = provider._fake_image_gen  # type: ignore[attr-defined]
+    assert syn.async_calls == 2  # both models went through synthesis
+    assert gen.async_calls == 0 and gen.sync_calls == 0  # never the generation surface
 
 
 def test_split_sync_async_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
