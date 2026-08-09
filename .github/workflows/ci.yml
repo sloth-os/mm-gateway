@@ -22,18 +22,18 @@ jobs:
     name: Lint & unit tests
     runs-on: ubuntu-latest
     # Provider credentials live in the `ci` environment: *_IMAGE_API_KEY /
-    # *_VIDEO_API_KEY as secrets and the matching *_BASE_URL / *_MODEL as
-    # variables (they are not sensitive). A job only receives environment-scoped
-    # secrets/vars when it declares the environment, so attach it here (and on
-    # e2e) — otherwise the gate below sees nothing.
+    # *_VIDEO_API_KEY / *_MUSIC_API_KEY as secrets and the matching *_BASE_URL /
+    # *_MODEL as variables (they are not sensitive). A job only receives
+    # environment-scoped secrets/vars when it declares the environment, so attach
+    # it here (and on e2e) — otherwise the gate below sees nothing.
     environment: ci
     timeout-minutes: 15
     outputs:
       # Whether at least one provider modality is *fully* configured (its
-      # *_IMAGE_* or *_VIDEO_* triple of API_KEY + BASE_URL + MODEL all set). The
-      # e2e job gates on this OR on the manual run-e2e flag, so it only fires
-      # when there is a real, operator-pinned model to exercise — not merely when
-      # a stray key exists.
+      # *_IMAGE_* / *_VIDEO_* / *_MUSIC_* triple of API_KEY + BASE_URL + MODEL all
+      # set). The e2e job gates on this OR on the manual run-e2e flag, so it only
+      # fires when there is a real, operator-pinned model to exercise — not merely
+      # when a stray key exists.
       secrets_present: ${{ steps.secret_gate.outputs.secrets_present }}
     steps:
       - uses: actions/checkout@v4
@@ -80,13 +80,13 @@ jobs:
         run: pytest -q
 
       # Detect whether at least one provider modality is *fully* configured — all
-      # three of its *_IMAGE_* or *_VIDEO_* triple (API_KEY + BASE_URL + MODEL)
-      # set — *without* printing any of them. `secrets.*` references are silently
-      # absent (empty) when the secret is not defined, so this only flips true
-      # once you wire a real provider modality in Settings. "Fully configured"
-      # matches the e2e's own gate (a backend modality runs the e2e iff all three
-      # are set), so the job fires only when there's a real, operator-pinned
-      # model to call.
+      # three of its *_IMAGE_* / *_VIDEO_* / *_MUSIC_* triple (API_KEY + BASE_URL +
+      # MODEL) set — *without* printing any of them. `secrets.*` references are
+      # silently absent (empty) when the secret is not defined, so this only flips
+      # true once you wire a real provider modality in Settings. "Fully
+      # configured" matches the e2e's own gate (a backend modality runs the e2e
+      # iff all three are set), so the job fires only when there's a real,
+      # operator-pinned model to call.
       - name: Detect fully-configured provider
         id: secret_gate
         env:
@@ -138,11 +138,29 @@ jobs:
           OPENROUTER_VIDEO_API_KEY: ${{ secrets.OPENROUTER_VIDEO_API_KEY }}
           OPENROUTER_VIDEO_BASE_URL: ${{ vars.OPENROUTER_VIDEO_BASE_URL }}
           OPENROUTER_VIDEO_MODEL: ${{ vars.OPENROUTER_VIDEO_MODEL }}
+          GOOGLE_MUSIC_API_KEY: ${{ secrets.GOOGLE_MUSIC_API_KEY }}
+          GOOGLE_MUSIC_BASE_URL: ${{ vars.GOOGLE_MUSIC_BASE_URL }}
+          GOOGLE_MUSIC_MODEL: ${{ vars.GOOGLE_MUSIC_MODEL }}
+          ELEVENLABS_MUSIC_API_KEY: ${{ secrets.ELEVENLABS_MUSIC_API_KEY }}
+          ELEVENLABS_MUSIC_BASE_URL: ${{ vars.ELEVENLABS_MUSIC_BASE_URL }}
+          ELEVENLABS_MUSIC_MODEL: ${{ vars.ELEVENLABS_MUSIC_MODEL }}
+          MINIMAX_MUSIC_API_KEY: ${{ secrets.MINIMAX_MUSIC_API_KEY }}
+          MINIMAX_MUSIC_BASE_URL: ${{ vars.MINIMAX_MUSIC_BASE_URL }}
+          MINIMAX_MUSIC_MODEL: ${{ vars.MINIMAX_MUSIC_MODEL }}
+          UDIOAPI_MUSIC_API_KEY: ${{ secrets.UDIOAPI_MUSIC_API_KEY }}
+          UDIOAPI_MUSIC_BASE_URL: ${{ vars.UDIOAPI_MUSIC_BASE_URL }}
+          UDIOAPI_MUSIC_MODEL: ${{ vars.UDIOAPI_MUSIC_MODEL }}
+          MUREKA_MUSIC_API_KEY: ${{ secrets.MUREKA_MUSIC_API_KEY }}
+          MUREKA_MUSIC_BASE_URL: ${{ vars.MUREKA_MUSIC_BASE_URL }}
+          MUREKA_MUSIC_MODEL: ${{ vars.MUREKA_MUSIC_MODEL }}
+          ACESTEP_MUSIC_API_KEY: ${{ secrets.ACESTEP_MUSIC_API_KEY }}
+          ACESTEP_MUSIC_BASE_URL: ${{ vars.ACESTEP_MUSIC_BASE_URL }}
+          ACESTEP_MUSIC_MODEL: ${{ vars.ACESTEP_MUSIC_MODEL }}
         run: |
           set=0
           # A provider modality is "fully configured" iff all three of its
-          # *_IMAGE_* or *_VIDEO_* triple are set. The e2e runs iff at least one
-          # modality of one provider is fully configured.
+          # *_IMAGE_* / *_VIDEO_* / *_MUSIC_* triple are set. The e2e runs iff at
+          # least one modality of one provider is fully configured.
           for triple in \
             "${OPENAI_IMAGE_API_KEY}:${OPENAI_IMAGE_BASE_URL}:${OPENAI_IMAGE_MODEL}" \
             "${OPENAI_VIDEO_API_KEY}:${OPENAI_VIDEO_BASE_URL}:${OPENAI_VIDEO_MODEL}" \
@@ -160,6 +178,12 @@ jobs:
             "${STABILITY_VIDEO_API_KEY}:${STABILITY_VIDEO_BASE_URL}:${STABILITY_VIDEO_MODEL}" \
             "${OPENROUTER_IMAGE_API_KEY}:${OPENROUTER_IMAGE_BASE_URL}:${OPENROUTER_IMAGE_MODEL}" \
             "${OPENROUTER_VIDEO_API_KEY}:${OPENROUTER_VIDEO_BASE_URL}:${OPENROUTER_VIDEO_MODEL}" \
+            "${GOOGLE_MUSIC_API_KEY}:${GOOGLE_MUSIC_BASE_URL}:${GOOGLE_MUSIC_MODEL}" \
+            "${ELEVENLABS_MUSIC_API_KEY}:${ELEVENLABS_MUSIC_BASE_URL}:${ELEVENLABS_MUSIC_MODEL}" \
+            "${MINIMAX_MUSIC_API_KEY}:${MINIMAX_MUSIC_BASE_URL}:${MINIMAX_MUSIC_MODEL}" \
+            "${UDIOAPI_MUSIC_API_KEY}:${UDIOAPI_MUSIC_BASE_URL}:${UDIOAPI_MUSIC_MODEL}" \
+            "${MUREKA_MUSIC_API_KEY}:${MUREKA_MUSIC_BASE_URL}:${MUREKA_MUSIC_MODEL}" \
+            "${ACESTEP_MUSIC_API_KEY}:${ACESTEP_MUSIC_BASE_URL}:${ACESTEP_MUSIC_MODEL}" \
           ; do
             # Split on ':' — all three fields must be non-empty.
             IFS=':' read -r k u m <<< "$triple"
@@ -264,9 +288,9 @@ jobs:
 
   # Load the *just-built* image and run a real provider call against it. Skips
   # (exit 0) when no provider modality is fully configured (all three of an
-  # *_IMAGE_* or *_VIDEO_* API_KEY + BASE_URL + MODEL set) AND the manual
-  # run-e2e flag is off — so the workflow is green before secrets exist and only
-  # spends real provider calls once one is fully wired.
+  # *_IMAGE_* / *_VIDEO_* / *_MUSIC_* API_KEY + BASE_URL + MODEL set) AND the
+  # manual run-e2e flag is off — so the workflow is green before secrets exist
+  # and only spends real provider calls once one is fully wired.
   e2e:
     name: E2E (real provider)
     # Depend on both jobs so build's artifact is available AND lint-and-test's
@@ -274,9 +298,9 @@ jobs:
     needs: [lint-and-test, build]
     runs-on: ubuntu-latest
     # Same `ci` environment as lint-and-test — the provider *_IMAGE_* /
-    # *_VIDEO_* API_KEY secrets and *_BASE_URL / *_MODEL variables are
-    # environment-scoped, so the container and the smoke script only see them
-    # when the environment is declared here.
+    # *_VIDEO_* / *_MUSIC_* API_KEY secrets and *_BASE_URL / *_MODEL variables
+    # are environment-scoped, so the container and the smoke script only see
+    # them when the environment is declared here.
     environment: ci
     timeout-minutes: 15
     if: |
@@ -299,14 +323,15 @@ jobs:
       - name: Start gateway
         # Pass provider keys + base URLs + pinned models through to the container
         # using the gateway's legacy env-var layout split by modality: a
-        # *_IMAGE_* triple and a *_VIDEO_* triple per provider, plus an implicit
-        # front-end key of GATEWAY_API_KEY. Only the secrets you've actually set
-        # are injected — the others stay unset and the gateway just doesn't
-        # register that modality. *_BASE_URL points a backend at its real
-        # endpoint; *_MODEL pins/extends the backend's served image/video model
-        # (the registry appends it to the provider's model list at build time).
-        # This is the "preserve the envs" contract: whatever secrets you add in
-        # GitHub, they flow straight into the image 1:1.
+        # *_IMAGE_* triple, a *_VIDEO_* triple, and a *_MUSIC_* triple per
+        # provider, plus an implicit front-end key of GATEWAY_API_KEY. Only the
+        # secrets you've actually set are injected — the others stay unset and
+        # the gateway just doesn't register that modality. *_BASE_URL points a
+        # backend at its real endpoint; *_MODEL pins/extends the backend's served
+        # image/video/music model (the registry appends it to the provider's
+        # model list at build time). This is the "preserve the envs" contract:
+        # whatever secrets you add in GitHub, they flow straight into the image
+        # 1:1.
         env:
           OPENAI_IMAGE_API_KEY: ${{ secrets.OPENAI_IMAGE_API_KEY }}
           OPENAI_IMAGE_BASE_URL: ${{ vars.OPENAI_IMAGE_BASE_URL }}
@@ -356,6 +381,24 @@ jobs:
           OPENROUTER_VIDEO_API_KEY: ${{ secrets.OPENROUTER_VIDEO_API_KEY }}
           OPENROUTER_VIDEO_BASE_URL: ${{ vars.OPENROUTER_VIDEO_BASE_URL }}
           OPENROUTER_VIDEO_MODEL: ${{ vars.OPENROUTER_VIDEO_MODEL }}
+          GOOGLE_MUSIC_API_KEY: ${{ secrets.GOOGLE_MUSIC_API_KEY }}
+          GOOGLE_MUSIC_BASE_URL: ${{ vars.GOOGLE_MUSIC_BASE_URL }}
+          GOOGLE_MUSIC_MODEL: ${{ vars.GOOGLE_MUSIC_MODEL }}
+          ELEVENLABS_MUSIC_API_KEY: ${{ secrets.ELEVENLABS_MUSIC_API_KEY }}
+          ELEVENLABS_MUSIC_BASE_URL: ${{ vars.ELEVENLABS_MUSIC_BASE_URL }}
+          ELEVENLABS_MUSIC_MODEL: ${{ vars.ELEVENLABS_MUSIC_MODEL }}
+          MINIMAX_MUSIC_API_KEY: ${{ secrets.MINIMAX_MUSIC_API_KEY }}
+          MINIMAX_MUSIC_BASE_URL: ${{ vars.MINIMAX_MUSIC_BASE_URL }}
+          MINIMAX_MUSIC_MODEL: ${{ vars.MINIMAX_MUSIC_MODEL }}
+          UDIOAPI_MUSIC_API_KEY: ${{ secrets.UDIOAPI_MUSIC_API_KEY }}
+          UDIOAPI_MUSIC_BASE_URL: ${{ vars.UDIOAPI_MUSIC_BASE_URL }}
+          UDIOAPI_MUSIC_MODEL: ${{ vars.UDIOAPI_MUSIC_MODEL }}
+          MUREKA_MUSIC_API_KEY: ${{ secrets.MUREKA_MUSIC_API_KEY }}
+          MUREKA_MUSIC_BASE_URL: ${{ vars.MUREKA_MUSIC_BASE_URL }}
+          MUREKA_MUSIC_MODEL: ${{ vars.MUREKA_MUSIC_MODEL }}
+          ACESTEP_MUSIC_API_KEY: ${{ secrets.ACESTEP_MUSIC_API_KEY }}
+          ACESTEP_MUSIC_BASE_URL: ${{ vars.ACESTEP_MUSIC_BASE_URL }}
+          ACESTEP_MUSIC_MODEL: ${{ vars.ACESTEP_MUSIC_MODEL }}
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
         run: |
           docker run -d --name gateway --restart=no \
@@ -376,6 +419,12 @@ jobs:
             -e STABILITY_VIDEO_API_KEY -e STABILITY_VIDEO_BASE_URL -e STABILITY_VIDEO_MODEL \
             -e OPENROUTER_IMAGE_API_KEY -e OPENROUTER_IMAGE_BASE_URL -e OPENROUTER_IMAGE_MODEL \
             -e OPENROUTER_VIDEO_API_KEY -e OPENROUTER_VIDEO_BASE_URL -e OPENROUTER_VIDEO_MODEL \
+            -e GOOGLE_MUSIC_API_KEY -e GOOGLE_MUSIC_BASE_URL -e GOOGLE_MUSIC_MODEL \
+            -e ELEVENLABS_MUSIC_API_KEY -e ELEVENLABS_MUSIC_BASE_URL -e ELEVENLABS_MUSIC_MODEL \
+            -e MINIMAX_MUSIC_API_KEY -e MINIMAX_MUSIC_BASE_URL -e MINIMAX_MUSIC_MODEL \
+            -e UDIOAPI_MUSIC_API_KEY -e UDIOAPI_MUSIC_BASE_URL -e UDIOAPI_MUSIC_MODEL \
+            -e MUREKA_MUSIC_API_KEY -e MUREKA_MUSIC_BASE_URL -e MUREKA_MUSIC_MODEL \
+            -e ACESTEP_MUSIC_API_KEY -e ACESTEP_MUSIC_BASE_URL -e ACESTEP_MUSIC_MODEL \
             -e GATEWAY_API_KEY \
             ghcr.io/${{ github.repository }}:sha-${GITHUB_SHA::7}
 
@@ -384,10 +433,10 @@ jobs:
 
       - name: Run e2e smoke
         env:
-          # *_IMAGE_* / *_VIDEO_* API_KEY are secrets; the *_BASE_URL / *_MODEL
-          # in each triple are variables (not sensitive), matching the gate and
-          # the container-start step — so the smoke script sees the same triple
-          # each provider modality was gated on.
+          # *_IMAGE_* / *_VIDEO_* / *_MUSIC_* API_KEY are secrets; the
+          # *_BASE_URL / *_MODEL in each triple are variables (not sensitive),
+          # matching the gate and the container-start step — so the smoke script
+          # sees the same triple each provider modality was gated on.
           MM_GATEWAY: http://127.0.0.1:8000
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           OPENAI_IMAGE_API_KEY: ${{ secrets.OPENAI_IMAGE_API_KEY }}
@@ -438,6 +487,24 @@ jobs:
           OPENROUTER_VIDEO_API_KEY: ${{ secrets.OPENROUTER_VIDEO_API_KEY }}
           OPENROUTER_VIDEO_BASE_URL: ${{ vars.OPENROUTER_VIDEO_BASE_URL }}
           OPENROUTER_VIDEO_MODEL: ${{ vars.OPENROUTER_VIDEO_MODEL }}
+          GOOGLE_MUSIC_API_KEY: ${{ secrets.GOOGLE_MUSIC_API_KEY }}
+          GOOGLE_MUSIC_BASE_URL: ${{ vars.GOOGLE_MUSIC_BASE_URL }}
+          GOOGLE_MUSIC_MODEL: ${{ vars.GOOGLE_MUSIC_MODEL }}
+          ELEVENLABS_MUSIC_API_KEY: ${{ secrets.ELEVENLABS_MUSIC_API_KEY }}
+          ELEVENLABS_MUSIC_BASE_URL: ${{ vars.ELEVENLABS_MUSIC_BASE_URL }}
+          ELEVENLABS_MUSIC_MODEL: ${{ vars.ELEVENLABS_MUSIC_MODEL }}
+          MINIMAX_MUSIC_API_KEY: ${{ secrets.MINIMAX_MUSIC_API_KEY }}
+          MINIMAX_MUSIC_BASE_URL: ${{ vars.MINIMAX_MUSIC_BASE_URL }}
+          MINIMAX_MUSIC_MODEL: ${{ vars.MINIMAX_MUSIC_MODEL }}
+          UDIOAPI_MUSIC_API_KEY: ${{ secrets.UDIOAPI_MUSIC_API_KEY }}
+          UDIOAPI_MUSIC_BASE_URL: ${{ vars.UDIOAPI_MUSIC_BASE_URL }}
+          UDIOAPI_MUSIC_MODEL: ${{ vars.UDIOAPI_MUSIC_MODEL }}
+          MUREKA_MUSIC_API_KEY: ${{ secrets.MUREKA_MUSIC_API_KEY }}
+          MUREKA_MUSIC_BASE_URL: ${{ vars.MUREKA_MUSIC_BASE_URL }}
+          MUREKA_MUSIC_MODEL: ${{ vars.MUREKA_MUSIC_MODEL }}
+          ACESTEP_MUSIC_API_KEY: ${{ secrets.ACESTEP_MUSIC_API_KEY }}
+          ACESTEP_MUSIC_BASE_URL: ${{ vars.ACESTEP_MUSIC_BASE_URL }}
+          ACESTEP_MUSIC_MODEL: ${{ vars.ACESTEP_MUSIC_MODEL }}
         run: python tests/e2e/smoke.py
 
       - name: Dump gateway logs on failure
