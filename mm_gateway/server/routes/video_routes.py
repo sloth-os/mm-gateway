@@ -22,11 +22,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request
 from fastapi.responses import JSONResponse
 
 from mm_gateway.config import KeyConfig
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.schemas.api import CreateResponse, VideoRequest, VideoTaskResponse
 from mm_gateway.schemas.video import UnifiedVideoTask
 from mm_gateway.server.auth import authorize_task, get_api_key, routing_overrides
 from mm_gateway.tasks.store import TaskRecord
@@ -62,29 +63,124 @@ async def _create(request: Request, key: KeyConfig, *, wait: bool) -> Any:
     return JSONResponse(content=out)
 
 
-@router.post("/v1/videos", tags=["video"])
+@router.post(
+    "/v1/videos",
+    tags=["video"],
+    response_model=CreateResponse,
+    responses={422: {"description": "Validation Error"}},
+)
 async def seedance_create(
     request: Request,
     key: KeyConfig = Depends(get_api_key),
-    wait: bool | None = Query(default=None),
+    wait: bool | None = Query(
+        default=None,
+        description="true blocks until completion; false returns a task id to poll.",
+        examples={"default": {"value": True}},
+    ),
+    body: VideoRequest = Body(
+        ...,
+        openapi_examples={
+            "text_to_video": {
+                "summary": "Text-to-video",
+                "value": {
+                    "model": "gateway-video-pro",
+                    "content": [{"type": "text", "text": "a cat playing piano, cinematic"}],
+                    "ratio": "16:9",
+                    "duration": 5,
+                },
+            },
+            "image_to_video": {
+                "summary": "Image-to-video (first frame)",
+                "value": {
+                    "model": "gateway-video-pro",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "https://example.test/first.png"}, "role": "first_frame"},
+                        {"type": "text", "text": "the cat wakes up"},
+                    ],
+                },
+            },
+        },
+    ),
+    prefer: str | None = Header(
+        None, alias="Prefer",
+        description='Set to "respond-async" to return a task id instead of blocking.',
+        examples={"default": {"value": "respond-async"}},
+    ),
+    x_backend_tag: str | None = Header(
+        None, alias="X-Backend-Tag", description="Pin to a backend by tag label.",
+        examples={"default": {"value": "prod"}},
+    ),
+    x_backend: str | None = Header(
+        None, alias="X-Backend", description="Pin to a backend by name.",
+        examples={"default": {"value": "openai"}},
+    ),
+    x_request_id: str | None = Header(
+        None, alias="X-Request-Id", description="Client-supplied request id (echoed back).",
+        examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
+    ),
 ) -> Any:
     return await _create(request, key, wait=not _is_async(request, wait))
 
 
-@router.post("/v1/videos/async", tags=["video"])
+@router.post(
+    "/v1/videos/async",
+    tags=["video"],
+    response_model=CreateResponse,
+    responses={422: {"description": "Validation Error"}},
+)
 async def seedance_create_async(
     request: Request,
     key: KeyConfig = Depends(get_api_key),
+    body: VideoRequest = Body(
+        ...,
+        openapi_examples={
+            "text_to_video": {
+                "summary": "Text-to-video",
+                "value": {
+                    "model": "gateway-video-pro",
+                    "content": [{"type": "text", "text": "a drone shot over mountains"}],
+                },
+            },
+        },
+    ),
+    prefer: str | None = Header(
+        None, alias="Prefer", description="Ignored on the /async path (always async).",
+        examples={"default": {"value": "respond-async"}},
+    ),
+    x_backend_tag: str | None = Header(
+        None, alias="X-Backend-Tag", description="Pin to a backend by tag label.",
+        examples={"default": {"value": "prod"}},
+    ),
+    x_backend: str | None = Header(
+        None, alias="X-Backend", description="Pin to a backend by name.",
+        examples={"default": {"value": "openai"}},
+    ),
+    x_request_id: str | None = Header(
+        None, alias="X-Request-Id", description="Client-supplied request id (echoed back).",
+        examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
+    ),
 ) -> Any:
     # The /async URL is unconditionally async — ?wait / Prefer are ignored.
     return await _create(request, key, wait=False)
 
 
-@router.get("/v1/videos/{task_id}", tags=["video"])
+@router.get(
+    "/v1/videos/{task_id}",
+    tags=["video"],
+    response_model=VideoTaskResponse,
+    responses={
+        404: {"description": "Unknown task id"},
+        403: {"description": "Key not authorised for the task's backend"},
+    },
+)
 async def seedance_get(
-    task_id: str,
     request: Request,
+    task_id: str = Path(..., description="Opaque task id returned by create.", examples={"default": {"value": "vid-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}}),
     key: KeyConfig = Depends(get_api_key),
+    x_request_id: str | None = Header(
+        None, alias="X-Request-Id", description="Client-supplied request id (echoed back).",
+        examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
+    ),
 ) -> Any:
     service = request.app.state.video_service
     record = await request.app.state.task_store.get(task_id)
