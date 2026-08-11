@@ -12,13 +12,21 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from mm_gateway.config import Settings
 from mm_gateway.core.exceptions import GatewayError
 from mm_gateway.observability.httplog import frontend_request_log, frontend_response_log
-from mm_gateway.observability.logging import bind_context, clear_context, configure_logging, get_logger, new_request_id
-from mm_gateway.observability.metrics import render_prometheus
+from mm_gateway.observability.logging import (
+    bind_context,
+    clear_context,
+    configure_logging,
+    get_logger,
+    new_request_id,
+)
 from mm_gateway.registry import Registry
 from mm_gateway.services import ImageService, MusicService, VideoService
 from mm_gateway.tasks.store import TaskStore
@@ -26,7 +34,37 @@ from mm_gateway.tasks.store import TaskStore
 log = get_logger("app")
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def _problem_response(
+    request: Request,
+    *,
+    status: int,
+    code: str,
+    detail: str,
+    errors: list[dict] | None = None,
+) -> JSONResponse:
+    payload = {
+        "type": f"urn:mm-gateway:problem:{code}",
+        "title": code.replace("_", " ").title(),
+        "status": status,
+        "detail": detail,
+        "instance": request.url.path,
+        "code": code,
+        "request_id": getattr(request.state, "request_id", None),
+    }
+    if errors:
+        payload["errors"] = errors
+    return JSONResponse(
+        status_code=status,
+        content=payload,
+        media_type="application/problem+json",
+    )
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    task_store: TaskStore | None = None,
+) -> FastAPI:
     settings = settings or Settings.from_env()
     configure_logging(level=settings.log_level, fmt=settings.log_format)
 
@@ -43,7 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         registry, max_sync_wait=settings.max_sync_wait,
         poll_interval=settings.poll_interval, sync_default=settings.music_sync_default,
     )
-    task_store = TaskStore()
+    task_store = task_store or TaskStore()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -54,7 +92,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="mm-gateway",
-        description="Unified image / video / AI gateway. OpenAI- and OpenRouter-compatible.",
+        description="Unified image, video, and music gateway with separate REST APIs.",
         version="0.1.0", lifespan=lifespan,
     )
     app.state.settings = settings
@@ -67,6 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def request_context(request: Request, call_next):
         request_id = request.headers.get("x-request-id") or new_request_id()
+        request.state.request_id = request_id
         bind_context(request_id=request_id)
         # Inbound request log: curl format (masked sensitive headers) + body.
         # Reading ``request.body()`` caches it in Starlette's
@@ -116,12 +155,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     @app.exception_handler(GatewayError)
-    async def gateway_error_handler(_: Request, exc: GatewayError):
+    async def gateway_error_handler(request: Request, exc: GatewayError):
         log.warning("request_error", code=exc.code, provider=exc.provider, message=exc.message)
-        return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+        return _problem_response(
+            request,
+            status=exc.status_code,
+            code=exc.public_code,
+            detail=exc.public_message,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError):
+        return _problem_response(
+            request,
+            status=422,
+            code="validation_error",
+            detail="Request validation failed.",
+            errors=jsonable_encoder(exc.errors()),
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error_handler(request: Request, exc: StarletteHTTPException):
+        code = "not_found" if exc.status_code == 404 else "method_not_allowed" \
+            if exc.status_code == 405 else "http_error"
+        response = _problem_response(
+            request,
+            status=exc.status_code,
+            code=code,
+            detail=str(exc.detail),
+        )
+        response.headers.update(exc.headers or {})
+        return response
 
     # Register routes.
-    from mm_gateway.server.routes import image_routes, video_routes, music_routes, meta_routes
+    from mm_gateway.server.routes import (
+        image_routes,
+        meta_routes,
+        music_routes,
+        video_routes,
+    )
     app.include_router(meta_routes.router, tags=["meta"])
     app.include_router(image_routes.router)
     app.include_router(video_routes.router)
@@ -138,45 +210,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 # Paths that require a front-end API key (everything except health/metrics).
 _OPEN_PATHS = {"/health", "/metrics"}
 
-# Error-envelope response blocks, keyed by HTTP status. Every protected
-# operation can return any of these; the body is the gateway's consistent
-# {"error": {"code", "message", [provider], [details]}} envelope.
+# RFC 9457 response blocks, keyed by HTTP status. Every protected operation
+# uses the same ProblemDetail schema and ``application/problem+json`` media type.
 _ERROR_RESPONSES: dict[str, dict] = {
     "400": {
         "description": "Invalid request (invalid_request_error / unsupported_feature).",
-        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}},
     },
     "401": {
         "description": "Missing or unknown API key (unauthorized).",
-        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}},
     },
     "403": {
-        "description": "Key not allowed to use the requested backend (forbidden).",
-        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}},
+        "description": "Key not allowed to perform the request (forbidden).",
+    },
+    "409": {
+        "description": "Idempotency key conflicts with an earlier request.",
     },
     "404": {
-        "description": "Model, provider, or task not found.",
-        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}},
+        "description": "Model or task not found.",
+    },
+    "422": {
+        "description": "Request validation failed or a task failed.",
     },
     "502": {
-        "description": "Backend returned an error (provider_error).",
-        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}},
+        "description": "Generation service returned an error.",
+    },
+    "503": {
+        "description": "No usable generation service is configured.",
     },
     "504": {
-        "description": "Backend timed out (provider_timeout).",
-        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ErrorEnvelope"}}},
+        "description": "Generation service timed out.",
     },
 }
 
-# Concrete error-envelope examples (one per status) so the published spec shows
+# Concrete Problem Details examples (one per status) so the published spec shows
 # clients the exact failure body, not just a $ref.
 _ERROR_EXAMPLES: dict[str, dict] = {
-    "400": {"summary": "Invalid request", "value": {"error": {"code": "invalid_request_error", "message": "`model` is required for image generation."}}},
-    "401": {"summary": "Missing API key", "value": {"error": {"code": "unauthorized", "message": "Missing API key. Send an 'Authorization: Bearer <token>' header."}}},
-    "403": {"summary": "Forbidden backend", "value": {"error": {"code": "forbidden", "message": "API key 'bob' is not allowed to use backend 'vid-a'.", "provider": "vid-a"}}},
-    "404": {"summary": "Unknown task", "value": {"error": {"code": "task_not_found", "message": "image task img-999 not found", "provider": "fake"}}},
-    "502": {"summary": "Provider error", "value": {"error": {"code": "provider_error", "message": "upstream returned 500", "provider": "openai"}}},
-    "504": {"summary": "Provider timeout", "value": {"error": {"code": "provider_timeout", "message": "upstream timed out", "provider": "volcengine"}}},
+    "400": {"summary": "Invalid request", "code": "invalid_request_error", "detail": "The routing profile is unavailable."},
+    "401": {"summary": "Missing API key", "code": "unauthorized", "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header."},
+    "403": {"summary": "Forbidden", "code": "forbidden", "detail": "The API key is not allowed to perform this request."},
+    "409": {"summary": "Idempotency conflict", "code": "idempotency_conflict", "detail": "The Idempotency-Key was already used with a different request."},
+    "404": {"summary": "Unknown task", "code": "task_not_found", "detail": "image task img_unknown not found"},
+    "422": {
+        "summary": "Validation failed",
+        "code": "validation_error",
+        "detail": "Request validation failed.",
+        "errors": [{"type": "missing", "loc": ["body", "model"], "msg": "Field required"}],
+    },
+    "502": {"summary": "Generation service error", "code": "generation_service_error", "detail": "The generation service returned an error."},
+    "503": {"summary": "Generation service unavailable", "code": "generation_service_unavailable", "detail": "No generation service is available for this request."},
+    "504": {"summary": "Generation service timeout", "code": "generation_service_timeout", "detail": "The generation service timed out."},
 }
 
 # Concrete example values for each 2xx success-response schema, keyed by the
@@ -185,87 +267,125 @@ _ERROR_EXAMPLES: dict[str, dict] = {
 # clients a worked response body, not just a bare $ref.
 _SUCCESS_EXAMPLES: dict[str, dict] = {
     "HealthResponse": {"status": "ok"},
-    "CreateResponse": {"id": "img-01HZX4J3K7NQ8X2V9Y6R5W4T3P"},
-    "ImageTaskResponse": {
-        "id": "img-01HZX4J3K7NQ8X2V9Y6R5W4T3P",
-        "model": "gateway-image-pro",
-        "status": "succeeded",
-        "steps": [
-            {
-                "type": "model_output",
-                "content": [
-                    {"type": "image", "url": "https://cdn.example.test/img/abc.png", "mime_type": "image/png"},
-                ],
-            }
-        ],
-        "output_image_url": "https://cdn.example.test/img/abc.png",
-        "usage": {"cost": 0.02},
-        "created_at": "2026-08-09T12:00:00Z",
-        "completed_at": "2026-08-09T12:00:04Z",
-    },
-    "VideoTaskResponse": {
-        "id": "vid-01HZX4J3K7NQ8X2V9Y6R5W4T3P",
-        "model": "gateway-video-pro",
-        "status": "succeeded",
-        "content": {
-            "video_url": "https://cdn.example.test/vid/abc.mp4",
-            "last_frame_url": "https://cdn.example.test/vid/abc-last.png",
-        },
-        "usage": {"cost": 0.08},
-    },
-    "MusicTaskResponse": {
-        "id": "mus-01HZX4J3K7NQ8X2V9Y6R5W4T3P",
-        "model": "gateway-music-lyria",
-        "status": "succeeded",
-        "steps": [
-            {
-                "type": "model_output",
-                "content": [
-                    {"type": "audio", "url": "https://cdn.example.test/mus/abc.wav", "mime_type": "audio/wav"},
-                    {"type": "text", "text": "[verse]\nWalking down the street..."},
-                ],
-            }
-        ],
-        "output_audio_url": "https://cdn.example.test/mus/abc.wav",
-        "output_text": "[verse]\nWalking down the street...",
-        "usage": {"cost": 0.05},
-    },
     "ModelListResponse": {
         "object": "list",
         "data": [
-            {"id": "gateway-image-pro", "modality": "image", "type": "alias", "underlying": "dall-e-3"},
-            {"id": "gateway-video-pro", "modality": "video", "type": "alias", "underlying": "seedance-1-0"},
-            {"id": "gateway-music-lyria", "modality": "music", "type": "alias", "underlying": "lyria-2"},
+            {"id": "gateway-image-pro", "object": "model", "modality": "image"},
+            {"id": "gateway-video-pro", "object": "model", "modality": "video"},
+            {"id": "gateway-music-lyria", "object": "model", "modality": "music"},
         ],
+    },
+}
+
+_RESOURCE_EXAMPLES: dict[tuple[str, str, str], dict] = {
+    ("/v1/images", "post", "202"): {
+        "id": "img_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+        "object": "image",
+        "model": "gateway-image-pro",
+        "status": "pending",
+        "outputs": [],
+        "metadata": {"requester": "design-tool"},
+        "created_at": "2026-08-09T12:00:00Z",
+        "links": {"self": "https://gateway.example.test/v1/images/img_01HZX4J3K7NQ8X2V9Y6R5W4T3P"},
+    },
+    ("/v1/images/{image_id}", "get", "200"): {
+        "id": "img_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+        "object": "image",
+        "model": "gateway-image-pro",
+        "status": "succeeded",
+        "outputs": [{
+            "url": "https://cdn.example.test/img/abc.png",
+            "mime_type": "image/png",
+            "revised_prompt": "a cyberpunk cat in the rain",
+        }],
+        "usage": {"cost": 0.02, "output_count": 1},
+        "metadata": {"requester": "design-tool"},
+        "created_at": "2026-08-09T12:00:00Z",
+        "completed_at": "2026-08-09T12:00:04Z",
+        "links": {"self": "https://gateway.example.test/v1/images/img_01HZX4J3K7NQ8X2V9Y6R5W4T3P"},
+    },
+    ("/v1/videos", "post", "202"): {
+        "id": "vid_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+        "object": "video",
+        "model": "gateway-video-pro",
+        "status": "pending",
+        "outputs": [],
+        "metadata": {},
+        "created_at": "2026-08-09T12:00:00Z",
+        "links": {"self": "https://gateway.example.test/v1/videos/vid_01HZX4J3K7NQ8X2V9Y6R5W4T3P"},
+    },
+    ("/v1/videos/{video_id}", "get", "200"): {
+        "id": "vid_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+        "object": "video",
+        "model": "gateway-video-pro",
+        "status": "succeeded",
+        "outputs": [{
+            "url": "https://cdn.example.test/vid/abc.mp4",
+            "cover_url": "https://cdn.example.test/vid/abc-last.png",
+            "mime_type": "video/mp4",
+        }],
+        "usage": {"cost": 0.08, "output_count": 1, "duration_seconds": 5},
+        "metadata": {},
+        "created_at": "2026-08-09T12:00:00Z",
+        "completed_at": "2026-08-09T12:00:20Z",
+        "links": {"self": "https://gateway.example.test/v1/videos/vid_01HZX4J3K7NQ8X2V9Y6R5W4T3P"},
+    },
+    ("/v1/music", "post", "202"): {
+        "id": "mus_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+        "object": "music",
+        "model": "gateway-music-lyria",
+        "status": "pending",
+        "outputs": [],
+        "metadata": {},
+        "created_at": "2026-08-09T12:00:00Z",
+        "links": {"self": "https://gateway.example.test/v1/music/mus_01HZX4J3K7NQ8X2V9Y6R5W4T3P"},
+    },
+    ("/v1/music/{music_id}", "get", "200"): {
+        "id": "mus_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+        "object": "music",
+        "model": "gateway-music-lyria",
+        "status": "succeeded",
+        "outputs": [{
+            "url": "https://cdn.example.test/mus/abc.wav",
+            "mime_type": "audio/wav",
+        }],
+        "lyrics": "[verse]\nWalking down the street...",
+        "usage": {"cost": 0.05, "output_count": 1, "duration_seconds": 30},
+        "metadata": {},
+        "created_at": "2026-08-09T12:00:00Z",
+        "completed_at": "2026-08-09T12:00:30Z",
+        "links": {"self": "https://gateway.example.test/v1/music/mus_01HZX4J3K7NQ8X2V9Y6R5W4T3P"},
     },
 }
 
 
 def _install_openapi_customization(app: FastAPI) -> None:
     """Override ``app.openapi`` to add the Bearer security scheme, mark protected
-    routes as requiring it, and attach the gateway error-envelope responses.
+    routes as requiring it, and attach the gateway Problem Details responses.
 
     Done as a post-process of FastAPI's generated schema so the route decorators
     stay the single source of truth for request/response shapes; this layer only
     adds cross-cutting security + error metadata.
     """
-    from mm_gateway.schemas.api import ErrorEnvelope
+    from mm_gateway.schemas.api import ProblemDetail
 
     def custom_openapi() -> dict:
         if app.openapi_schema:
             return app.openapi_schema
         spec = FastAPI.openapi(app)
 
-        # Register the error envelope component (referenced by _ERROR_RESPONSES).
+        # Register the Problem Details component referenced by error responses.
         # Use the app's own schema generator so nested refs resolve against
         # #/components/schemas consistently with the rest of the spec, then hoist
         # any $defs it emits into the top-level components block.
         schemas = spec.setdefault("components", {}).setdefault("schemas", {})
-        if "ErrorEnvelope" not in schemas:
-            env_schema = ErrorEnvelope.model_json_schema(ref_template="#/components/schemas/{model}")
-            for name, sub in env_schema.pop("$defs", {}).items():
+        if "ProblemDetail" not in schemas:
+            problem_schema = ProblemDetail.model_json_schema(
+                ref_template="#/components/schemas/{model}"
+            )
+            for name, sub in problem_schema.pop("$defs", {}).items():
                 schemas.setdefault(name, sub)
-            schemas["ErrorEnvelope"] = env_schema
+            schemas["ProblemDetail"] = problem_schema
 
         # Bearer auth scheme.
         spec.setdefault("components", {}).setdefault("securitySchemes", {})["BearerAuth"] = {
@@ -275,7 +395,7 @@ def _install_openapi_customization(app: FastAPI) -> None:
             "description": 'Front-end API key sent as "Authorization: Bearer <token>".',
         }
 
-        _ERR_REF = {"$ref": "#/components/schemas/ErrorEnvelope"}
+        problem_ref = {"$ref": "#/components/schemas/ProblemDetail"}
         for path, item in spec.get("paths", {}).items():
             for method, op in item.items():
                 if method not in ("get", "post", "put", "patch", "delete"):
@@ -283,23 +403,39 @@ def _install_openapi_customization(app: FastAPI) -> None:
                 if path not in _OPEN_PATHS:
                     op.setdefault("security", [{"BearerAuth": []}])
                     responses = op.setdefault("responses", {})
-                    # Every protected op can return any of these gateway-error
-                    # statuses. Ensure each carries BOTH the ErrorEnvelope
-                    # schema and a concrete example -- route decorators may
+                    # Every protected op can return these problem statuses.
+                    # Ensure each carries both the shared schema and an example;
+                    # route decorators may
                     # declare a bare {"description": ...} for some codes, so
                     # set the schema/example on the media block directly rather
                     # than setdefault-ing the whole response block.
-                    for code in ("400", "401", "403", "404", "502", "504"):
+                    error_codes = ["400", "401", "403", "404", "422", "502", "503", "504"]
+                    if method == "post" and path in {"/v1/images", "/v1/videos", "/v1/music"}:
+                        error_codes.append("409")
+                    for code in error_codes:
                         resp = responses.setdefault(
                             code, {"description": _ERROR_RESPONSES[code]["description"]}
                         )
                         resp.setdefault("description", _ERROR_RESPONSES[code]["description"])
-                        media = resp.setdefault("content", {}).setdefault(
-                            "application/json", {}
-                        )
-                        media.setdefault("schema", _ERR_REF)
+                        content = resp.setdefault("content", {})
+                        content.pop("application/json", None)
+                        media = content.setdefault("application/problem+json", {})
+                        media["schema"] = problem_ref
+                        example = _ERROR_EXAMPLES[code]
+                        value = {
+                            "type": f"urn:mm-gateway:problem:{example['code']}",
+                            "title": example["code"].replace("_", " ").title(),
+                            "status": int(code),
+                            "detail": example["detail"],
+                            "instance": path,
+                            "code": example["code"],
+                            "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                        }
+                        if example.get("errors"):
+                            value["errors"] = example["errors"]
                         media.setdefault("examples", {}).setdefault(
-                            "error", _ERROR_EXAMPLES[code]
+                            "error",
+                            {"summary": example["summary"], "value": value},
                         )
 
                 # Attach a worked example to each JSON success-response media
@@ -313,35 +449,11 @@ def _install_openapi_customization(app: FastAPI) -> None:
                         continue
                     ref = media.get("schema", {}).get("$ref", "")
                     schema_name = ref.rsplit("/", 1)[-1] if ref else ""
-                    ex = _SUCCESS_EXAMPLES.get(schema_name)
+                    ex = _RESOURCE_EXAMPLES.get((path, method, str(code)))
+                    if ex is None:
+                        ex = _SUCCESS_EXAMPLES.get(schema_name)
                     if ex and "examples" not in media and "example" not in media:
                         media.setdefault("example", ex)
-
-                # FastAPI auto-attaches a 422 HTTPValidationError response.
-                # Route decorators may declare a bare {"description": ...} for
-                # 422 (which strips the auto-generated schema), so ensure the
-                # HTTPValidationError schema ref is present, then attach a
-                # concrete example body. 422 uses FastAPI's {"detail": [...]}
-                # shape (distinct from the gateway's {"error": {...}} envelope)
-                # because it is produced by FastAPI's request-body validation
-                # before the route runs.
-                err422 = op.get("responses", {}).get("422")
-                if err422:
-                    em = err422.setdefault("content", {}).setdefault("application/json", {})
-                    em.setdefault(
-                        "schema", {"$ref": "#/components/schemas/HTTPValidationError"}
-                    )
-                    if "examples" not in em and "example" not in em:
-                        em.setdefault("example", {
-                            "detail": [
-                                {
-                                    "type": "missing",
-                                    "loc": ["body", "model"],
-                                    "msg": "Field required",
-                                    "input": {"input": "a prompt"},
-                                }
-                            ]
-                        })
 
         # Make the required/optional split explicit: Pydantic omits the
         # `required` key when every field is optional, which reads ambiguously

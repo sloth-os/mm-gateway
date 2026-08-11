@@ -8,6 +8,23 @@ from __future__ import annotations
 
 from typing import Any
 
+_PUBLIC_ERROR_CODES = {
+    "provider_not_configured": "generation_service_unavailable",
+    "provider_not_found": "generation_service_not_found",
+    "provider_error": "generation_service_error",
+    "provider_timeout": "generation_service_timeout",
+    "config_error": "internal_error",
+}
+
+_PUBLIC_ERROR_MESSAGES = {
+    "generation_service_unavailable": "No generation service is available for this request.",
+    "generation_service_not_found": "The requested generation service was not found.",
+    "generation_service_error": "The generation service returned an error.",
+    "generation_service_timeout": "The generation service timed out.",
+    "internal_error": "The gateway could not complete the request.",
+    "forbidden": "The API key is not allowed to perform this request.",
+}
+
 
 class GatewayError(Exception):
     """Base class for all gateway errors.
@@ -42,6 +59,28 @@ class GatewayError(Exception):
         if self.details:
             payload["error"]["details"] = self.details
         return payload
+
+    def to_public_dict(self) -> dict[str, Any]:
+        """Return the provider-neutral error representation exposed to clients."""
+        payload: dict[str, Any] = {
+            "error": {
+                "code": self.public_code,
+                "message": self.public_message,
+            }
+        }
+        # Upstream details can contain provider wire payloads or credentials.
+        # Structured client-error details remain useful and safe to expose.
+        if self.details and self.status_code < 500:
+            payload["error"]["details"] = self.details
+        return payload
+
+    @property
+    def public_code(self) -> str:
+        return _PUBLIC_ERROR_CODES.get(self.code, self.code)
+
+    @property
+    def public_message(self) -> str:
+        return _PUBLIC_ERROR_MESSAGES.get(self.public_code, self.message)
 
 
 class ConfigError(GatewayError):
@@ -115,3 +154,8 @@ class ForbiddenError(GatewayError):
 
     status_code = 403
     code = "forbidden"
+
+
+class ConflictError(GatewayError):
+    status_code = 409
+    code = "conflict"

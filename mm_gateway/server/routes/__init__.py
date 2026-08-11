@@ -1,1 +1,1 @@
-"""HTTP route modules: image, video, and meta (health/models/metrics)."""
+"""HTTP route modules: image, video, music, and meta."""

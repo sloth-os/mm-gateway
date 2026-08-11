@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mm-gateway"
 version = "0.1.0"
-description = "Unified image / video / AI gateway. OpenAI- and OpenRouter-compatible on the front; multi-provider on the back."
+description = "Provider-neutral image, video, and music generation gateway."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }

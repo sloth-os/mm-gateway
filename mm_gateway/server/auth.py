@@ -2,10 +2,7 @@
 
 A request to any generation or model-listing endpoint must carry an
 ``Authorization: Bearer <token>`` header whose token matches a configured
-``KeyConfig``. Unknown or absent tokens raise ``UnauthorizedError`` (401). The
-``X-Backend-Tag`` header, and the ``provider.tag``/``provider.backend`` fields
-of a JSON request body, are read here so the routes can pass them down to the
-service for routing.
+``KeyConfig``. Unknown or absent tokens raise ``UnauthorizedError`` (401).
 
 The token-to-``KeyConfig`` lookup lives in ``resolve_key`` so it can be shared
 by both the HTTP dependency (``get_api_key``) and the MCP tools, which read the
@@ -15,12 +12,11 @@ by both the HTTP dependency (``get_api_key``) and the MCP tools, which read the
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import Request
 
 from mm_gateway.config import KeyConfig, Settings
 from mm_gateway.core.exceptions import ForbiddenError, UnauthorizedError
+from mm_gateway.tasks.store import TaskRecord
 
 
 def _extract_token(request: Request) -> str | None:
@@ -60,9 +56,9 @@ def get_api_key(request: Request) -> KeyConfig:
 
 
 def authorize_task(
-    request: Request, key: KeyConfig, provider_name: str | None
+    request: Request, key: KeyConfig, record: TaskRecord
 ) -> None:
-    """Ensure ``key`` may access a task owned by ``provider_name``.
+    """Ensure ``key`` owns the task and may still use its routed backend.
 
     Polling a task id never re-runs the create-path routing, so the hybrid
     usable check there is bypassed on read. Without this guard, any
@@ -70,23 +66,12 @@ def authorize_task(
     owned by a backend it is not authorised to use — a cross-tenant leak. The
     owning backend comes from the task store record written at creation time.
     """
-    if not provider_name:
-        return  # no record -> let the service surface the not-found error
-    if provider_name not in request.app.state.registry.usable_backends(key):
-        raise ForbiddenError(
-            f"API key '{key.id}' is not allowed to use backend '{provider_name}'."
-        )
+    authorize_task_access(request.app.state.registry, key, record)
 
 
-def routing_overrides(request: Request, body: dict[str, Any] | None = None
-                      ) -> tuple[str | None, str | None]:
-    """Return ``(tag, backend_name)`` overrides from headers and/or body."""
-    tag = request.headers.get("x-backend-tag")
-    backend = request.headers.get("x-backend")
-    if body and isinstance(body.get("provider"), dict):
-        pref = body["provider"]
-        if tag is None and pref.get("tag"):
-            tag = pref["tag"]
-        if backend is None and pref.get("backend"):
-            backend = pref["backend"]
-    return tag, backend
+def authorize_task_access(registry, key: KeyConfig, record: TaskRecord) -> None:
+    """Pure task authorization shared by HTTP routes and MCP tools."""
+    if record.owner_key_id != key.id:
+        raise ForbiddenError("The API key is not allowed to access this task.")
+    if record.provider not in registry.usable_backends(key):
+        raise ForbiddenError("The API key is not allowed to access this task.")

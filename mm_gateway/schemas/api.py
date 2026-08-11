@@ -1,429 +1,499 @@
-"""Front-end wire-shape Pydantic models for the OpenAPI (Swagger) spec.
+"""Public REST wire models for the image, video, and music APIs.
 
-These mirror the front-end request/response shapes the gateway speaks on the
-HTTP boundary -- the Gemini Interactions image shape ({model, input, config}),
-the Seedance video shape ({model, content, ...}), and the Gemini Lyria 3 music
-shape ({model, input, config}) -- not the unified internal schemas in
-schemas/image.py / video.py / music.py.
+Each modality has its own collection and item endpoints, while sharing the same
+resource lifecycle and top-level request vocabulary:
 
-They exist so FastAPI can emit a complete OpenAPI spec (request bodies, response
-bodies, header/query parameters, examples, required/optional markers) from the
-routes. The routes still parse raw JSON with request.json() and feed it to the
-translators, so these models are deliberately permissive (extra="allow"): unknown
-keys pass straight through to the translator's extra bucket, so a typed model
-can never reject a body the lenient translator would accept.
+``{model, input, parameters, routing, metadata}``
 
-Note on responses: the routes return JSONResponse(content=...), so a
-response_model declared on a route is consulted only when generating the OpenAPI
-schema -- FastAPI does not re-validate or filter a Response object at runtime.
-These response models therefore document the exact translator output shapes
-(to_gemini_task / to_seedance_task / to_lyria_task) without altering runtime.
+Both the envelope and ``parameters`` are strict. New backend capabilities must
+first be expressed as provider-neutral gateway concepts and translated inside
+the adapters; upstream-specific option names never cross this boundary.
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from datetime import datetime
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
-
-# Permissive config: unknown keys pass straight through to the translator's
-# extra bucket, so a typed model can never reject a body the translator accepts.
-_PERMISSIVE = ConfigDict(extra="allow")
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TaskStatus = Literal["pending", "running", "succeeded", "failed", "cancelled", "expired"]
+Prompt = Annotated[str, Field(min_length=1)]
+
+_STRICT = ConfigDict(extra="forbid")
+_RESPONSE = ConfigDict(extra="allow")
 
 
 # --------------------------------------------------------------------------- #
-# Shared shapes
+# Shared request and response fields
 # --------------------------------------------------------------------------- #
 
 
-class ErrorBody(BaseModel):
-    """The gateway's consistent error envelope (GatewayError.to_dict)."""
+class ProblemDetail(BaseModel):
+    """RFC 9457 problem details with stable gateway extensions."""
 
-    code: str = Field(..., description="Stable machine-readable error code.")
-    message: str = Field(..., description="Human-readable error message.")
-    provider: str | None = Field(None, description="Backend that produced the error, if any.")
-    details: dict[str, Any] | None = Field(None, description="Extra structured detail.")
+    model_config = _RESPONSE
 
-
-class ErrorEnvelope(BaseModel):
-    """Every non-2xx response is wrapped in {"error": ErrorBody}."""
-
-    error: ErrorBody = Field(..., description="The error descriptor.")
-
-
-class UsageCost(BaseModel):
-    """Per-task usage/cost summary surfaced on poll responses."""
-
-    cost: float | None = Field(None, description="Estimated cost in USD.")
-
-
-# --------------------------------------------------------------------------- #
-# Content parts (the typed blocks inside `input` / `content` arrays)
-# --------------------------------------------------------------------------- #
-
-
-class TextPart(BaseModel):
-    model_config = _PERMISSIVE
-    type: Literal["text"] = Field("text", description="A text prompt fragment.")
-    text: str = Field(..., description="The text content.")
-
-
-class ImagePart(BaseModel):
-    """An image input: either a URL or inline base64 data."""
-
-    model_config = _PERMISSIVE
-    type: Literal["image"] = Field("image", description="An image input.")
-    url: str | None = Field(None, description="Image URL.")
-    data: str | None = Field(None, description="Inline base64-encoded image bytes.")
-    mime_type: str | None = Field(None, description="MIME type of inline data.")
-
-
-class ImageUrlPart(BaseModel):
-    """Seedance-style image_url part with an optional role."""
-
-    model_config = _PERMISSIVE
-    type: Literal["image_url"] = Field("image_url", description="An image_url input.")
-    image_url: dict[str, Any] = Field(..., description='{"url": "..."} envelope.')
-    role: str | None = Field(None, description="Role, e.g. first_frame / last_frame.")
-
-
-class VideoUrlPart(BaseModel):
-    model_config = _PERMISSIVE
-    type: Literal["video_url"] = Field("video_url", description="A reference video input.")
-    video_url: dict[str, Any] = Field(..., description='{"url": "..."} envelope.')
-    role: str | None = Field(None, description="Role, e.g. reference_video.")
-
-
-class AudioUrlPart(BaseModel):
-    model_config = _PERMISSIVE
-    type: Literal["audio_url"] = Field("audio_url", description="A reference audio input.")
-    audio_url: dict[str, Any] = Field(..., description='{"url": "..."} envelope.')
-    role: str | None = Field(None, description="Role, e.g. reference_audio.")
-
-
-class DraftPart(BaseModel):
-    model_config = _PERMISSIVE
-    type: Literal["draft_task"] = Field("draft_task", description="A draft task reference.")
-    draft_task: dict[str, Any] = Field(..., description="Draft task descriptor.")
-
-
-# A content part is any of the typed blocks above (union kept loose so unknown
-# part types are not rejected -- the translators silently drop unknown types).
-ContentPart = Union[
-    TextPart, ImagePart, ImageUrlPart, VideoUrlPart, AudioUrlPart, DraftPart, dict
-]
-
-
-# --------------------------------------------------------------------------- #
-# Routing directive (provider: {tag|backend})
-# --------------------------------------------------------------------------- #
-
-
-class ProviderDirective(BaseModel):
-    """Routing directive read from the request body by routing_overrides."""
-
-    model_config = _PERMISSIVE
-    tag: str | None = Field(None, description="Pin to a backend by tag label.")
-    backend: str | None = Field(None, description="Pin to a backend by name.")
-
-
-# --------------------------------------------------------------------------- #
-# IMAGE -- Gemini Interactions shape
-# --------------------------------------------------------------------------- #
-
-
-class ImageConfig(BaseModel):
-    """Knobs accepted inside `config` for an image request (Gemini shape).
-
-    Any unknown key passes through to the provider via the translator's extra.
-    """
-
-    model_config = _PERMISSIVE
-    negative_prompt: str | None = Field(None, description="Negative prompt.")
-    n: int | None = Field(None, ge=1, le=16, description="Number of images.")
-    size: str | None = Field(None, description="Output size, e.g. 1024x1024.")
-    width: int | None = Field(None, description="Width in pixels.")
-    height: int | None = Field(None, description="Height in pixels.")
-    aspect_ratio: str | None = Field(None, description="Aspect ratio, e.g. 16:9.")
-    resolution: str | None = Field(None, description="Resolution hint.")
-    quality: str | None = Field(None, description="Quality preset, e.g. high.")
-    style: str | None = Field(None, description="Style preset.")
-    seed: int | None = Field(None, description="RNG seed for reproducibility.")
-    guidance_scale: float | None = Field(None, description="CFG guidance scale.")
-    num_inference_steps: int | None = Field(None, description="Inference step count.")
-    strength: float | None = Field(None, description="Denoising strength (img2img).")
-    watermark: bool | None = Field(None, description="Apply provider watermark.")
-    response_format: dict[str, Any] | str | None = Field(
-        None, description='Imagen/Lyria envelope {"type":"url|b64_json","quality":...} or "url"/"b64_json".'
+    type: str = Field(..., description="URI identifying the problem type.")
+    title: str = Field(..., description="Short, stable summary of the problem type.")
+    status: int = Field(..., ge=400, le=599, description="HTTP response status code.")
+    detail: str = Field(..., description="Human-readable detail for this occurrence.")
+    instance: str | None = Field(None, description="URI reference identifying this occurrence.")
+    code: str = Field(..., description="Stable machine-readable gateway error code.")
+    request_id: str | None = Field(None, description="Request correlation identifier.")
+    errors: list[dict[str, Any]] | None = Field(
+        None,
+        description="Field-level validation errors, when applicable.",
     )
-    output_format: str | None = Field(None, description="Output file format.")
-    output_compression: int | None = Field(None, description="Output compression 0-100.")
-    background: str | None = Field(None, description="Background, e.g. transparent.")
-    stream: bool | None = Field(None, description="Stream output.")
-    callback_url: str | None = Field(None, description="Async callback webhook.")
-    user: str | None = Field(None, description="End-user id for abuse tracking.")
-
-
-class ImageRequest(BaseModel):
-    """POST /v1/images request body -- the Gemini Interactions image shape."""
-
-    model_config = _PERMISSIVE
-    model: str = Field(..., description="Model id or gateway alias (e.g. gateway-image-pro).")
-    input: Union[str, list[ContentPart]] = Field(
-        ...,
-        description="A string prompt, or an array of typed parts (text/image).",
-    )
-    config: ImageConfig | None = Field(None, description="Generation knobs.")
-    response_format: str | None = Field(None, description='"url" or "b64_json" output delivery.')
-    provider: ProviderDirective | None = Field(None, description="Routing override.")
-
-    model_config = ConfigDict(
-        extra="allow", json_schema_extra={
-            "example": {
-                "model": "gateway-image-pro",
-                "input": "a cyberpunk cat in the rain, neon",
-                "config": {"n": 1, "size": "1024x1024", "quality": "high", "seed": 42},
-                "response_format": "url",
-            }
-        }
-    )
-
-
-# --------------------------------------------------------------------------- #
-# VIDEO -- Seedance shape
-# --------------------------------------------------------------------------- #
-
-
-class VideoRequest(BaseModel):
-    """POST /v1/videos request body -- the Seedance (Volcengine Ark) shape."""
-
-    model_config = ConfigDict(
-        extra="allow", json_schema_extra={
-            "example": {
-                "model": "gateway-video-pro",
-                "content": [{"type": "text", "text": "a cat playing piano, cinematic"}],
-                "ratio": "16:9",
-                "duration": 5,
-                "seed": 7,
-            }
-        }
-    )
-    model: str = Field(..., description="Model id or gateway alias.")
-    content: list[ContentPart] = Field(..., description="Typed parts: text, image_url, video_url, audio_url, draft_task.")
-    negative_prompt: str | None = Field(None, description="Negative prompt.")
-    duration: float | None = Field(None, description="Clip duration in seconds.")
-    ratio: str | None = Field(None, description="Aspect ratio, e.g. 16:9.")
-    aspect_ratio: str | None = Field(None, description="Alias for ratio.")
-    resolution: str | None = Field(None, description="Resolution preset.")
-    size: str | None = Field(None, description="Size, e.g. 1920x1080.")
-    width: int | None = Field(None, description="Width in pixels.")
-    height: int | None = Field(None, description="Height in pixels.")
-    fps: int | None = Field(None, description="Frames per second.")
-    seed: int | None = Field(None, description="RNG seed.")
-    generate_audio: bool | None = Field(None, description="Generate accompanying audio.")
-    camera_fixed: bool | None = Field(None, description="Fix the camera.")
-    watermark: bool | None = Field(None, description="Apply provider watermark.")
-    prompt_extend: bool | None = Field(None, description="Let the provider expand the prompt.")
-    callback_url: str | None = Field(None, description="Async callback webhook.")
-    return_last_frame: bool | None = Field(None, description="Return the last frame for chaining.")
-    provider: ProviderDirective | None = Field(None, description="Routing override.")
-
-
-# --------------------------------------------------------------------------- #
-# MUSIC -- Gemini Lyria 3 shape
-# --------------------------------------------------------------------------- #
-
-
-class MusicResponseFormat(BaseModel):
-    """Lyria response_format envelope: {"type": "audio", "quality": ...}."""
-
-    model_config = _PERMISSIVE
-    type: str | None = Field(None, description='"audio" selects wav output.')
-    quality: str | None = Field(None, description="Audio quality preset.")
-
-
-class MusicConfig(BaseModel):
-    """Knobs accepted inside `config` for a music request (Lyria shape)."""
-
-    model_config = _PERMISSIVE
-    negative_prompt: str | None = Field(None, description="Negative prompt.")
-    duration: float | None = Field(None, description="Duration in seconds.")
-    bpm: float | None = Field(None, description="Tempo in beats per minute.")
-    key_scale: str | None = Field(None, description='Musical key, e.g. "C minor".')
-    key: str | None = Field(None, description='Tonal key, e.g. "C".')
-    scale: str | None = Field(None, description='Scale, e.g. "minor".')
-    time_signature: str | None = Field(None, description='Time signature, e.g. "4/4".')
-    vocal_language: str | None = Field(None, description="Vocal language.")
-    audio_format: str | None = Field(None, description='Output format, e.g. "wav".')
-    audio_quality: str | None = Field(None, description="Output quality preset.")
-    is_instrumental: bool | None = Field(None, description="Instrumental only (no vocals).")
-    generate_audio: bool | None = Field(None, description="Generate audio (vs. structure only).")
-    seed: int | None = Field(None, description="RNG seed.")
-    guidance_scale: float | None = Field(None, description="Guidance scale.")
-    n: int | None = Field(None, ge=1, description="Number of outputs.")
-    callback_url: str | None = Field(None, description="Async callback webhook.")
-    response_format: MusicResponseFormat | None = Field(None, description="Lyria response envelope.")
-
-
-class MusicRequest(BaseModel):
-    """POST /v1/music request body -- the Gemini Lyria 3 Interactions shape."""
-
-    model_config = ConfigDict(
-        extra="allow", json_schema_extra={
-            "example": {
-                "model": "gateway-music-lyria",
-                "input": "an upbeat pop song about summer",
-                "config": {"duration": 30, "bpm": 120, "is_instrumental": False, "audio_format": "wav"},
-                "response_format": {"type": "audio"},
-            }
-        }
-    )
-    model: str = Field(..., description="Model id or gateway alias.")
-    input: Union[str, list[ContentPart]] = Field(
-        ..., description="A string prompt, or an array of typed parts (text/image)."
-    )
-    config: MusicConfig | None = Field(None, description="Generation knobs.")
-    response_format: MusicResponseFormat | None = Field(None, description="Lyria response envelope.")
-    provider: ProviderDirective | None = Field(None, description="Routing override.")
-
-
-# --------------------------------------------------------------------------- #
-# Create-response shape (POST .../create -> {"id": "..."})
-# --------------------------------------------------------------------------- #
-
-
-class CreateResponse(BaseModel):
-    """The create endpoints return only the task id."""
-
-    id: str = Field(..., description="Opaque task id used to poll for results.")
-
-
-# --------------------------------------------------------------------------- #
-# Poll-response blocks
-# --------------------------------------------------------------------------- #
-
-
-class ImageBlock(BaseModel):
-    """An image result block: a URL or inline base64, with optional mime_type."""
-
-    model_config = _PERMISSIVE
-    type: Literal["image"] = Field("image", description="An image result block.")
-    url: str | None = Field(None, description="Image URL.")
-    data: str | None = Field(None, description="Inline base64-encoded image bytes.")
-    mime_type: str | None = Field(None, description="MIME type of inline data.")
-
-
-class AudioBlock(BaseModel):
-    """An audio result block: inline base64 or a URL, with optional mime_type."""
-
-    model_config = _PERMISSIVE
-    type: Literal["audio"] = Field("audio", description="An audio result block.")
-    url: str | None = Field(None, description="Audio URL (gateway extension).")
-    data: str | None = Field(None, description="Inline base64-encoded audio bytes.")
-    mime_type: str | None = Field(None, description="MIME type of the audio.")
-
-
-class ModelOutputStep(BaseModel):
-    """A model_output step carrying the result content blocks."""
-
-    model_config = _PERMISSIVE
-    type: Literal["model_output"] = Field("model_output", description="A model output step.")
-    content: list[dict[str, Any]] = Field(..., description="Typed result blocks.")
 
 
 class TaskError(BaseModel):
-    model_config = _PERMISSIVE
-    code: str = Field(..., description="Error code, e.g. failed.")
-    message: str = Field(..., description="Error message.")
+    model_config = _RESPONSE
+
+    code: str
+    message: str
 
 
-class ImageTaskResponse(BaseModel):
-    """GET /v1/images/{id} -- the Gemini steps/content poll shape."""
+class ResourceLinks(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    model_config = _PERMISSIVE
-    id: str = Field(..., description="Task id.")
-    model: str | None = Field(None, description="Model that produced the result.")
-    status: TaskStatus = Field(..., description="Task lifecycle status.")
-    steps: list[ModelOutputStep] | None = Field(None, description="model_output steps with content blocks.")
-    output_image: str | None = Field(None, description="Last inline image block's base64.")
-    output_image_url: str | None = Field(None, description="Last image block's URL.")
-    error: TaskError | None = Field(None, description="Present only on failure.")
-    usage: UsageCost | None = Field(None, description="Cost summary.")
-    created_at: str | None = Field(None, description="Creation timestamp (ISO 8601).")
-    completed_at: str | None = Field(None, description="Completion timestamp (ISO 8601).")
+    self_url: str = Field(..., alias="self", description="Canonical resource URL.")
 
 
-class VideoContentEnvelope(BaseModel):
-    """Seedance poll `content` envelope with the generated video URL."""
+class RoutingDirective(BaseModel):
+    """Select a server-defined, provider-neutral routing policy."""
 
-    model_config = _PERMISSIVE
-    video_url: str | None = Field(None, description="Generated video URL.")
-    last_frame_url: str | None = Field(None, description="Last frame URL for chaining.")
+    model_config = _STRICT
 
-
-class VideoTaskResponse(BaseModel):
-    """GET /v1/videos/{id} -- the Seedance poll shape."""
-
-    model_config = _PERMISSIVE
-    id: str = Field(..., description="Task id.")
-    model: str | None = Field(None, description="Model that produced the result.")
-    status: TaskStatus = Field(..., description="Task lifecycle status.")
-    content: VideoContentEnvelope | None = Field(None, description="Generated video URLs.")
-    error: TaskError | None = Field(None, description="Present only on failure.")
-    usage: UsageCost | None = Field(None, description="Cost summary.")
+    profile: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Gateway-defined routing profile, such as `quality`, `fast`, or "
+            "`eu`. It never names a provider or backend."
+        ),
+    )
 
 
-class MusicTaskResponse(BaseModel):
-    """GET /v1/music/{id} -- the Lyria steps/content poll shape."""
+class Usage(BaseModel):
+    """Provider-neutral usage fields shared by all three modalities."""
 
-    model_config = _PERMISSIVE
-    id: str = Field(..., description="Task id.")
-    model: str | None = Field(None, description="Model that produced the result.")
-    status: TaskStatus = Field(..., description="Task lifecycle status.")
-    steps: list[ModelOutputStep] | None = Field(None, description="model_output steps with content blocks.")
-    output_audio: str | None = Field(None, description="Last inline audio block's base64.")
-    output_audio_url: str | None = Field(None, description="Last audio block's URL.")
-    output_text: str | None = Field(None, description="Generated lyrics/structure text.")
-    error: TaskError | None = Field(None, description="Present only on failure.")
-    usage: UsageCost | None = Field(None, description="Cost summary.")
+    model_config = _RESPONSE
+
+    cost: float | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    output_count: int | None = None
+    duration_seconds: float | None = None
+
+
+class TextInput(BaseModel):
+    model_config = _STRICT
+
+    type: Literal["text"]
+    text: Prompt
+
+
+class ImageInput(BaseModel):
+    model_config = _STRICT
+
+    type: Literal["image"]
+    url: str | None = Field(None, min_length=1)
+    data: str | None = Field(None, min_length=1, description="Base64-encoded image bytes.")
+    mime_type: str | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_source(self) -> ImageInput:
+        if bool(self.url) == bool(self.data):
+            raise ValueError("image input requires exactly one of `url` or `data`")
+        return self
+
+
+class AudioInput(BaseModel):
+    model_config = _STRICT
+
+    type: Literal["audio"]
+    url: str | None = Field(None, min_length=1)
+    data: str | None = Field(None, min_length=1, description="Base64-encoded audio bytes.")
+    mime_type: str | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_source(self) -> AudioInput:
+        if bool(self.url) == bool(self.data):
+            raise ValueError("audio input requires exactly one of `url` or `data`")
+        return self
+
+
+class VideoInput(BaseModel):
+    model_config = _STRICT
+
+    type: Literal["video"]
+    url: str | None = Field(None, min_length=1)
+    data: str | None = Field(None, min_length=1, description="Base64-encoded video bytes.")
+    mime_type: str | None = None
+    role: Literal["reference_video"] = "reference_video"
+
+    @model_validator(mode="after")
+    def exactly_one_source(self) -> VideoInput:
+        if bool(self.url) == bool(self.data):
+            raise ValueError("video input requires exactly one of `url` or `data`")
+        return self
+
+
+class VideoImageInput(ImageInput):
+    role: Literal["first_frame", "last_frame", "reference_image"] = "first_frame"
+
+
+class MusicImageInput(ImageInput):
+    role: Literal["reference_image"] = "reference_image"
+
+
+class VideoAudioInput(AudioInput):
+    role: Literal["reference_audio"] = "reference_audio"
+
+
+class MusicAudioInput(AudioInput):
+    role: Literal["reference_audio", "continuation_audio"] = "reference_audio"
+
+
+class LyricsInput(BaseModel):
+    model_config = _STRICT
+
+    type: Literal["lyrics"]
+    text: Prompt
+
+
+ImageInputPart = Annotated[TextInput | ImageInput, Field(discriminator="type")]
+VideoInputPart = Annotated[
+    TextInput | VideoImageInput | VideoAudioInput | VideoInput, Field(discriminator="type")
+]
+MusicInputPart = Annotated[
+    TextInput | LyricsInput | MusicImageInput | MusicAudioInput,
+    Field(discriminator="type"),
+]
+
+ImageInputList = Annotated[list[ImageInputPart], Field(min_length=1)]
+VideoInputList = Annotated[list[VideoInputPart], Field(min_length=1)]
+MusicInputList = Annotated[list[MusicInputPart], Field(min_length=1)]
+
+
+class _RequestBase(BaseModel):
+    model_config = _STRICT
+
+    model: str = Field(..., min_length=1, description="Model id returned by GET /v1/models.")
+    routing: RoutingDirective | None = None
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Client-owned metadata returned unchanged with the task.",
+    )
 
 
 # --------------------------------------------------------------------------- #
-# Meta responses
+# Image API
+# --------------------------------------------------------------------------- #
+
+
+class ImageParameters(BaseModel):
+    model_config = _STRICT
+
+    negative_prompt: str | None = None
+    output_count: int | None = Field(None, ge=1, le=16)
+    size: str | None = None
+    width: int | None = Field(None, ge=1)
+    height: int | None = Field(None, ge=1)
+    aspect_ratio: str | None = None
+    resolution: str | None = None
+    quality: str | None = None
+    style: str | None = None
+    seed: int | None = None
+    guidance_scale: float | None = Field(None, ge=0)
+    inference_steps: int | None = Field(None, ge=1)
+    strength: float | None = Field(None, ge=0, le=1)
+    watermark: bool | None = None
+    delivery: Literal["url", "base64"] | None = None
+    file_format: str | None = None
+    compression: int | None = Field(None, ge=0, le=100)
+    background: str | None = None
+
+    @model_validator(mode="after")
+    def unambiguous_dimensions(self) -> ImageParameters:
+        if (self.width is None) != (self.height is None):
+            raise ValueError("`width` and `height` must be provided together")
+        if self.size is not None and self.width is not None:
+            raise ValueError("use either `size` or `width` and `height`, not both")
+        return self
+
+
+class ImageRequest(_RequestBase):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "model": "gateway-image-pro",
+                "input": "a cyberpunk cat in the rain",
+                "parameters": {
+                    "size": "1024x1024",
+                    "quality": "high",
+                    "delivery": "url",
+                },
+                "metadata": {"requester": "design-tool"},
+            }
+        },
+    )
+
+    input: Prompt | ImageInputList
+    parameters: ImageParameters = Field(default_factory=ImageParameters)
+
+
+class ImageOutput(BaseModel):
+    model_config = _RESPONSE
+
+    url: str | None = None
+    data: str | None = Field(None, description="Base64-encoded image bytes.")
+    mime_type: str | None = None
+    revised_prompt: str | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_source(self) -> ImageOutput:
+        if bool(self.url) == bool(self.data):
+            raise ValueError("image output requires exactly one of `url` or `data`")
+        return self
+
+
+class ImageTaskResponse(BaseModel):
+    model_config = _RESPONSE
+
+    id: str
+    object: Literal["image"] = "image"
+    model: str
+    status: TaskStatus
+    outputs: list[ImageOutput] = Field(default_factory=list)
+    error: TaskError | None = None
+    usage: Usage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    completed_at: datetime | None = None
+    links: ResourceLinks
+
+
+# --------------------------------------------------------------------------- #
+# Video API
+# --------------------------------------------------------------------------- #
+
+
+class VideoParameters(BaseModel):
+    model_config = _STRICT
+
+    negative_prompt: str | None = None
+    duration_seconds: float | None = Field(None, gt=0)
+    aspect_ratio: str | None = None
+    resolution: str | None = None
+    size: str | None = None
+    width: int | None = Field(None, ge=1)
+    height: int | None = Field(None, ge=1)
+    fps: int | None = Field(None, ge=1)
+    seed: int | None = None
+    include_audio: bool | None = None
+    camera_motion: Literal["auto", "fixed"] | None = None
+    watermark: bool | None = None
+    enhance_prompt: bool | None = None
+    include_last_frame: bool | None = None
+    guidance_scale: float | None = Field(None, ge=0)
+    motion_intensity: int | None = Field(None, ge=0, le=255)
+    frame_count: int | None = Field(None, ge=1)
+    file_format: str | None = None
+
+    @model_validator(mode="after")
+    def unambiguous_dimensions(self) -> VideoParameters:
+        if (self.width is None) != (self.height is None):
+            raise ValueError("`width` and `height` must be provided together")
+        if self.size is not None and self.width is not None:
+            raise ValueError("use either `size` or `width` and `height`, not both")
+        return self
+
+
+class VideoRequest(_RequestBase):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "model": "gateway-video-pro",
+                "input": "a cinematic drone shot over mountains",
+                "parameters": {"duration_seconds": 5, "aspect_ratio": "16:9"},
+            }
+        },
+    )
+
+    input: Prompt | VideoInputList
+    parameters: VideoParameters = Field(default_factory=VideoParameters)
+
+
+class VideoOutput(BaseModel):
+    model_config = _RESPONSE
+
+    url: str
+    cover_url: str | None = None
+    mime_type: str | None = None
+
+
+class VideoTaskResponse(BaseModel):
+    model_config = _RESPONSE
+
+    id: str
+    object: Literal["video"] = "video"
+    model: str
+    status: TaskStatus
+    outputs: list[VideoOutput] = Field(default_factory=list)
+    error: TaskError | None = None
+    usage: Usage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    completed_at: datetime | None = None
+    links: ResourceLinks
+
+
+# --------------------------------------------------------------------------- #
+# Music API
+# --------------------------------------------------------------------------- #
+
+
+class MusicParameters(BaseModel):
+    model_config = _STRICT
+
+    negative_prompt: str | None = None
+    title: str | None = None
+    style: str | None = None
+    duration_seconds: float | None = Field(None, gt=0)
+    bpm: int | None = Field(None, ge=1)
+    key: str | None = None
+    scale: str | None = None
+    time_signature: str | None = None
+    vocal_language: str | None = None
+    file_format: str | None = None
+    sample_rate_hz: int | None = Field(None, ge=8000)
+    bitrate_kbps: int | None = Field(None, ge=8)
+    instrumental: bool | None = None
+    seed: int | None = None
+    guidance_scale: float | None = Field(None, ge=0)
+    output_count: int | None = Field(None, ge=1, le=16)
+    enhance_lyrics: bool | None = None
+    voice: str | None = None
+    vocal_gender: str | None = None
+    style_strength: float | None = Field(None, ge=0, le=1)
+    novelty: float | None = Field(None, ge=0, le=1)
+    reference_audio_strength: float | None = Field(None, ge=0, le=1)
+    inference_steps: int | None = Field(None, ge=1)
+    respect_section_durations: bool | None = None
+    provenance: bool | None = None
+
+
+class MusicRequest(_RequestBase):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "model": "gateway-music-lyria",
+                "input": "an upbeat pop song about summer",
+                "parameters": {
+                    "duration_seconds": 30,
+                    "bpm": 120,
+                    "file_format": "wav",
+                },
+            }
+        },
+    )
+
+    input: Prompt | MusicInputList
+    parameters: MusicParameters = Field(default_factory=MusicParameters)
+
+
+class MusicOutput(BaseModel):
+    model_config = _RESPONSE
+
+    url: str | None = None
+    data: str | None = Field(None, description="Base64-encoded audio bytes.")
+    mime_type: str | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_source(self) -> MusicOutput:
+        if bool(self.url) == bool(self.data):
+            raise ValueError("music output requires exactly one of `url` or `data`")
+        return self
+
+
+class MusicTaskResponse(BaseModel):
+    model_config = _RESPONSE
+
+    id: str
+    object: Literal["music"] = "music"
+    model: str
+    status: TaskStatus
+    outputs: list[MusicOutput] = Field(default_factory=list)
+    lyrics: str | None = None
+    error: TaskError | None = None
+    usage: Usage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    completed_at: datetime | None = None
+    links: ResourceLinks
+
+
+# --------------------------------------------------------------------------- #
+# Meta API
 # --------------------------------------------------------------------------- #
 
 
 class ModelEntry(BaseModel):
-    """An entry in the GET /v1/models list."""
+    model_config = _RESPONSE
 
-    model_config = _PERMISSIVE
-    id: str = Field(..., description="Model id or gateway alias.")
-    type: str | None = Field(None, description="Backend type (alias entries).")
-    underlying: str | None = Field(None, description="Real backend model id (alias entries).")
-    provider: str | None = Field(None, description="Backend name (direct entries).")
-    modality: str = Field(..., description='One of "image", "video", "music".')
+    id: str
+    object: Literal["model"] = "model"
+    modality: Literal["image", "video", "music"]
 
 
 class ModelListResponse(BaseModel):
-    model_config = _PERMISSIVE
-    object: Literal["list"] = Field("list", description="Always 'list'.")
-    data: list[ModelEntry] = Field(..., description="Available models for the caller's key.")
+    model_config = _RESPONSE
+
+    object: Literal["list"] = "list"
+    data: list[ModelEntry]
 
 
 class HealthResponse(BaseModel):
-    model_config = _PERMISSIVE
-    status: Literal["ok"] = Field("ok", description="Always 'ok' when healthy.")
+    model_config = _RESPONSE
+
+    status: Literal["ok"] = "ok"
 
 
 __all__ = [
-    "AudioBlock", "ContentPart", "CreateResponse", "DraftPart",
-    "ErrorBody", "ErrorEnvelope", "HealthResponse", "ImageBlock",
-    "ImageConfig", "ImagePart", "ImageRequest", "ImageTaskResponse",
-    "ImageUrlPart", "ModelEntry", "ModelListResponse", "ModelOutputStep",
-    "MusicConfig", "MusicRequest", "MusicResponseFormat", "MusicTaskResponse",
-    "ProviderDirective", "TaskError", "TaskStatus", "TextPart",
-    "UsageCost", "VideoContentEnvelope", "VideoRequest", "VideoTaskResponse",
-    "VideoUrlPart", "AudioUrlPart",
+    "AudioInput",
+    "HealthResponse",
+    "ImageInput",
+    "ImageOutput",
+    "ImageParameters",
+    "ImageRequest",
+    "ImageTaskResponse",
+    "LyricsInput",
+    "ModelEntry",
+    "ModelListResponse",
+    "MusicAudioInput",
+    "MusicImageInput",
+    "MusicOutput",
+    "MusicParameters",
+    "MusicRequest",
+    "MusicTaskResponse",
+    "ProblemDetail",
+    "ResourceLinks",
+    "RoutingDirective",
+    "TaskError",
+    "TaskStatus",
+    "TextInput",
+    "Usage",
+    "VideoAudioInput",
+    "VideoImageInput",
+    "VideoInput",
+    "VideoOutput",
+    "VideoParameters",
+    "VideoRequest",
+    "VideoTaskResponse",
 ]

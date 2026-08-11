@@ -21,14 +21,12 @@ import base64
 import json
 import time
 from typing import Any, ClassVar
-from urllib.parse import quote
 
 from mm_gateway.core.base import MusicProvider
 from mm_gateway.core.exceptions import (
     ProviderNotConfiguredError,
     ProviderRequestError,
     ProviderTimeoutError,
-    TaskFailedError,
 )
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._http import _map_status, make_client, request_json
@@ -58,8 +56,8 @@ class AceStepProvider(MusicProvider):
         self._client = make_client(backend.base_url, timeout=300.0, headers=headers)
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
-        prompt = request.prompt()
-        if not prompt:
+        prompt = request.generation_prompt()
+        if not prompt and not request.lyrics:
             raise ProviderRequestError(
                 "acestep music requires a prompt (text part)", provider="acestep", status_code=400,
             )
@@ -148,7 +146,7 @@ class AceStepProvider(MusicProvider):
         url = path if path.startswith("http") else self._absolute(path)
         try:
             resp = await self._client.get(url)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(f"acestep audio fetch error: {exc}", provider="acestep") from exc
         if resp.status_code >= 400:
             raise ProviderRequestError(
@@ -162,10 +160,10 @@ class AceStepProvider(MusicProvider):
         return path if path.startswith("http") else base + ("" if path.startswith("/") else "/") + path
 
     def _build_body(self, request: UnifiedMusicRequest) -> dict[str, Any]:
-        prompt = request.prompt() or ""
+        prompt = request.generation_prompt() or ""
         body: dict[str, Any] = {"prompt": prompt}
-        if request.extra.get("lyrics"):
-            body["lyrics"] = request.extra["lyrics"]
+        if request.lyrics:
+            body["lyrics"] = request.lyrics
         if request.vocal_language:
             body["vocal_language"] = request.vocal_language
         fmt = (request.audio_format or "").lower()
@@ -175,8 +173,11 @@ class AceStepProvider(MusicProvider):
             body["audio_duration"] = float(request.duration)
         if request.bpm is not None:
             body["bpm"] = request.bpm
-        if request.key_scale:
-            body["key_scale"] = request.key_scale
+        key_scale = request.key_scale or " ".join(
+            part for part in (request.key, request.scale) if part
+        )
+        if key_scale:
+            body["key_scale"] = key_scale
         if request.time_signature:
             body["time_signature"] = request.time_signature
         if request.guidance_scale is not None:
@@ -186,6 +187,14 @@ class AceStepProvider(MusicProvider):
             body["use_random_seed"] = False
         if request.model:
             body["model"] = request.model
+        if request.inference_steps is not None:
+            body["inference_steps"] = request.inference_steps
+        if request.n is not None:
+            body["batch_size"] = request.n
+        if continuation := request.continuation_audio():
+            body["reference_audio_path"] = continuation
+        elif references := request.reference_audios():
+            body["reference_audio_path"] = references[0]
         # Forward provider-specific knobs.
         for k in ("thinking", "sample_mode", "sample_query", "use_format",
                   "inference_steps", "batch_size", "task_type", "reference_audio_path"):

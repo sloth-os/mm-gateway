@@ -20,9 +20,12 @@ import time
 from typing import Any, ClassVar
 
 from mm_gateway.core.base import MusicProvider
-from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.core.exceptions import (
+    ProviderNotConfiguredError,
+    ProviderRequestError,
+)
 from mm_gateway.observability.logging import get_logger
-from mm_gateway.providers._http import _map_status, make_client, request_json
+from mm_gateway.providers._http import make_client, request_json
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 
 log = get_logger("provider.mureka")
@@ -63,7 +66,7 @@ class MurekaProvider(MusicProvider):
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
         prompt = request.prompt()
-        if not prompt:
+        if not prompt and not request.lyrics:
             raise ProviderRequestError(
                 "mureka music requires a prompt (text part)", provider="mureka", status_code=400,
             )
@@ -115,25 +118,38 @@ class MurekaProvider(MusicProvider):
         # Mureka's "Lyrics to song" path takes lyrics; a bare description goes to
         # "Prompt to song". We send lyrics when the text looks like lyrics
         # (multi-line or structure tags), otherwise prompt.
-        if request.extra.get("lyrics"):
-            body["lyrics"] = request.extra["lyrics"]
+        if request.lyrics:
+            body["lyrics"] = request.lyrics
             body["prompt"] = prompt
         elif "\n" in prompt or prompt.startswith("["):
             body["lyrics"] = prompt
         else:
             body["prompt"] = prompt
-        if request.extra.get("title"):
-            body["title"] = request.extra["title"]
+        if request.title:
+            body["title"] = request.title
         if request.negative_prompt:
             body["tags"] = request.negative_prompt
-        elif request.extra.get("style"):
-            body["tags"] = request.extra["style"]
+        elif request.style:
+            body["tags"] = request.style
         if request.is_instrumental is not None:
             body["instrumental"] = request.is_instrumental
         if request.bpm is not None:
             body["bpm"] = request.bpm
         if request.duration is not None:
             body["duration"] = int(request.duration)
+        if request.seed is not None:
+            body["seed"] = request.seed
+        if request.voice:
+            body["voice_id"] = request.voice
+        audio_config: dict[str, Any] = {}
+        if request.audio_format:
+            audio_config["format"] = request.audio_format
+        if request.sample_rate_hz is not None:
+            audio_config["sample_rate"] = request.sample_rate_hz
+        if request.bitrate_kbps is not None:
+            audio_config["bitrate"] = request.bitrate_kbps * 1000
+        if audio_config:
+            body["audio_config"] = audio_config
         # Forward any provider-specific knobs.
         for k in ("model_name", "audio_config", "voice_id", "seed"):
             if k in request.extra:

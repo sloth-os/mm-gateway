@@ -118,10 +118,14 @@ def test_frontend_request_logged_in_curl_format_with_masked_headers(
 ) -> None:
     r = client.post(
         "/v1/images",
-        json={"model": "fake-image-1", "input": "a cat", "n": 1},
+        json={
+            "model": "fake-image-1",
+            "input": "a cat",
+            "parameters": {"output_count": 1},
+        },
         headers={"x-request-id": "req-1", "authorization": "Bearer super-secret-key-9999"},
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 202, r.text
 
     reqs = fake_log.find("frontend_request")
     resps = fake_log.find("frontend_response")
@@ -137,8 +141,8 @@ def test_frontend_request_logged_in_curl_format_with_masked_headers(
     assert "super-secret-key-9999" not in str(req.get("headers", {}))
 
     resp = resps[0]
-    assert resp["status"] == 200
-    assert "img-1" in resp.get("body", "")  # response body logged
+    assert resp["status"] == 202
+    assert "img_" in resp.get("body", "")  # gateway-owned id logged
 
 
 async def test_backend_hooks_log_request_and_response(fake_log: _FakeLogger) -> None:

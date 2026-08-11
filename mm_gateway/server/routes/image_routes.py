@@ -1,192 +1,137 @@
-"""Image routes — Gemini-compatible.
-
-Gemini image shape (``POST /v1/images``):
-
-- ``POST /v1/images``        -> create task, returns ``{"id": ...}``
-- ``POST /v1/images/async``  -> same, but always async (``wait=False``); the URL
-                                 itself encodes the intent, so ``?wait`` /
-                                 ``Prefer`` are ignored on this path.
-- ``GET  /v1/images/{id}``   -> poll task; response carries ``steps[].content[]``
-                                 image blocks (inline base64 or URL) plus
-                                 ``output_image`` / ``output_image_url`` helpers.
-
-On the base ``/v1/images`` path, sync vs async is controlled by the
-``Prefer: respond-async`` header or the ``?wait=true`` query param. Without
-either, the ``image_sync_default`` setting governs. The ``/async`` sibling is
-the explicit async URL: clients that always want a task id back (and will poll
-themselves) hit it directly and never block. The backend that owns a task id is
-recorded in the task store at creation time so subsequent polls route correctly
-even though task ids are opaque to the gateway. All routes require a valid
-front-end API key.
-"""
+"""REST endpoints for image generation tasks."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Body, Depends, Path, Request
 
 from mm_gateway.config import KeyConfig
-from mm_gateway.observability.logging import get_logger
-from mm_gateway.schemas.api import CreateResponse, ImageRequest, ImageTaskResponse
-from mm_gateway.schemas.image import UnifiedImageTask
-from mm_gateway.server.auth import authorize_task, get_api_key, routing_overrides
-from mm_gateway.tasks.store import TaskRecord
-from mm_gateway.translators.image import gemini_compat
+from mm_gateway.core.exceptions import TaskNotFoundError
+from mm_gateway.schemas.api import ImageRequest, ImageTaskResponse
+from mm_gateway.server.auth import authorize_task, get_api_key
+from mm_gateway.server.routes._resources import (
+    POLL_HEADERS,
+    RESOURCE_HEADERS,
+    IdempotencyKeyHeader,
+    IfNoneMatchHeader,
+    find_idempotent_record,
+    new_record,
+    remember_create_response,
+    render_resource,
+    replay_resource,
+    request_fingerprint,
+)
+from mm_gateway.translators.rest import from_image_request, to_image_response
 
-log = get_logger("route.image")
-router = APIRouter()
-
-
-def _is_async(request: Request, wait: bool | None) -> bool:
-    if wait is not None:
-        return not wait
-    prefer = request.headers.get("prefer", "")
-    return "respond-async" in prefer.lower()
-
-
-async def _remember(store, task: UnifiedImageTask) -> None:
-    await store.put(TaskRecord(
-        task_id=task.task_id, provider=task.provider, model=task.model,
-        modality="image",
-    ))
-
-
-async def _create(request: Request, key: KeyConfig, *, wait: bool) -> Any:
-    body = await request.json()
-    unified = gemini_compat.from_gemini(body)
-    tag, backend_name = routing_overrides(request, body)
-    service = request.app.state.image_service
-    task = await service.create(
-        unified, key=key, tag=tag, backend_name=backend_name, wait=wait,
-    )
-    await _remember(request.app.state.task_store, task)
-    out = gemini_compat.to_gemini_create(task)
-    return JSONResponse(content=out)
+router = APIRouter(tags=["images"])
 
 
 @router.post(
     "/v1/images",
-    tags=["image"],
-    response_model=CreateResponse,
-    response_model_exclude_none=False,
-    responses={422: {"description": "Validation Error"}},
+    name="create_image",
+    operation_id="createImage",
+    summary="Create an image task",
+    status_code=202,
+    response_model=ImageTaskResponse,
+    response_model_exclude_none=True,
+    responses={
+        202: {
+            "description": "The image task was accepted.",
+            "headers": RESOURCE_HEADERS,
+        }
+    },
 )
-async def image_create(
+async def create_image(
     request: Request,
-    key: KeyConfig = Depends(get_api_key),
-    wait: bool | None = Query(
-        default=None,
-        description="true blocks until completion; false returns a task id to poll.",
-        examples={"default": {"value": True}},
-    ),
-    body: ImageRequest = Body(
-        ...,
-        openapi_examples={
-            "text_prompt": {
-                "summary": "Text-to-image (string prompt)",
-                "value": {
-                    "model": "gateway-image-pro",
-                    "input": "a cyberpunk cat in the rain, neon",
-                    "config": {"n": 1, "size": "1024x1024", "quality": "high"},
-                },
-            },
-            "parts": {
-                "summary": "Image-to-image (parts array)",
-                "value": {
-                    "model": "gateway-image-pro",
-                    "input": [
-                        {"type": "image", "url": "https://example.test/ref.png"},
-                        {"type": "text", "text": "stylise as watercolour"},
-                    ],
-                    "config": {"strength": 0.6},
-                },
-            },
-        },
-    ),
-    prefer: str | None = Header(
-        None, alias="Prefer",
-        description='Set to "respond-async" to return a task id instead of blocking.',
-        examples={"default": {"value": "respond-async"}},
-    ),
-    x_backend_tag: str | None = Header(
-        None, alias="X-Backend-Tag", description="Pin to a backend by tag label.",
-        examples={"default": {"value": "prod"}},
-    ),
-    x_backend: str | None = Header(
-        None, alias="X-Backend", description="Pin to a backend by name.",
-        examples={"default": {"value": "openai"}},
-    ),
-    x_request_id: str | None = Header(
-        None, alias="X-Request-Id", description="Client-supplied request id (echoed back).",
-        examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
-    ),
-) -> Any:
-    return await _create(request, key, wait=not _is_async(request, wait))
+    body: Annotated[ImageRequest, Body()],
+    key: Annotated[KeyConfig, Depends(get_api_key)],
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> ImageTaskResponse:
+    routing = body.routing
+    store = request.app.state.task_store
+    fingerprint = request_fingerprint(body)
+    async with store.idempotency_guard(key.id, "image", idempotency_key):
+        record = await find_idempotent_record(
+            store,
+            owner_key_id=key.id,
+            modality="image",
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        if record is not None:
+            resource_url = str(request.url_for("get_image", image_id=record.task_id))
+            resource = replay_resource(
+                record, ImageTaskResponse, resource_url=resource_url
+            )
+            return render_resource(
+                resource,
+                request,
+                resource_url=resource_url,
+                created=True,
+                replayed=True,
+            )
 
-
-@router.post(
-    "/v1/images/async",
-    tags=["image"],
-    response_model=CreateResponse,
-    responses={422: {"description": "Validation Error"}},
-)
-async def image_create_async(
-    request: Request,
-    key: KeyConfig = Depends(get_api_key),
-    body: ImageRequest = Body(
-        ...,
-        openapi_examples={
-            "text_prompt": {
-                "summary": "Text-to-image (string prompt)",
-                "value": {"model": "gateway-image-pro", "input": "a neon cityscape"},
-            },
-        },
-    ),
-    prefer: str | None = Header(
-        None, alias="Prefer", description="Ignored on the /async path (always async).",
-        examples={"default": {"value": "respond-async"}},
-    ),
-    x_backend_tag: str | None = Header(
-        None, alias="X-Backend-Tag", description="Pin to a backend by tag label.",
-        examples={"default": {"value": "prod"}},
-    ),
-    x_backend: str | None = Header(
-        None, alias="X-Backend", description="Pin to a backend by name.",
-        examples={"default": {"value": "openai"}},
-    ),
-    x_request_id: str | None = Header(
-        None, alias="X-Request-Id", description="Client-supplied request id (echoed back).",
-        examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
-    ),
-) -> Any:
-    # The /async URL is unconditionally async — ?wait / Prefer are ignored.
-    return await _create(request, key, wait=False)
+        task = await request.app.state.image_service.create(
+            from_image_request(body),
+            key=key,
+            tag=routing.profile if routing else None,
+            wait=False,
+        )
+        record = new_record(
+            "img",
+            task,
+            model=body.model,
+            modality="image",
+            metadata=body.metadata,
+            owner_key_id=key.id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint if idempotency_key else None,
+        )
+        resource_url = str(request.url_for("get_image", image_id=record.task_id))
+        resource = to_image_response(task, record, self_url=resource_url)
+        remember_create_response(record, resource)
+        await store.put(record)
+        return render_resource(
+            resource, request, resource_url=resource_url, created=True
+        )
 
 
 @router.get(
-    "/v1/images/{task_id}",
-    tags=["image"],
+    "/v1/images/{image_id}",
+    name="get_image",
+    operation_id="getImage",
+    summary="Retrieve an image task",
     response_model=ImageTaskResponse,
+    response_model_exclude_none=True,
     responses={
-        404: {"description": "Unknown task id"},
-        403: {"description": "Key not authorised for the task's backend"},
+        200: {
+            "description": "The latest image task state.",
+            "headers": {
+                **POLL_HEADERS,
+            },
+        },
+        304: {"description": "The task representation has not changed."},
+        404: {"description": "Unknown image task id."},
     },
 )
-async def image_get(
+async def get_image(
     request: Request,
-    task_id: str = Path(..., description="Opaque task id returned by create.", examples={"default": {"value": "img-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}}),
-    key: KeyConfig = Depends(get_api_key),
-    x_request_id: str | None = Header(
-        None, alias="X-Request-Id", description="Client-supplied request id (echoed back).",
-        examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
-    ),
-) -> Any:
-    service = request.app.state.image_service
-    record = await request.app.state.task_store.get(task_id)
-    authorize_task(request, key, record.provider if record else None)
-    task = await service.get(task_id, backend_name=record.provider if record else None)
-    out = gemini_compat.to_gemini_task(task)
-    return JSONResponse(content=out)
+    image_id: Annotated[str, Path(description="Opaque image task id.")],
+    key: Annotated[KeyConfig, Depends(get_api_key)],
+    if_none_match: IfNoneMatchHeader = None,
+) -> ImageTaskResponse:
+    record = await request.app.state.task_store.get(image_id)
+    if record is None or record.modality != "image":
+        raise TaskNotFoundError(f"image task {image_id} not found")
+    authorize_task(request, key, record)
+    task = await request.app.state.image_service.get(
+        record.provider_task_id or record.task_id,
+        backend_name=record.provider,
+    )
+    resource_url = str(request.url_for("get_image", image_id=image_id))
+    resource = to_image_response(task, record, self_url=resource_url)
+    return render_resource(resource, request, resource_url=resource_url)
 
+
+__all__ = ["router"]

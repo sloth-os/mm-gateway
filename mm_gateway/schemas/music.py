@@ -1,4 +1,4 @@
-"""Unified music schemas — the canonical internal representation.
+"""Unified music schemas - the canonical internal representation.
 
 Mirrors the video schema's shape: a ``content`` array of typed parts (text /
 audio_url / image_url) plus a flat set of generation knobs (duration, bpm,
@@ -6,10 +6,9 @@ key, time_signature, ...). Every front-end shape (Gemini Lyria 3, ElevenLabs,
 MiniMax, udioapi, Mureka, ACE-Step) is translated into this one model, and
 every provider pulls the bits it cares about out of ``content`` and the knobs.
 
-The front-end format is **Gemini Lyria 3-compatible**: a request is
-``{model, input, ...}`` where ``input`` is a string or a parts array, and the
-response is a task whose ``steps[].content[]`` blocks carry the generated
-audio (base64) and text (lyrics). See ``translators/music/lyria_compat.py``.
+The public REST translator builds this model directly from the strict
+provider-neutral music contract. Compatibility translators may also target the
+same model without defining the public API.
 
 Music generation is async on most providers (MiniMax, udioapi, Mureka,
 ACE-Step return a task id to poll) and synchronous on ElevenLabs (it streams
@@ -22,7 +21,6 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, RootModel
-
 
 # --------------------------------------------------------------------------- #
 # Content parts
@@ -91,6 +89,12 @@ class UnifiedMusicRequest(BaseModel):
 
     model: str
     content: list[MusicContentPart] = Field(default_factory=list)
+    # Provider-neutral song semantics. These remain separate from the prompt so
+    # adapters can target native lyrics/title/style fields when available and
+    # fold them into a descriptive prompt otherwise.
+    lyrics: str | None = None
+    title: str | None = None
+    style: str | None = None
     negative_prompt: str | None = None
     # Total length in seconds (providers that take ms convert internally).
     duration: float | None = None
@@ -107,6 +111,8 @@ class UnifiedMusicRequest(BaseModel):
     audio_format: str | None = None
     # Sample rate + bitrate hint some providers accept, e.g. '44100_128'.
     audio_quality: str | None = None
+    sample_rate_hz: int | None = None
+    bitrate_kbps: int | None = None
     is_instrumental: bool | None = None
     # Whether to synthesise audio (vs. only lyrics/structure).
     generate_audio: bool | None = None
@@ -114,6 +120,15 @@ class UnifiedMusicRequest(BaseModel):
     guidance_scale: float | None = None
     # Number of variations to request.
     n: int | None = None
+    enhance_lyrics: bool | None = None
+    voice: str | None = None
+    vocal_gender: str | None = None
+    style_strength: float | None = None
+    novelty: float | None = None
+    reference_audio_strength: float | None = None
+    inference_steps: int | None = None
+    respect_section_durations: bool | None = None
+    provenance: bool | None = None
     callback_url: str | None = None
     provider: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
@@ -125,6 +140,17 @@ class UnifiedMusicRequest(BaseModel):
         texts = [p.root.text for p in self.content
                  if isinstance(p.root, MusicTextPart)]
         return "\n".join(texts) if texts else None
+
+    def generation_prompt(self) -> str | None:
+        """Description enriched with title/style for providers without native fields."""
+        parts = []
+        if self.title:
+            parts.append(f"Title: {self.title}")
+        if self.style:
+            parts.append(f"Style: {self.style}")
+        if prompt := self.prompt():
+            parts.append(prompt)
+        return "\n".join(parts) if parts else None
 
     def reference_audios(self) -> list[str]:
         return [p.root.audio_url.url for p in self.content

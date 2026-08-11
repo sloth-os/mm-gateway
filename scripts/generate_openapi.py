@@ -30,16 +30,17 @@ from pathlib import Path
 from mm_gateway.config import Settings
 from mm_gateway.server.app import create_app
 
-# A subset of paths the gateway must expose — used as a sanity check so a
-# silently-broken registry (e.g. a route module that fails to import) can never
-# publish an empty or partial spec.
+# The complete public REST surface. Exact equality prevents compatibility aliases
+# or accidental new routes from being published without an explicit API decision.
 EXPECTED_PATHS = {
     "/health",
     "/v1/models",
     "/v1/images",
-    "/v1/images/async",
+    "/v1/images/{image_id}",
     "/v1/videos",
+    "/v1/videos/{video_id}",
     "/v1/music",
+    "/v1/music/{music_id}",
     "/metrics",
 }
 
@@ -54,9 +55,14 @@ def main(argv: list[str]) -> int:
     spec = app.openapi()
 
     paths = set(spec.get("paths", {}))
-    missing = EXPECTED_PATHS - paths
-    if missing:
-        print(f"openapi spec is missing expected paths: {sorted(missing)}", file=sys.stderr)
+    if paths != EXPECTED_PATHS:
+        missing = EXPECTED_PATHS - paths
+        unexpected = paths - EXPECTED_PATHS
+        print(
+            "openapi paths differ from the public contract: "
+            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}",
+            file=sys.stderr,
+        )
         return 1
 
     out.parent.mkdir(parents=True, exist_ok=True)

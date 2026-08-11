@@ -13,15 +13,24 @@ from __future__ import annotations
 import base64
 import time
 import uuid
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 
 from mm_gateway.core.base import ImageProvider, VideoProvider
-from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.core.exceptions import (
+    ProviderNotConfiguredError,
+    ProviderRequestError,
+    TaskFailedError,
+)
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
-from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.image import (
+    ImageData,
+    ImageUsage,
+    UnifiedImageRequest,
+    UnifiedImageResponse,
+)
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 _BASE = "https://api.stability.ai/v2beta"
@@ -41,8 +50,18 @@ _VIDEO_TASKS: dict[str, dict[str, Any]] = {}
 
 class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "stability"
-    image_models = ["sd3.5-large", "sd3.5-medium", "sdxl", "stable-image-core", "stable-image-ultra"]
-    video_models = ["stable-video-1-1", "stable-video-1-0", "stable-video-diffusion"]
+    image_models: ClassVar[list[str]] = [
+        "sd3.5-large",
+        "sd3.5-medium",
+        "sdxl",
+        "stable-image-core",
+        "stable-image-ultra",
+    ]
+    video_models: ClassVar[list[str]] = [
+        "stable-video-1-1",
+        "stable-video-1-0",
+        "stable-video-diffusion",
+    ]
 
     def __init__(self, backend):
         super().__init__(backend)
@@ -134,9 +153,14 @@ class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             "model": request.model, "prompt": request.prompt() or "",
             "image_bytes": image_bytes, "mime": mime,
             "fps": request.fps, "seed": request.seed,
-            "motion_bucket_id": request.extra.get("motion_bucket_id", 127),
-            "cfg_scale": request.extra.get("cfg_scale", 1.0),
-            "output_format": request.extra.get("output_format", "mp4"),
+            "motion_bucket_id": request.motion_intensity
+            if request.motion_intensity is not None
+            else request.extra.get("motion_bucket_id", 127),
+            "cfg_scale": request.guidance_scale
+            if request.guidance_scale is not None
+            else request.extra.get("cfg_scale", 1.0),
+            "output_format": request.output_format
+            or request.extra.get("output_format", "mp4"),
             "status": "pending",
             "created_at": int(time.time()),
         }
@@ -197,7 +221,6 @@ def _decode_image_input(image: str) -> tuple[bytes, str]:
         header, _, b64 = image.partition(",")
         mime = header.split(";")[0].split(":")[1] if ":" in header else "image/png"
         return base64.b64decode(b64), mime
-    import io
     # lazy to avoid a module-level httpx for a pure helper
     with httpx.Client(timeout=60) as c:
         r = c.get(image)

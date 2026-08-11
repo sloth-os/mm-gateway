@@ -17,7 +17,7 @@ import pytest
 
 from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
-from mm_gateway.providers.stability import StabilityProvider, _BASE
+from mm_gateway.providers.stability import _BASE, StabilityProvider
 from mm_gateway.schemas.video import UnifiedVideoRequest, text_part
 
 
@@ -90,7 +90,15 @@ def test_svd_uses_video_client() -> None:
         content=[text_part("x"),
                  image_part("data:image/png;base64," + base64.b64encode(b"i").decode(),
                             "first_frame")],
+        motion_intensity=160,
+        guidance_scale=2.5,
+        output_format="webm",
     )))
+    from mm_gateway.providers.stability import _VIDEO_TASKS
+
+    assert _VIDEO_TASKS[task.task_id]["motion_bucket_id"] == 160
+    assert _VIDEO_TASKS[task.task_id]["cfg_scale"] == 2.5
+    assert _VIDEO_TASKS[task.task_id]["output_format"] == "webm"
     out = asyncio.run(p.get_video_task(task.task_id))
     assert out.status == "succeeded"
     assert seen_hosts == ["video.test"]

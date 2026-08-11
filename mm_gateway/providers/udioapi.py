@@ -22,9 +22,12 @@ import time
 from typing import Any, ClassVar
 
 from mm_gateway.core.base import MusicProvider
-from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.core.exceptions import (
+    ProviderNotConfiguredError,
+    ProviderRequestError,
+)
 from mm_gateway.observability.logging import get_logger
-from mm_gateway.providers._http import _map_status, make_client, request_json
+from mm_gateway.providers._http import make_client, request_json
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 
 log = get_logger("provider.udioapi")
@@ -53,7 +56,7 @@ class UdioApiProvider(MusicProvider):
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
         prompt = request.prompt()
-        if not prompt:
+        if not prompt and not request.lyrics:
             raise ProviderRequestError(
                 "udioapi music requires a prompt (text part)", provider="udioapi", status_code=400,
             )
@@ -119,8 +122,10 @@ class UdioApiProvider(MusicProvider):
     def _build_body(self, request: UnifiedMusicRequest) -> dict[str, Any]:
         prompt = request.prompt() or ""
         body: dict[str, Any] = {}
-        style = request.extra.get("style")
-        title = request.extra.get("title")
+        style = request.style
+        title = request.title
+        if request.lyrics:
+            prompt = "\n".join(part for part in (prompt, request.lyrics) if part)
         # Custom mode when style/title/negative_prompt(tags) are present; else
         # inspiration mode (gpt_description_prompt).
         if style or title or request.negative_prompt:
@@ -137,6 +142,14 @@ class UdioApiProvider(MusicProvider):
             body["model"] = request.model
         if request.is_instrumental is not None:
             body["make_instrumental"] = request.is_instrumental
+        if request.vocal_gender:
+            body["gender"] = request.vocal_gender
+        if request.style_strength is not None:
+            body["style_weight"] = request.style_strength
+        if request.novelty is not None:
+            body["weirdness_constraint"] = request.novelty
+        if request.reference_audio_strength is not None:
+            body["audio_weight"] = request.reference_audio_strength
         # Forward provider-specific knobs.
         for k in ("gender", "style_weight", "weirdness_constraint", "audio_weight"):
             if k in request.extra:

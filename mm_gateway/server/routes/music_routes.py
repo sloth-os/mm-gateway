@@ -1,192 +1,137 @@
-"""Music routes — Gemini Lyria 3-compatible.
-
-Lyria 3 shape (``POST /v1beta/interactions`` mirrored at ``/v1/music``):
-
-- ``POST /v1/music``         -> create task, returns ``{"id": ...}``
-- ``POST /v1/music/async``   -> same, but always async (``wait=False``); the URL
-                                  itself encodes the intent, so ``?wait`` /
-                                  ``Prefer`` are ignored on this path.
-- ``GET  /v1/music/{id}``    -> poll task; response carries ``steps[].content[]``
-                                  audio/text blocks plus ``output_audio`` /
-                                  ``output_text`` / ``output_audio_url`` helpers.
-
-On the base ``/v1/music`` path, sync vs async is controlled by the
-``Prefer: respond-async`` header or the ``?wait=true`` query param. Without
-either, the ``music_sync_default`` setting governs. The ``/async`` sibling is
-the explicit async URL: clients that always want a task id back (and will poll
-themselves) hit it directly and never block. The backend that owns a task id is
-recorded in the task store at creation time so subsequent polls route correctly
-even though task ids are opaque to the gateway. All routes require a valid
-front-end API key.
-"""
+"""REST endpoints for music generation tasks."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Header, Path, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Body, Depends, Path, Request
 
 from mm_gateway.config import KeyConfig
-from mm_gateway.observability.logging import get_logger
-from mm_gateway.schemas.api import CreateResponse, MusicRequest, MusicTaskResponse
-from mm_gateway.schemas.music import UnifiedMusicTask
-from mm_gateway.server.auth import authorize_task, get_api_key, routing_overrides
-from mm_gateway.tasks.store import TaskRecord
-from mm_gateway.translators.music import lyria_compat
+from mm_gateway.core.exceptions import TaskNotFoundError
+from mm_gateway.schemas.api import MusicRequest, MusicTaskResponse
+from mm_gateway.server.auth import authorize_task, get_api_key
+from mm_gateway.server.routes._resources import (
+    POLL_HEADERS,
+    RESOURCE_HEADERS,
+    IdempotencyKeyHeader,
+    IfNoneMatchHeader,
+    find_idempotent_record,
+    new_record,
+    remember_create_response,
+    render_resource,
+    replay_resource,
+    request_fingerprint,
+)
+from mm_gateway.translators.rest import from_music_request, to_music_response
 
-log = get_logger("route.music")
-router = APIRouter()
-
-
-def _is_async(request: Request, wait: bool | None) -> bool:
-    if wait is not None:
-        return not wait
-    prefer = request.headers.get("prefer", "")
-    return "respond-async" in prefer.lower()
-
-
-async def _remember(store, task: UnifiedMusicTask) -> None:
-    await store.put(TaskRecord(
-        task_id=task.task_id, provider=task.provider, model=task.model,
-        modality="music",
-    ))
-
-
-async def _create(request: Request, key: KeyConfig, *, wait: bool) -> Any:
-    body = await request.json()
-    unified = lyria_compat.from_lyria(body)
-    tag, backend_name = routing_overrides(request, body)
-    service = request.app.state.music_service
-    task = await service.create(
-        unified, key=key, tag=tag, backend_name=backend_name, wait=wait,
-    )
-    await _remember(request.app.state.task_store, task)
-    out = lyria_compat.to_lyria_create(task)
-    return JSONResponse(content=out)
+router = APIRouter(tags=["music"])
 
 
 @router.post(
     "/v1/music",
-    tags=["music"],
-    response_model=CreateResponse,
-    responses={422: {"description": "Validation Error"}},
+    name="create_music",
+    operation_id="createMusic",
+    summary="Create a music task",
+    status_code=202,
+    response_model=MusicTaskResponse,
+    response_model_exclude_none=True,
+    responses={
+        202: {
+            "description": "The music task was accepted.",
+            "headers": RESOURCE_HEADERS,
+        }
+    },
 )
-async def music_create(
+async def create_music(
     request: Request,
-    key: KeyConfig = Depends(get_api_key),
-    wait: bool | None = Query(
-        default=None,
-        description="true blocks until completion; false returns a task id to poll.",
-        examples={"default": {"value": True}},
-    ),
-    body: MusicRequest = Body(
-        ...,
-        openapi_examples={
-            "text_prompt": {
-                "summary": "Text-to-music (string prompt)",
-                "value": {
-                    "model": "gateway-music-lyria",
-                    "input": "an upbeat pop song about summer",
-                    "config": {"duration": 30, "bpm": 120, "is_instrumental": False},
-                    "response_format": {"type": "audio"},
-                },
-            },
-            "parts": {
-                "summary": "Verse + chorus parts",
-                "value": {
-                    "model": "gateway-music-lyria",
-                    "input": [
-                        {"type": "text", "text": "verse: walking down the street"},
-                        {"type": "text", "text": "chorus: summer in the city"},
-                    ],
-                    "response_format": {"type": "audio"},
-                },
-            },
-        },
-    ),
-    prefer: str | None = Header(
-        None, alias="Prefer",
-        description='Set to "respond-async" to return a task id instead of blocking.',
-        examples={"default": {"value": "respond-async"}},
-    ),
-    x_backend_tag: str | None = Header(
-        None, alias="X-Backend-Tag", description="Pin to a backend by tag label.",
-        examples={"default": {"value": "prod"}},
-    ),
-    x_backend: str | None = Header(
-        None, alias="X-Backend", description="Pin to a backend by name.",
-        examples={"default": {"value": "openai"}},
-    ),
-    x_request_id: str | None = Header(
-        None, alias="X-Request-Id", description="Client-supplied request id (echoed back).",
-        examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
-    ),
-) -> Any:
-    return await _create(request, key, wait=not _is_async(request, wait))
+    body: Annotated[MusicRequest, Body()],
+    key: Annotated[KeyConfig, Depends(get_api_key)],
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> MusicTaskResponse:
+    routing = body.routing
+    store = request.app.state.task_store
+    fingerprint = request_fingerprint(body)
+    async with store.idempotency_guard(key.id, "music", idempotency_key):
+        record = await find_idempotent_record(
+            store,
+            owner_key_id=key.id,
+            modality="music",
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+        )
+        if record is not None:
+            resource_url = str(request.url_for("get_music", music_id=record.task_id))
+            resource = replay_resource(
+                record, MusicTaskResponse, resource_url=resource_url
+            )
+            return render_resource(
+                resource,
+                request,
+                resource_url=resource_url,
+                created=True,
+                replayed=True,
+            )
 
-
-@router.post(
-    "/v1/music/async",
-    tags=["music"],
-    response_model=CreateResponse,
-    responses={422: {"description": "Validation Error"}},
-)
-async def music_create_async(
-    request: Request,
-    key: KeyConfig = Depends(get_api_key),
-    body: MusicRequest = Body(
-        ...,
-        openapi_examples={
-            "text_prompt": {
-                "summary": "Text-to-music",
-                "value": {"model": "gateway-music-lyria", "input": "a calm ambient pad"},
-            },
-        },
-    ),
-    prefer: str | None = Header(
-        None, alias="Prefer", description="Ignored on the /async path (always async).",
-        examples={"default": {"value": "respond-async"}},
-    ),
-    x_backend_tag: str | None = Header(
-        None, alias="X-Backend-Tag", description="Pin to a backend by tag label.",
-        examples={"default": {"value": "prod"}},
-    ),
-    x_backend: str | None = Header(
-        None, alias="X-Backend", description="Pin to a backend by name.",
-        examples={"default": {"value": "openai"}},
-    ),
-    x_request_id: str | None = Header(
-        None, alias="X-Request-Id", description="Client-supplied request id (echoed back).",
-        examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
-    ),
-) -> Any:
-    # The /async URL is unconditionally async — ?wait / Prefer are ignored.
-    return await _create(request, key, wait=False)
+        task = await request.app.state.music_service.create(
+            from_music_request(body),
+            key=key,
+            tag=routing.profile if routing else None,
+            wait=False,
+        )
+        record = new_record(
+            "mus",
+            task,
+            model=body.model,
+            modality="music",
+            metadata=body.metadata,
+            owner_key_id=key.id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint if idempotency_key else None,
+        )
+        resource_url = str(request.url_for("get_music", music_id=record.task_id))
+        resource = to_music_response(task, record, self_url=resource_url)
+        remember_create_response(record, resource)
+        await store.put(record)
+        return render_resource(
+            resource, request, resource_url=resource_url, created=True
+        )
 
 
 @router.get(
-    "/v1/music/{task_id}",
-    tags=["music"],
+    "/v1/music/{music_id}",
+    name="get_music",
+    operation_id="getMusic",
+    summary="Retrieve a music task",
     response_model=MusicTaskResponse,
+    response_model_exclude_none=True,
     responses={
-        404: {"description": "Unknown task id"},
-        403: {"description": "Key not authorised for the task's backend"},
+        200: {
+            "description": "The latest music task state.",
+            "headers": {
+                **POLL_HEADERS,
+            },
+        },
+        304: {"description": "The task representation has not changed."},
+        404: {"description": "Unknown music task id."},
     },
 )
-async def music_get(
+async def get_music(
     request: Request,
-    task_id: str = Path(..., description="Opaque task id returned by create.", examples={"default": {"value": "mus-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}}),
-    key: KeyConfig = Depends(get_api_key),
-    x_request_id: str | None = Header(
-        None, alias="X-Request-Id", description="Client-supplied request id (echoed back).",
-        examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
-    ),
-) -> Any:
-    service = request.app.state.music_service
-    record = await request.app.state.task_store.get(task_id)
-    authorize_task(request, key, record.provider if record else None)
-    task = await service.get(task_id, backend_name=record.provider if record else None)
-    out = lyria_compat.to_lyria_task(task)
-    return JSONResponse(content=out)
+    music_id: Annotated[str, Path(description="Opaque music task id.")],
+    key: Annotated[KeyConfig, Depends(get_api_key)],
+    if_none_match: IfNoneMatchHeader = None,
+) -> MusicTaskResponse:
+    record = await request.app.state.task_store.get(music_id)
+    if record is None or record.modality != "music":
+        raise TaskNotFoundError(f"music task {music_id} not found")
+    authorize_task(request, key, record)
+    task = await request.app.state.music_service.get(
+        record.provider_task_id or record.task_id,
+        backend_name=record.provider,
+    )
+    resource_url = str(request.url_for("get_music", music_id=music_id))
+    resource = to_music_response(task, record, self_url=resource_url)
+    return render_resource(resource, request, resource_url=resource_url)
 
+
+__all__ = ["router"]

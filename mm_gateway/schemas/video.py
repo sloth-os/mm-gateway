@@ -1,17 +1,11 @@
-"""Unified video schemas — the canonical internal representation.
+"""Unified video schemas - the canonical internal representation.
 
-The unified request shape **is** the Volcengine Seedance
-``/contents/generations/tasks`` shape: a ``content`` array of typed parts
-(text / image_url with a role / video_url / audio_url / draft_task) plus a flat
-set of generation knobs (duration, ratio, resolution, seed, ...). Every
-front-end shape (OpenAI Sora, OpenRouter unified, Seedance native) is translated
-into this one model, and every provider pulls the bits it cares about out of
-``content``.
+The model carries an ordered array of typed text/image/video/audio parts plus a
+flat set of generation controls. The public REST layer maps neutral names into
+this representation; each adapter maps the applicable subset to its native API.
 
-Video generation is async on every provider, so the lifecycle centres on a
-*task*: ``pending -> running -> succeeded | failed``. The gateway may
-optionally block until completion (sync-style) for clients that prefer a
-one-shot call, then fall back to returning a task handle.
+Video generation uses a task lifecycle: ``pending -> running -> succeeded |
+failed``.
 """
 
 from __future__ import annotations
@@ -19,7 +13,6 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, RootModel
-
 
 # --------------------------------------------------------------------------- #
 # Content parts
@@ -103,12 +96,12 @@ def draft_part(draft: dict[str, Any]) -> VideoDraftPart:
 
 
 class UnifiedVideoRequest(BaseModel):
-    """The Seedance-shape video request, used as the canonical internal model.
+    """The canonical internal video request.
 
     ``content`` carries the typed parts (prompt text, first/last-frame and
     reference images, reference videos/audios, draft resumes). The flat fields
-    are the generation knobs Seedance exposes; providers read whichever subset
-    they support.
+    are the union of neutral generation controls; providers read whichever
+    subset they support.
     """
 
     model: str
@@ -128,6 +121,10 @@ class UnifiedVideoRequest(BaseModel):
     prompt_extend: bool | None = None
     callback_url: str | None = None
     return_last_frame: bool | None = None
+    guidance_scale: float | None = None
+    motion_intensity: int | None = None
+    frame_count: int | None = None
+    output_format: str | None = None
     provider: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 

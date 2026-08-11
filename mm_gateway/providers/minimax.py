@@ -26,8 +26,8 @@ from mm_gateway.core.exceptions import (
     ProviderRequestError,
     TaskFailedError,
 )
-from mm_gateway.observability.logging import get_logger
 from mm_gateway.observability.httplog import backend_event_hooks
+from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._http import _map_status
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 
@@ -62,11 +62,11 @@ class MiniMaxProvider(MusicProvider):
         )
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
-        prompt = request.prompt()
+        prompt = request.generation_prompt()
         # Non-instrumental, non-cover models require lyrics; instrumental/cover
         # require a prompt. Accept whichever the caller supplied and let the
         # upstream reject an inconsistent combination.
-        if not prompt and not request.extra.get("lyrics"):
+        if not prompt and not request.lyrics:
             raise ProviderRequestError(
                 "minimax music requires a prompt or lyrics (text part)",
                 provider="minimax", status_code=400,
@@ -168,9 +168,7 @@ class MiniMaxProvider(MusicProvider):
         prompt = request.prompt()
         if prompt:
             body["prompt"] = prompt
-        # Lyrics may arrive as a dedicated text part tagged in extra, or as the
-        # prompt itself for non-instrumental generation.
-        lyrics = request.extra.get("lyrics")
+        lyrics = request.lyrics
         if lyrics:
             body["lyrics"] = lyrics
         elif prompt and request.is_instrumental is not True:
@@ -184,6 +182,10 @@ class MiniMaxProvider(MusicProvider):
         # the gateway's sync-poll window); fall back to hex if the caller asked.
         body["output_format"] = "url" if (request.audio_format or "").lower() != "hex" else "hex"
         audio_setting: dict[str, Any] = {}
+        if request.sample_rate_hz is not None:
+            audio_setting["sample_rate"] = request.sample_rate_hz
+        if request.bitrate_kbps is not None:
+            audio_setting["bitrate"] = request.bitrate_kbps * 1000
         if request.audio_quality:
             # audio_quality is 'samplerate_bitrate' e.g. '44100_128000'.
             parts = request.audio_quality.split("_")
@@ -198,7 +200,12 @@ class MiniMaxProvider(MusicProvider):
         # Reference audio for cover models.
         refs = request.reference_audios()
         if refs:
-            body["audio_url"] = refs[0]
+            if refs[0].startswith("data:"):
+                body["audio_base64"] = refs[0].partition(",")[2]
+            else:
+                body["audio_url"] = refs[0]
+        if request.enhance_lyrics is not None:
+            body["lyrics_optimizer"] = request.enhance_lyrics
         # Forward provider-specific knobs the caller stashed in extra.
         for k in ("stream", "lyrics_optimizer", "audio_base64", "cover_feature_id"):
             if k in request.extra:

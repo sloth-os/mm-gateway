@@ -30,13 +30,9 @@ Behaviour
 * Confirms the chosen model is actually served by ``GET /v1/models`` — so a
   provider whose SDK failed to import in the image is skipped rather than
   failing the run.
-* Runs one image generation through the Gemini-shape front-end (and asserts real
-  image data) for each configured image triple, one video generation through the
-  Seedance-shape front-end (create + poll, asserts a video url) for each
-  configured video triple, and one music generation through the Lyria-shape
-  front-end (create + poll, asserts an audio url) for each configured music
-  triple. Music is generated from structured lyrics (verse/chorus sections),
-  not a flat prompt, to mirror the real usage the gateway is built for.
+* Runs one asynchronous task through each configured modality API, polling the
+  normalized task resource until real image, video, or audio output is present.
+  Music uses a typed lyrics input with verse/chorus sections.
 
 Configuration (env)
 -------------------
@@ -132,9 +128,7 @@ PROMPT = os.environ.get("E2E_PROMPT", "a cat in a spacesuit, cinematic, 4k")
 # Structured example lyrics (verse/chorus sections) used for every music
 # candidate. Music providers take structured lyrics as input rather than a flat
 # prompt, so this mirrors the real usage the gateway is built for. Overridable
-# via E2E_LYRICS. The gateway's Lyria translator turns a string ``input`` into
-# a single text part, and providers like mureka parse ``[Verse]`` / ``[Chorus]``
-# tags from multi-line text into a structured song.
+# via E2E_LYRICS. The public request carries these as a typed lyrics part.
 _DEFAULT_LYRICS = """[Intro]
 
 [Verse 1]
@@ -257,7 +251,7 @@ def choose_models(client: httpx.Client, cands: list[tuple[str, str, str]]) -> li
     # one is absent from /v1/models, so we skip it rather than failing.
     try:
         models = client.get("/v1/models", headers=auth_headers(), timeout=30)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise RuntimeError(f"GET /v1/models failed: {exc}") from exc
     if models.status_code != 200:
         raise RuntimeError(f"GET /v1/models -> {models.status_code}: {models.text[:200]}")
@@ -278,43 +272,34 @@ def choose_models(client: httpx.Client, cands: list[tuple[str, str, str]]) -> li
 
 
 def generate_image(client: httpx.Client, model: str) -> dict[str, Any]:
-    """Create a Gemini-shape image task via the sync frontend and read the
-    finished image.
-
-    ``?wait=true`` makes create block until the task reaches a terminal state
-    (succeeded/failed) before returning ``{"id": ...}``; the follow-up GET then
-    carries the image block. This exercises the synchronous front-end path
-    end-to-end. A short poll loop stays as a safety net for the rare case where
-    the sync wait times out and create returns a still-running task.
-    """
+    """Create an image task and poll its normalized resource."""
     create = client.post(
         "/v1/images",
         headers={**auth_headers(), "content-type": "application/json"},
-        params={"wait": "true"},
         json={"model": model, "input": PROMPT},
         timeout=TIMEOUT,
     )
-    if create.status_code != 200:
+    if create.status_code != 202:
         raise RuntimeError(f"POST /v1/images -> {create.status_code}: {create.text[:500]}")
     task_id = create.json().get("id")
     if not task_id:
         raise RuntimeError(f"image create returned no task id: {str(create.json())[:500]}")
+    resource_url = create.headers.get("location") or f"/v1/images/{task_id}"
 
     deadline = time.time() + TIMEOUT
     last: dict[str, Any] = {}
     while time.time() < deadline:
-        r = client.get(f"/v1/images/{task_id}", headers=auth_headers(), timeout=TIMEOUT)
+        r = client.get(resource_url, headers=auth_headers(), timeout=TIMEOUT)
         if r.status_code != 200:
             raise RuntimeError(f"GET /v1/images/{task_id} -> {r.status_code}: {r.text[:500]}")
         last = r.json()
         status = last.get("status")
         if status == "succeeded":
-            blocks = ((last.get("steps") or [{}])[0]).get("content") or []
-            img = next((b for b in blocks if b.get("type") == "image"), {})
+            img = (last.get("outputs") or [{}])[0]
             url = img.get("url")
             b64 = img.get("data")
             if not (url or b64):
-                raise RuntimeError(f"image succeeded but no image block: {str(last)[:500]}")
+                raise RuntimeError(f"image succeeded but has no output: {str(last)[:500]}")
             return {"url": url, "data": b64}
         if status in ("failed", "cancelled", "expired"):
             raise RuntimeError(f"image task {status}: {str(last)[:500]}")
@@ -323,30 +308,30 @@ def generate_image(client: httpx.Client, model: str) -> dict[str, Any]:
 
 
 def generate_video(client: httpx.Client, model: str) -> str:
-    """Create a Seedance-shape video task and poll until it has a video url."""
+    """Create a video task and poll until it has a video URL."""
     create = client.post(
         "/v1/videos",
         headers={**auth_headers(), "content-type": "application/json"},
-        params={"wait": "false"},
-        json={"model": model, "content": [{"type": "text", "text": PROMPT}]},
+        json={"model": model, "input": [{"type": "text", "text": PROMPT}]},
         timeout=TIMEOUT,
     )
-    if create.status_code != 200:
+    if create.status_code != 202:
         raise RuntimeError(f"POST /v1/videos -> {create.status_code}: {create.text[:500]}")
     task_id = create.json().get("id")
     if not task_id:
         raise RuntimeError(f"video create returned no task id: {str(create.json())[:500]}")
+    resource_url = create.headers.get("location") or f"/v1/videos/{task_id}"
 
     deadline = time.time() + TIMEOUT
     last: dict[str, Any] = {}
     while time.time() < deadline:
-        r = client.get(f"/v1/videos/{task_id}", headers=auth_headers(), timeout=TIMEOUT)
+        r = client.get(resource_url, headers=auth_headers(), timeout=TIMEOUT)
         if r.status_code != 200:
             raise RuntimeError(f"GET /v1/videos/{task_id} -> {r.status_code}: {r.text[:500]}")
         last = r.json()
         status = last.get("status")
         if status == "succeeded":
-            url = (last.get("content") or {}).get("video_url")
+            url = ((last.get("outputs") or [{}])[0]).get("url")
             if not url:
                 raise RuntimeError(f"video succeeded but no video_url: {str(last)[:500]}")
             return url
@@ -357,44 +342,40 @@ def generate_video(client: httpx.Client, model: str) -> str:
 
 
 def generate_music(client: httpx.Client, model: str) -> str:
-    """Create a Lyria-shape music task and poll until it has an audio result.
-
-    Music is slower than image/video, so this mirrors the video async path
-    (``?wait=false`` + poll) but with its own ``MUSIC_TIMEOUT`` budget (default
-    300s) rather than the per-request ``TIMEOUT``, so slow music does not force
-    the operator to raise ``E2E_TIMEOUT`` for the faster modalities. A
-    succeeded task carries an audio block in ``steps[0].content[]`` (``url`` or
-    inline ``data``) and/or the ``output_audio_url`` / ``output_audio`` helpers;
-    any of those satisfies the assertion.
-    """
+    """Create a music task and poll until it has an audio result."""
     create = client.post(
         "/v1/music",
         headers={**auth_headers(), "content-type": "application/json"},
-        params={"wait": "false"},
-        json={"model": model, "input": LYRICS},
+        json={
+            "model": model,
+            "input": [
+                {"type": "text", "text": "Compose a complete song."},
+                {"type": "lyrics", "text": LYRICS},
+            ],
+        },
         timeout=TIMEOUT,
     )
-    if create.status_code != 200:
+    if create.status_code != 202:
         raise RuntimeError(f"POST /v1/music -> {create.status_code}: {create.text[:500]}")
     task_id = create.json().get("id")
     if not task_id:
         raise RuntimeError(f"music create returned no task id: {str(create.json())[:500]}")
+    resource_url = create.headers.get("location") or f"/v1/music/{task_id}"
 
     deadline = time.time() + MUSIC_TIMEOUT
     last: dict[str, Any] = {}
     while time.time() < deadline:
-        r = client.get(f"/v1/music/{task_id}", headers=auth_headers(), timeout=TIMEOUT)
+        r = client.get(resource_url, headers=auth_headers(), timeout=TIMEOUT)
         if r.status_code != 200:
             raise RuntimeError(f"GET /v1/music/{task_id} -> {r.status_code}: {r.text[:500]}")
         last = r.json()
         status = last.get("status")
         if status == "succeeded":
-            blocks = ((last.get("steps") or [{}])[0]).get("content") or []
-            audio = next((b for b in blocks if b.get("type") == "audio"), {})
-            url = audio.get("url") or last.get("output_audio_url")
-            b64 = audio.get("data") or last.get("output_audio")
+            audio = (last.get("outputs") or [{}])[0]
+            url = audio.get("url")
+            b64 = audio.get("data")
             if not (url or b64):
-                raise RuntimeError(f"music succeeded but no audio block: {str(last)[:500]}")
+                raise RuntimeError(f"music succeeded but has no output: {str(last)[:500]}")
             return url or "<b64_audio>"
         if status in ("failed", "cancelled", "expired"):
             raise RuntimeError(f"music task {status}: {str(last)[:500]}")

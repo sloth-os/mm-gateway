@@ -2,9 +2,9 @@
 
 These cover the bearer-token resolution (``server.auth.resolve_key`` /
 ``get_api_key``) and the hybrid backend routing (``registry.resolve`` plus the
-``X-Backend-Tag`` / ``X-Backend`` / ``provider.tag`` / ``provider.backend``
-overrides) over a multi-backend fake fixture — i.e. the same routing matrix the
-MCP tools exercise, but driven through the FastAPI routes so the error envelopes
+typed, provider-neutral ``routing.profile`` request directive) over a
+multi-backend fake fixture — i.e. the same routing matrix the
+MCP tools exercise, but driven through the FastAPI routes so Problem Details
 and HTTP statuses are asserted directly.
 
 A shared multi-backend app is built once per test via the ``multi`` fixture so
@@ -13,15 +13,12 @@ each test starts from a clean provider call log.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from fastapi.testclient import TestClient
 
 from mm_gateway.config import BackendConfig, KeyConfig, Settings
 from mm_gateway.server.app import create_app
 from tests.conftest import FakeProvider
-
 
 # --------------------------------------------------------------------------- #
 # Multi-backend fixture
@@ -118,8 +115,8 @@ def test_missing_token_401_when_no_open_key():
     app = _build(_backends(), _no_open_keys())
     r = TestClient(app).get("/v1/models")
     assert r.status_code == 401
-    assert r.json()["error"]["code"] == "unauthorized"
-    assert "Missing API key" in r.json()["error"]["message"]
+    assert r.json()["code"] == "unauthorized"
+    assert "Missing API key" in r.json()["detail"]
 
 
 def test_unknown_token_401():
@@ -128,8 +125,8 @@ def test_unknown_token_401():
     app = _build(_backends(), _no_open_keys())
     r = TestClient(app).get("/v1/models", headers={"authorization": "Bearer not-real"})
     assert r.status_code == 401
-    assert r.json()["error"]["code"] == "unauthorized"
-    assert "Unknown" in r.json()["error"]["message"]
+    assert r.json()["code"] == "unauthorized"
+    assert "Unknown" in r.json()["detail"]
 
 
 def test_open_key_admits_any_caller_no_header(client):
@@ -139,12 +136,13 @@ def test_open_key_admits_any_caller_no_header(client):
     assert r.json()["object"] == "list"
 
 
-def test_valid_token_lists_usable_backends_only(client):
-    # Bob is pinned to img-a; the model list must only surface that backend.
+def test_valid_token_lists_usable_models_without_backend_details(client):
+    # The catalogue is scoped by the key but never exposes deployment details.
     r = client.get("/v1/models", headers={"authorization": "Bearer bob-token"})
     assert r.status_code == 200
-    provs = {m.get("provider") for m in r.json()["data"] if m.get("provider")}
-    assert provs == {"img-a"}
+    models = r.json()["data"]
+    assert models
+    assert all(set(model) == {"id", "object", "modality"} for model in models)
 
 
 # --------------------------------------------------------------------------- #
@@ -157,9 +155,9 @@ def test_key_with_no_usable_backend_403(client):
                     headers={"authorization": "Bearer dave-token"},
                     json={"model": "fake-image-1", "input": "x"})
     assert r.status_code == 403
-    body = r.json()["error"]
+    body = r.json()
     assert body["code"] == "forbidden"
-    assert "not allowed" in body["message"]
+    assert "not allowed" in body["detail"]
 
 
 def test_carol_denied_backend_routes_away(client, multi):
@@ -170,7 +168,7 @@ def test_carol_denied_backend_routes_away(client, multi):
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer carol-token"},
                     json={"model": "fake-image-1", "input": "x"})
-    assert r.status_code == 200, r.text
+    assert r.status_code == 202, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-b")
     assert not _image_landed(provs, "img-a")
@@ -182,60 +180,51 @@ def test_erin_denied_by_type_403(client):
                     headers={"authorization": "Bearer erin-token"},
                     json={"model": "fake-image-1", "input": "x"})
     assert r.status_code == 403
-    assert r.json()["error"]["code"] == "forbidden"
+    assert r.json()["code"] == "forbidden"
 
 
 # --------------------------------------------------------------------------- #
-# Tag routing: X-Backend-Tag and provider.tag
+# Tag routing
 # --------------------------------------------------------------------------- #
 
 
-def test_tag_routing_via_x_backend_tag_header(client, multi):
-    # Alice may use any backend; pin via the header to img-b (image-secondary).
-    r = client.post("/v1/images",
-                    headers={"authorization": "Bearer alice-token",
-                             "x-backend-tag": "image-secondary"},
-                    json={"model": "fake-image-1", "input": "x"})
-    assert r.status_code == 200, r.text
-    provs = _providers(multi)
-    assert _image_landed(provs, "img-b")
-    assert not _image_landed(provs, "img-a")
-
-
-def test_tag_routing_via_provider_tag_body(client, multi):
+def test_profile_routing_via_request_body(client, multi):
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer alice-token"},
                     json={"model": "fake-image-1", "input": "x",
-                          "provider": {"tag": "image-secondary"}})
-    assert r.status_code == 200, r.text
+                          "routing": {"profile": "image-secondary"}})
+    assert r.status_code == 202, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-b")
 
 
 # --------------------------------------------------------------------------- #
-# Backend pin: X-Backend and provider.backend (incl. pin short-circuit)
+# Routing profiles never expose backend instance names
 # --------------------------------------------------------------------------- #
 
 
-def test_backend_pin_via_x_backend_header(client, multi):
-    r = client.post("/v1/images",
-                    headers={"authorization": "Bearer alice-token",
-                             "x-backend": "img-b"},
-                    json={"model": "fake-image-1", "input": "x"})
-    assert r.status_code == 200, r.text
-    provs = _providers(multi)
-    assert _image_landed(provs, "img-b")
-    assert not _image_landed(provs, "img-a")
-
-
-def test_backend_pin_via_provider_backend_body(client, multi):
+def test_profile_can_select_a_uniquely_tagged_backend(client, multi):
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer alice-token"},
                     json={"model": "fake-image-1", "input": "x",
-                          "provider": {"backend": "img-b"}})
-    assert r.status_code == 200, r.text
+                          "routing": {"profile": "image-secondary"}})
+    assert r.status_code == 202, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-b")
+
+
+def test_unknown_routing_profile_is_rejected(client):
+    response = client.post(
+        "/v1/images",
+        headers={"authorization": "Bearer alice-token"},
+        json={
+            "model": "fake-image-1",
+            "input": "x",
+            "routing": {"profile": "does-not-exist"},
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_request_error"
 
 
 def test_bob_pinned_to_img_a_short_circuits(client, multi):
@@ -245,7 +234,7 @@ def test_bob_pinned_to_img_a_short_circuits(client, multi):
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer bob-token"},
                     json={"model": "fake-image-1", "input": "x"})
-    assert r.status_code == 200, r.text
+    assert r.status_code == 202, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-a")
     assert not _image_landed(provs, "img-b")
@@ -285,7 +274,7 @@ def test_default_image_backend_is_picked_without_override(client, multi):
     r = zoe_client.post("/v1/images",
                         headers={"authorization": "Bearer zoe-token"},
                         json={"model": "fake-image-1", "input": "x"})
-    assert r.status_code == 200, r.text
+    assert r.status_code == 202, r.text
     provs = {n: p for n, p in app.state.registry._backends.items()}
     assert _image_landed(provs, "img-b")
     assert not _image_landed(provs, "img-a")
@@ -308,9 +297,8 @@ def test_default_video_tag_is_picked(client, multi):
     yara_client = TestClient(app)
     r = yara_client.post("/v1/videos",
                          headers={"authorization": "Bearer yara-token"},
-                         json={"model": "fake-video-1",
-                               "content": [{"type": "text", "text": "x"}]})
-    assert r.status_code == 200, r.text
+                         json={"model": "fake-video-1", "input": "x"})
+    assert r.status_code == 202, r.text
     provs = {n: p for n, p in app.state.registry._backends.items()}
     assert provs["vid-b"].video_calls
     assert not provs["vid-a"].video_calls
@@ -322,37 +310,58 @@ def test_default_video_tag_is_picked(client, multi):
 
 
 def test_poll_denied_when_key_not_authorised_for_tasks_backend(client, multi):
-    # Alice creates a video pinned (via X-Backend) to vid-a. Bob is authorised
+    # Alice creates a video through the primary profile. Bob is authorised
     # for img-a only, so he is NOT authorised for vid-a — polling alice's task
     # must be a 403, not a cross-tenant leak. (The pin is what makes the task
     # land on a backend bob can't use; without it the first usable backend
     # would handle it, which the FakeProvider serves on every slot.)
     created = client.post("/v1/videos",
-                          headers={"authorization": "Bearer alice-token",
-                                   "x-backend": "vid-a",
-                                   "prefer": "respond-async"},
+                          headers={"authorization": "Bearer alice-token"},
                           json={"model": "fake-video-1",
-                                "content": [{"type": "text", "text": "x"}]})
-    assert created.status_code == 200, created.text
+                                "input": "x",
+                                "routing": {"profile": "video-primary"}})
+    assert created.status_code == 202, created.text
     task_id = created.json()["id"]
 
     poll = client.get(f"/v1/videos/{task_id}",
                       headers={"authorization": "Bearer bob-token"})
     assert poll.status_code == 403
-    assert poll.json()["error"]["code"] == "forbidden"
+    assert poll.json()["code"] == "forbidden"
 
 
 def test_poll_allowed_when_key_authorised_for_tasks_backend(client, multi):
-    # Same-tenant round-trip: alice creates a video pinned to vid-a and polls it
+    # Same-tenant round-trip: alice creates through a routing profile and polls it
     # herself, so the poll succeeds (the authz guard admits the owner's own key).
     created = client.post("/v1/videos",
-                          headers={"authorization": "Bearer alice-token",
-                                   "x-backend": "vid-a",
-                                   "prefer": "respond-async"},
+                          headers={"authorization": "Bearer alice-token"},
                           json={"model": "fake-video-1",
-                                "content": [{"type": "text", "text": "x"}]})
+                                "input": "x",
+                                "routing": {"profile": "video-primary"}})
     task_id = created.json()["id"]
     poll = client.get(f"/v1/videos/{task_id}",
                       headers={"authorization": "Bearer alice-token"})
     assert poll.status_code == 200, poll.text
     assert poll.json()["id"] == task_id
+
+
+def test_poll_denied_to_another_key_even_on_the_same_backend(client):
+    created = client.post(
+        "/v1/images",
+        headers={"authorization": "Bearer alice-token"},
+        json={
+            "model": "fake-image-1",
+            "input": "x",
+            "routing": {"profile": "image-primary"},
+        },
+    )
+    assert created.status_code == 202
+
+    poll = client.get(
+        created.headers["location"],
+        headers={"authorization": "Bearer bob-token"},
+    )
+    assert poll.status_code == 403
+    assert poll.json()["code"] == "forbidden"
+    assert poll.json()["detail"] == (
+        "The API key is not allowed to perform this request."
+    )

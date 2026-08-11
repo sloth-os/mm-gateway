@@ -7,22 +7,10 @@ When ``Settings.mcp_enabled`` is true, ``mount_mcp(app, settings)`` mounts a
 buffering its body into a single ``Response``. The session manager's lifespan
 is tied to the app lifespan so the MCP server starts/stops with the gateway.
 
-The MCP server registers seven tools that mirror the HTTP API:
-
-* ``list_models``        — list usable models for the calling key (image+video+music).
-* ``create_image``       — submit an image task (Gemini shape: ``model`` + ``input``
-                           string/parts), returning a task id; honours ``wait``
-                           for sync-style.
-* ``get_image``          — poll an image task by id; returns the Gemini
-                           steps/content envelope (image base64/URL blocks).
-* ``create_video``       — submit a video task (Seedance content-array shape),
-                           returning a task id; honours ``wait`` for sync-style.
-* ``get_video``          — poll a video task by id.
-* ``create_music``       — submit a music task (Gemini Lyria 3 shape: ``model``
-                           + ``input`` string/parts), returning an interaction id;
-                           honours ``wait`` for sync-style.
-* ``get_music``          — poll a music task by id; returns the Lyria steps/content
-                           envelope (audio base64 + lyrics blocks).
+The MCP server registers seven tools that mirror the provider-neutral HTTP
+resources: model listing plus create/get pairs for images, videos, and music.
+Create tools accept the same typed ``input`` and ``parameters`` values as REST,
+always return immediately, and expose gateway-owned task ids.
 
 Every tool authenticates the caller through the same bearer-token resolution as
 the HTTP routes: the ``Authorization`` header carried on the MCP ``Context`` is
@@ -36,18 +24,51 @@ from __future__ import annotations
 
 import functools
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
+from pydantic import Field
 
 from mm_gateway.config import Settings
-from mm_gateway.core.exceptions import GatewayError
+from mm_gateway.core.exceptions import GatewayError, TaskNotFoundError
 from mm_gateway.observability.logging import get_logger
-from mm_gateway.server.auth import resolve_key
-from mm_gateway.translators.image import gemini_compat
-from mm_gateway.translators.music import lyria_compat
-from mm_gateway.translators.video import seedance_compat
+from mm_gateway.schemas.api import (
+    ImageInput,
+    ImageParameters,
+    ImageRequest,
+    ImageTaskResponse,
+    LyricsInput,
+    MusicAudioInput,
+    MusicImageInput,
+    MusicParameters,
+    MusicRequest,
+    MusicTaskResponse,
+    RoutingDirective,
+    TextInput,
+    VideoAudioInput,
+    VideoImageInput,
+    VideoInput,
+    VideoParameters,
+    VideoRequest,
+    VideoTaskResponse,
+)
+from mm_gateway.server.auth import authorize_task_access, resolve_key
+from mm_gateway.server.routes._resources import (
+    find_idempotent_record,
+    new_record,
+    remember_create_response,
+    replay_resource,
+    request_fingerprint,
+)
+from mm_gateway.translators.rest import (
+    from_image_request,
+    from_music_request,
+    from_video_request,
+    to_image_response,
+    to_music_response,
+    to_video_response,
+)
 
 log = get_logger("mcp")
 
@@ -66,11 +87,19 @@ except Exception as exc:  # noqa: BLE001
 # JSON-RPC reserves -32000..-32099 for server-defined errors; gateway errors
 # land in that band so clients can distinguish them from MCP protocol errors.
 _GATEWAY_ERROR_CODE = -32000
+IdempotencyKey = Annotated[
+    str | None,
+    Field(
+        min_length=1,
+        max_length=255,
+        description="Client-generated key used to safely retry this create call.",
+    ),
+]
 
 
-def _gateway_to_mcp_error(exc: GatewayError) -> "MCPError":
+def _gateway_to_mcp_error(exc: GatewayError) -> MCPError:
     """Translate a GatewayError into a structured MCP (JSON-RPC) error."""
-    payload = exc.to_dict()["error"]
+    payload = exc.to_public_dict()["error"]
     payload["status_code"] = exc.status_code
     return MCPError(_GATEWAY_ERROR_CODE, exc.message, data=payload)
 
@@ -132,7 +161,7 @@ def _bearer_from_ctx(ctx: Context) -> str | None:
     return token.strip()
 
 
-def _build_mcp_server(app: FastAPI) -> "MCPServer":
+def _build_mcp_server(app: FastAPI) -> MCPServer:
     """Construct the MCPServer with gateway tools, closing over ``app.state``."""
     if _mcp_import_error is not None:
         raise _mcp_import_error
@@ -150,11 +179,17 @@ def _build_mcp_server(app: FastAPI) -> "MCPServer":
 
     @mcp.tool()
     @_tool
-    async def list_models(ctx: Context) -> str:
-        """List the image and video models usable by the calling API key."""
+    async def list_models(
+        ctx: Context,
+        modality: Literal["image", "video", "music"] | None = None,
+    ) -> str:
+        """List usable models, optionally filtered by image, video, or music."""
         import json
+
         key = _key(ctx)
-        models = registry.list_models(key)
+        models = registry.list_public_models(key)
+        if modality is not None:
+            models = [model for model in models if model["modality"] == modality]
         return json.dumps({"object": "list", "data": models})
 
     @mcp.tool()
@@ -162,142 +197,234 @@ def _build_mcp_server(app: FastAPI) -> "MCPServer":
     async def create_image(
         ctx: Context,
         model: str,
-        input: str | list[dict[str, Any]],
-        wait: bool = True,
-        tag: str | None = None,
-        backend: str | None = None,
+        input: str | list[TextInput | ImageInput],
+        parameters: ImageParameters | None = None,
+        routing: RoutingDirective | None = None,
+        metadata: dict[str, Any] | None = None,
+        idempotency_key: IdempotencyKey = None,
     ) -> str:
-        """Submit an image generation task (Gemini shape).
+        """Create an asynchronous image task from text and image inputs."""
 
-        ``input`` is either a string prompt or a parts array
-        (``[{"type":"text","text":...}, {"type":"image","url":...}, ...]``).
-        Returns ``{"id": "<task_id>"}``; when ``wait`` is true the call blocks
-        until the task reaches a terminal state (up to the sync wait limit).
-        """
-        import json
-        from mm_gateway.tasks.store import TaskRecord
         key = _key(ctx)
-        unified = gemini_compat.from_gemini({"model": model, "input": input})
-        task = await image_service.create(
-            unified, key=key, tag=tag, backend_name=backend, wait=wait,
+        body = ImageRequest(
+            model=model,
+            input=input,
+            parameters=parameters or ImageParameters(),
+            routing=routing,
+            metadata=metadata or {},
         )
-        await task_store.put(TaskRecord(
-            task_id=task.task_id, provider=task.provider, model=task.model,
-            modality="image",
-        ))
-        return json.dumps(gemini_compat.to_gemini_create(task))
+        fingerprint = request_fingerprint(body)
+        async with task_store.idempotency_guard(key.id, "image", idempotency_key):
+            record = await find_idempotent_record(
+                task_store,
+                owner_key_id=key.id,
+                modality="image",
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+            )
+            if record is not None:
+                resource = replay_resource(
+                    record,
+                    ImageTaskResponse,
+                    resource_url=f"/v1/images/{record.task_id}",
+                )
+                return resource.model_dump_json(by_alias=True, exclude_none=True)
+
+            task = await image_service.create(
+                from_image_request(body),
+                key=key,
+                tag=routing.profile if routing else None,
+                wait=False,
+            )
+            record = new_record(
+                "img",
+                task,
+                model=model,
+                modality="image",
+                metadata=body.metadata,
+                owner_key_id=key.id,
+                idempotency_key=idempotency_key,
+                request_fingerprint=fingerprint if idempotency_key else None,
+            )
+            resource = to_image_response(
+                task, record, self_url=f"/v1/images/{record.task_id}"
+            )
+            remember_create_response(record, resource)
+            await task_store.put(record)
+            return resource.model_dump_json(by_alias=True, exclude_none=True)
 
     @mcp.tool()
     @_tool
     async def get_image(ctx: Context, id: str) -> str:
-        """Poll an image task by id; returns the Gemini steps/content envelope."""
-        import json
+        """Retrieve the latest state of an image task."""
+
         key = _key(ctx)
         record = await task_store.get(id)
-        # Same cross-tenant guard as get_video/get_music: the calling key must be
-        # authorised for the backend that owns the task.
-        owner = record.provider if record else None
-        if owner and owner not in registry.usable_backends(key):
-            from mm_gateway.core.exceptions import ForbiddenError
-            raise ForbiddenError(
-                f"API key '{key.id}' is not allowed to use backend '{owner}'."
-            )
-        task = await image_service.get(id, backend_name=owner)
-        return json.dumps(gemini_compat.to_gemini_task(task))
+        if record is None or record.modality != "image":
+            raise TaskNotFoundError(f"image task {id} not found")
+        authorize_task_access(registry, key, record)
+        task = await image_service.get(
+            record.provider_task_id or record.task_id,
+            backend_name=record.provider,
+        )
+        resource = to_image_response(task, record, self_url=f"/v1/images/{id}")
+        return resource.model_dump_json(by_alias=True, exclude_none=True)
 
     @mcp.tool()
     @_tool
     async def create_video(
         ctx: Context,
         model: str,
-        content: list[dict[str, Any]],
-        wait: bool = True,
-        tag: str | None = None,
-        backend: str | None = None,
+        input: str | list[TextInput | VideoImageInput | VideoAudioInput | VideoInput],
+        parameters: VideoParameters | None = None,
+        routing: RoutingDirective | None = None,
+        metadata: dict[str, Any] | None = None,
+        idempotency_key: IdempotencyKey = None,
     ) -> str:
-        """Submit a video generation task (Seedance content-array shape).
+        """Create an asynchronous video task from multimodal inputs."""
 
-        Returns ``{"id": "<task_id>"}``; when ``wait`` is true the call blocks
-        until the task reaches a terminal state (up to the sync wait limit).
-        """
-        import json
-        from mm_gateway.tasks.store import TaskRecord
         key = _key(ctx)
-        unified = seedance_compat.from_seedance({"model": model, "content": content})
-        task = await video_service.create(
-            unified, key=key, tag=tag, backend_name=backend, wait=wait,
+        body = VideoRequest(
+            model=model,
+            input=input,
+            parameters=parameters or VideoParameters(),
+            routing=routing,
+            metadata=metadata or {},
         )
-        await task_store.put(TaskRecord(
-            task_id=task.task_id, provider=task.provider, model=task.model,
-        ))
-        return json.dumps(seedance_compat.to_seedance_create(task))
+        fingerprint = request_fingerprint(body)
+        async with task_store.idempotency_guard(key.id, "video", idempotency_key):
+            record = await find_idempotent_record(
+                task_store,
+                owner_key_id=key.id,
+                modality="video",
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+            )
+            if record is not None:
+                resource = replay_resource(
+                    record,
+                    VideoTaskResponse,
+                    resource_url=f"/v1/videos/{record.task_id}",
+                )
+                return resource.model_dump_json(by_alias=True, exclude_none=True)
+
+            task = await video_service.create(
+                from_video_request(body),
+                key=key,
+                tag=routing.profile if routing else None,
+                wait=False,
+            )
+            record = new_record(
+                "vid",
+                task,
+                model=model,
+                modality="video",
+                metadata=body.metadata,
+                owner_key_id=key.id,
+                idempotency_key=idempotency_key,
+                request_fingerprint=fingerprint if idempotency_key else None,
+            )
+            resource = to_video_response(
+                task, record, self_url=f"/v1/videos/{record.task_id}"
+            )
+            remember_create_response(record, resource)
+            await task_store.put(record)
+            return resource.model_dump_json(by_alias=True, exclude_none=True)
 
     @mcp.tool()
     @_tool
     async def get_video(ctx: Context, id: str) -> str:
-        """Poll a video task by id; returns the Seedance-shape task envelope."""
-        import json
+        """Retrieve the latest state of a video task."""
+
         key = _key(ctx)
         record = await task_store.get(id)
-        # Polling bypasses the create-path usable-backends check, so enforce it
-        # here: the calling key must be authorised for the backend that owns the
-        # task, else an authenticated key could read another tenant's task/artefacts.
-        owner = record.provider if record else None
-        if owner and owner not in registry.usable_backends(key):
-            from mm_gateway.core.exceptions import ForbiddenError
-            raise ForbiddenError(
-                f"API key '{key.id}' is not allowed to use backend '{owner}'."
-            )
-        task = await video_service.get(id, backend_name=owner)
-        return json.dumps(seedance_compat.to_seedance_task(task))
+        if record is None or record.modality != "video":
+            raise TaskNotFoundError(f"video task {id} not found")
+        authorize_task_access(registry, key, record)
+        task = await video_service.get(
+            record.provider_task_id or record.task_id,
+            backend_name=record.provider,
+        )
+        resource = to_video_response(task, record, self_url=f"/v1/videos/{id}")
+        return resource.model_dump_json(by_alias=True, exclude_none=True)
 
     @mcp.tool()
     @_tool
     async def create_music(
         ctx: Context,
         model: str,
-        input: str | list[dict[str, Any]],
-        wait: bool = True,
-        tag: str | None = None,
-        backend: str | None = None,
+        input: str | list[TextInput | LyricsInput | MusicImageInput | MusicAudioInput],
+        parameters: MusicParameters | None = None,
+        routing: RoutingDirective | None = None,
+        metadata: dict[str, Any] | None = None,
+        idempotency_key: IdempotencyKey = None,
     ) -> str:
-        """Submit a music generation task (Gemini Lyria 3 shape).
+        """Create an asynchronous music task from multimodal inputs."""
 
-        ``input`` is either a string prompt or a Lyria parts array
-        (``[{"type":"text","text":...}, ...]``). Returns ``{"id": "<task_id>"}``;
-        when ``wait`` is true the call blocks until the task reaches a terminal
-        state (up to the sync wait limit).
-        """
-        import json
-        from mm_gateway.tasks.store import TaskRecord
         key = _key(ctx)
-        unified = lyria_compat.from_lyria({"model": model, "input": input})
-        task = await music_service.create(
-            unified, key=key, tag=tag, backend_name=backend, wait=wait,
+        body = MusicRequest(
+            model=model,
+            input=input,
+            parameters=parameters or MusicParameters(),
+            routing=routing,
+            metadata=metadata or {},
         )
-        await task_store.put(TaskRecord(
-            task_id=task.task_id, provider=task.provider, model=task.model,
-            modality="music",
-        ))
-        return json.dumps(lyria_compat.to_lyria_create(task))
+        fingerprint = request_fingerprint(body)
+        async with task_store.idempotency_guard(key.id, "music", idempotency_key):
+            record = await find_idempotent_record(
+                task_store,
+                owner_key_id=key.id,
+                modality="music",
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+            )
+            if record is not None:
+                resource = replay_resource(
+                    record,
+                    MusicTaskResponse,
+                    resource_url=f"/v1/music/{record.task_id}",
+                )
+                return resource.model_dump_json(by_alias=True, exclude_none=True)
+
+            task = await music_service.create(
+                from_music_request(body),
+                key=key,
+                tag=routing.profile if routing else None,
+                wait=False,
+            )
+            record = new_record(
+                "mus",
+                task,
+                model=model,
+                modality="music",
+                metadata=body.metadata,
+                owner_key_id=key.id,
+                idempotency_key=idempotency_key,
+                request_fingerprint=fingerprint if idempotency_key else None,
+            )
+            resource = to_music_response(
+                task, record, self_url=f"/v1/music/{record.task_id}"
+            )
+            remember_create_response(record, resource)
+            await task_store.put(record)
+            return resource.model_dump_json(by_alias=True, exclude_none=True)
 
     @mcp.tool()
     @_tool
     async def get_music(ctx: Context, id: str) -> str:
-        """Poll a music task by id; returns the Lyria steps/content envelope."""
-        import json
+        """Retrieve the latest state of a music task."""
+
         key = _key(ctx)
         record = await task_store.get(id)
-        # Same cross-tenant guard as get_video: the calling key must be authorised
-        # for the backend that owns the task.
-        owner = record.provider if record else None
-        if owner and owner not in registry.usable_backends(key):
-            from mm_gateway.core.exceptions import ForbiddenError
-            raise ForbiddenError(
-                f"API key '{key.id}' is not allowed to use backend '{owner}'."
-            )
-        task = await music_service.get(id, backend_name=owner)
-        return json.dumps(lyria_compat.to_lyria_task(task))
+        if record is None or record.modality != "music":
+            raise TaskNotFoundError(f"music task {id} not found")
+        authorize_task_access(registry, key, record)
+        task = await music_service.get(
+            record.provider_task_id or record.task_id,
+            backend_name=record.provider,
+        )
+        resource = to_music_response(task, record, self_url=f"/v1/music/{id}")
+        return resource.model_dump_json(by_alias=True, exclude_none=True)
 
     return mcp
 
@@ -336,9 +463,8 @@ def mount_mcp(app: FastAPI, settings: Settings) -> None:
 
     @asynccontextmanager
     async def _combined_lifespan(_app: FastAPI):
-        async with _mcp_lifespan(_app):
-            async with _previous_lifespan(_app):
-                yield
+        async with _mcp_lifespan(_app), _previous_lifespan(_app):
+            yield
 
     app.router.lifespan_context = _combined_lifespan
 

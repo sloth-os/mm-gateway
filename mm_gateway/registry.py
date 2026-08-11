@@ -27,6 +27,7 @@ from mm_gateway.core.exceptions import (
     ModelNotFoundError,
     ProviderNotConfiguredError,
     ProviderNotFoundError,
+    ValidationError,
 )
 from mm_gateway.observability.logging import get_logger
 
@@ -148,7 +149,7 @@ class Registry:
     def usable_backends(self, key: KeyConfig) -> list[str]:
         """Backend names the key may use, per the hybrid allow/deny rule."""
         allowed: list[str] = []
-        for name, prov in self._backends.items():
+        for name in self._backends:
             cfg = self._configs[name]
             if name in key.deny_tags or cfg.type in key.deny_tags:
                 continue
@@ -170,7 +171,6 @@ class Registry:
     def list_models(self, key: KeyConfig | None = None) -> list[dict[str, Any]]:
         models: list[dict[str, Any]] = []
         usable = self.usable_backends(key) if key else list(self._backends)
-        usable_set = set(usable)
         for alias, (btype, real) in self._aliases.items():
             # Include an alias iff at least one usable backend is of its type.
             if any(self._configs[n].type == btype for n in usable if n in self._configs):
@@ -190,6 +190,22 @@ class Registry:
             for m in prov.music_models:
                 models.append({"id": m, "provider": name, "modality": "music"})
         return models
+
+    def list_public_models(self, key: KeyConfig | None = None) -> list[dict[str, str]]:
+        """Return the provider-neutral model catalogue exposed to clients."""
+        public: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for model in self.list_models(key):
+            identity = (model["id"], model["modality"])
+            if identity in seen:
+                continue
+            seen.add(identity)
+            public.append({
+                "id": model["id"],
+                "object": "model",
+                "modality": model["modality"],
+            })
+        return public
 
     def resolve(
         self,
@@ -252,8 +268,11 @@ class Registry:
             chosen = backend_name
         elif tag:
             tagged = [n for n in candidates if tag in self._configs[n].tags]
-            if tagged:
-                chosen = tagged[0]
+            if not tagged:
+                raise ValidationError(
+                    f"Routing profile '{tag}' is unavailable for model '{model}'."
+                )
+            chosen = tagged[0]
         if chosen is None and key:
             if modality == "image":
                 default = key.default_image_backend

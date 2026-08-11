@@ -176,6 +176,39 @@ async def test_lists_all_gateway_tools(mcp_app):
                      "get_image", "get_music", "get_video", "list_models"]
 
 
+async def test_create_tool_schemas_are_provider_neutral(mcp_app):
+    async with _client(mcp_app, "alice-token") as session:
+        listed = await session.list_tools()
+    tools = {tool.name: tool.input_schema for tool in listed.tools}
+    forbidden = {
+        "backend",
+        "tag",
+        "service_tier",
+        "cfg_scale",
+        "response_format",
+        "output_format",
+        "generate_audio",
+        "camera_fixed",
+        "prompt_extend",
+        "provider",
+        "extra",
+    }
+    expected = {
+        "model",
+        "input",
+        "parameters",
+        "routing",
+        "metadata",
+        "idempotency_key",
+    }
+    for name in ("create_image", "create_video", "create_music"):
+        schema = tools[name]
+        assert set(schema["properties"]) == expected
+        serialized = json.dumps(schema)
+        for field in forbidden:
+            assert f'"{field}":' not in serialized
+
+
 # --------------------------------------------------------------------------- #
 # Auth
 # --------------------------------------------------------------------------- #
@@ -220,42 +253,65 @@ async def test_valid_token_succeeds(mcp_app):
 
 
 # --------------------------------------------------------------------------- #
-# Image create + poll (Gemini shape)
+# Image create + poll
 # --------------------------------------------------------------------------- #
 
 
-async def test_create_image_sync_returns_just_id(mcp_app):
+async def test_create_image_returns_normalized_task(mcp_app):
     is_error, text = await _call(mcp_app, "alice-token", "create_image",
-                                 {"model": "fake-image-1", "input": "a cat", "wait": True})
+                                 {"model": "fake-image-1", "input": "a cat"})
     assert not is_error, text
-    assert json.loads(text) == {"id": "img-1"}
+    body = json.loads(text)
+    assert body["id"].startswith("img_")
+    assert body["object"] == "image"
+    assert body["status"] == "pending"
+    assert body["outputs"] == []
 
 
 async def test_create_image_routes_to_pinned_backend(mcp_app):
     # Bob is pinned to fake-img; verify the request landed there.
     is_error, text = await _call(mcp_app, "bob-token", "create_image",
-                                 {"model": "fake-image-1", "input": "x", "wait": True})
+                                 {"model": "fake-image-1", "input": "x"})
     assert not is_error, text
     prov = mcp_app.state.registry._backends["fake-img"]
     assert prov.image_calls and prov.image_calls[0].provider == "fake-img"
 
 
 async def test_create_image_tag_routing_via_tool_arg(mcp_app):
-    # Alice may use any backend; pin via the ``backend`` arg to fake-other.
+    # Alice may use any backend; select a provider-neutral routing profile.
     is_error, text = await _call(mcp_app, "alice-token", "create_image",
                                  {"model": "fake-image-1", "input": "x",
-                                  "backend": "fake-other", "wait": True})
+                                  "routing": {"profile": "other"}})
     assert not is_error, text
     prov = mcp_app.state.registry._backends["fake-other"]
     assert prov.image_calls and prov.image_calls[0].provider == "fake-other"
 
 
+async def test_create_image_idempotency_key_replays_the_task(mcp_app):
+    args = {
+        "model": "fake-image-1",
+        "input": "x",
+        "idempotency_key": "mcp-image-001",
+    }
+    async with _client(mcp_app, "alice-token") as session:
+        first = await session.call_tool("create_image", args)
+        replay = await session.call_tool("create_image", args)
+    assert not first.is_error and not replay.is_error
+    assert json.loads(first.content[0].text)["id"] == json.loads(
+        replay.content[0].text
+    )["id"]
+    calls = sum(
+        len(provider.image_calls)
+        for provider in mcp_app.state.registry._backends.values()
+    )
+    assert calls == 1
+
+
 async def test_get_image_polls_to_succeeded(mcp_app):
-    # Async create returns immediately; a follow-up get_image re-polls to the
-    # terminal state and the Gemini steps/content envelope (image + revised_prompt).
+    # Create returns immediately; follow-up calls converge on a normalized output.
     async with _client(mcp_app, "alice-token") as sess:
         res = await sess.call_tool("create_image", {
-            "model": "fake-image-1", "input": "a cat", "wait": False,
+            "model": "fake-image-1", "input": "a cat",
         })
         assert not res.is_error, res.content
         task_id = json.loads(res.content[0].text)["id"]
@@ -270,13 +326,10 @@ async def test_get_image_polls_to_succeeded(mcp_app):
     assert body is not None
     assert body["id"] == task_id
     assert body["status"] == "succeeded"
-    step = body["steps"][0]
-    assert step["type"] == "model_output"
-    blocks = step["content"]
-    assert any(b["type"] == "image" and b["url"] == "https://example.test/out.png"
-               for b in blocks)
-    assert body["output_image_url"] == "https://example.test/out.png"
-    assert any(b["type"] == "text" and b["text"] == "a cat" for b in blocks)
+    assert body["outputs"] == [{
+        "url": "https://example.test/out.png",
+        "revised_prompt": "a cat",
+    }]
 
 
 # --------------------------------------------------------------------------- #
@@ -287,38 +340,40 @@ async def test_get_image_polls_to_succeeded(mcp_app):
 async def test_create_video_returns_task_id(mcp_app):
     is_error, text = await _call(mcp_app, "alice-token", "create_video", {
         "model": "fake-video-1",
-        "content": [{"type": "text", "text": "a cat playing"}],
-        "wait": True,
+        "input": [{"type": "text", "text": "a cat playing"}],
     })
     assert not is_error, text
-    assert json.loads(text) == {"id": "task-1"}
+    body = json.loads(text)
+    assert body["id"].startswith("vid_")
+    assert body["object"] == "video"
+    assert body["status"] == "pending"
 
 
 async def test_get_video_polls_to_succeeded(mcp_app):
-    # The fake provider transitions pending -> running -> succeeded across
-    # polls. create_video with wait=True blocks until terminal (succeeded) via
-    # VideoService._await_or_timeout; a follow-up get_video re-confirms the
-    # terminal state and the final artefact url. Both calls ride one
-    # lifespan/session — the session manager is single-use per instance.
+    # The fake provider transitions pending -> running -> succeeded across polls.
     async with _client(mcp_app, "alice-token") as sess:
         res = await sess.call_tool("create_video", {
             "model": "fake-video-1",
-            "content": [{"type": "text", "text": "a cat playing"}],
-            "wait": True,
+            "input": [{"type": "text", "text": "a cat playing"}],
         })
         assert not res.is_error, res.content
         task_id = json.loads(res.content[0].text)["id"]
 
-        res = await sess.call_tool("get_video", {"id": task_id})
-        assert not res.is_error, res.content
-        body = json.loads(res.content[0].text)
+        body = None
+        for _ in range(10):
+            res = await sess.call_tool("get_video", {"id": task_id})
+            assert not res.is_error, res.content
+            body = json.loads(res.content[0].text)
+            if body["status"] == "succeeded":
+                break
+    assert body is not None
     assert body["id"] == task_id
     assert body["status"] == "succeeded"
-    assert body["content"]["video_url"] == "https://example.test/out.mp4"
+    assert body["outputs"] == [{"url": "https://example.test/out.mp4"}]
 
 
 # --------------------------------------------------------------------------- #
-# Music create + poll (Gemini Lyria 3 shape)
+# Music create + poll
 # --------------------------------------------------------------------------- #
 
 
@@ -326,25 +381,23 @@ async def test_create_music_returns_interaction_id(mcp_app):
     is_error, text = await _call(mcp_app, "alice-token", "create_music", {
         "model": "fake-music-1",
         "input": "an upbeat pop song",
-        "wait": True,
-        # Pin to the music backend so we can assert the call landed there; without
-        # this, resolution picks the first usable backend that serves the model
-        # (all fake backends do), which would be fake-img.
-        "backend": "fake-mus",
+        "routing": {"profile": "music-primary"},
     })
     assert not is_error, text
-    assert json.loads(text) == {"id": "music-1"}
+    body = json.loads(text)
+    assert body["id"].startswith("mus_")
+    assert body["object"] == "music"
+    assert body["status"] == "pending"
     prov = mcp_app.state.registry._backends["fake-mus"]
     assert prov.music_calls and prov.music_calls[0].prompt() == "an upbeat pop song"
 
 
 async def test_create_music_accepts_parts_input(mcp_app):
-    # ``input`` as a Lyria parts array is accepted; text parts concatenate.
+    # Typed text parts concatenate in order.
     is_error, text = await _call(mcp_app, "alice-token", "create_music", {
         "model": "fake-music-1",
         "input": [{"type": "text", "text": "verse"}, {"type": "text", "text": "chorus"}],
-        "wait": True,
-        "backend": "fake-mus",
+        "routing": {"profile": "music-primary"},
     })
     assert not is_error, text
     prov = mcp_app.state.registry._backends["fake-mus"]
@@ -352,14 +405,12 @@ async def test_create_music_accepts_parts_input(mcp_app):
 
 
 async def test_get_music_polls_to_succeeded(mcp_app):
-    # Async create returns immediately; a follow-up get_music re-polls to the
-    # terminal state and the Lyria steps/content envelope (audio + lyrics blocks).
+    # Create returns immediately; follow-up calls converge on audio plus lyrics.
     async with _client(mcp_app, "alice-token") as sess:
         res = await sess.call_tool("create_music", {
             "model": "fake-music-1",
             "input": "a sad ballad",
-            "wait": False,  # async, so we get the id back immediately
-            "backend": "fake-mus",
+            "routing": {"profile": "music-primary"},
         })
         assert not res.is_error, res.content
         task_id = json.loads(res.content[0].text)["id"]
@@ -376,13 +427,8 @@ async def test_get_music_polls_to_succeeded(mcp_app):
     assert body is not None
     assert body["id"] == task_id
     assert body["status"] == "succeeded"
-    step = body["steps"][0]
-    assert step["type"] == "model_output"
-    blocks = step["content"]
-    assert any(b["type"] == "audio" and b["data"] == "AAAA" for b in blocks)
-    assert any(b["type"] == "text" and b["text"] == "la la la" for b in blocks)
-    assert body["output_audio"] == "AAAA"
-    assert body["output_text"] == "la la la"
+    assert body["outputs"] == [{"data": "AAAA", "mime_type": "audio/wav"}]
+    assert body["lyrics"] == "la la la"
 
 
 # --------------------------------------------------------------------------- #
@@ -397,15 +443,14 @@ async def test_key_with_no_usable_backend_gets_forbidden(mcp_app):
     with pytest.raises(MCPError) as exc:
         await _call(mcp_app, "dave-token", "create_video", {
             "model": "fake-video-1",
-            "content": [{"type": "text", "text": "x"}],
-            "wait": True,
+            "input": [{"type": "text", "text": "x"}],
         })
     msg = str(exc.value)
     assert "not allowed" in msg or "forbidden" in msg.lower()
 
 
 async def test_poll_denied_when_key_not_authorised_for_tasks_backend(mcp_app):
-    # Alice creates a video pinned (via the `backend` arg) to fake-vid. Bob is
+    # Alice creates a video pinned via routing to fake-vid. Bob is
     # pinned to fake-img, so he is not authorised for fake-vid — polling alice's
     # task must surface as an MCPError, not a cross-tenant leak.
     #
@@ -418,9 +463,8 @@ async def test_poll_denied_when_key_not_authorised_for_tasks_backend(mcp_app):
         async with _session(mcp_app, "alice-token") as sess:
             res = await sess.call_tool("create_video", {
                 "model": "fake-video-1",
-                "content": [{"type": "text", "text": "x"}],
-                "backend": "fake-vid",
-                "wait": False,  # async, so we get the id back immediately
+                "input": [{"type": "text", "text": "x"}],
+                "routing": {"profile": "video-primary"},
             })
             assert not res.is_error, res.content
             task_id = json.loads(res.content[0].text)["id"]

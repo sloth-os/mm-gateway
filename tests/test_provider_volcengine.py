@@ -17,8 +17,15 @@ from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.providers import volcengine as volc_mod
 from mm_gateway.providers.volcengine import VolcengineProvider
-from mm_gateway.schemas.image import UnifiedImageRequest, text_part as image_text_part
-from mm_gateway.schemas.video import UnifiedVideoRequest, audio_part, image_part, text_part, video_part
+from mm_gateway.schemas.image import UnifiedImageRequest
+from mm_gateway.schemas.image import text_part as image_text_part
+from mm_gateway.schemas.video import (
+    UnifiedVideoRequest,
+    audio_part,
+    image_part,
+    text_part,
+    video_part,
+)
 
 
 class FakeTasks:
@@ -202,6 +209,7 @@ def test_video_create_passes_seedance_knobs(provider: VolcengineProvider) -> Non
     req = UnifiedVideoRequest(
         model="doubao-seedance-2-0-260128", content=[text_part("x")], seed=42, camera_fixed=True,
         resolution="1080p", callback_url="https://x.test/cb", return_last_frame=True,
+        frame_count=121,
         extra={"service_tier": "default", "priority": 5},
     )
     asyncio.run(provider.create_video_task(req))
@@ -209,6 +217,7 @@ def test_video_create_passes_seedance_knobs(provider: VolcengineProvider) -> Non
     assert kw["seed"] == 42 and kw["camera_fixed"] is True
     assert kw["resolution"] == "1080p" and kw["callback_url"] == "https://x.test/cb"
     assert kw["return_last_frame"] is True and kw["service_tier"] == "default" and kw["priority"] == 5
+    assert kw["frames"] == 121
 
 
 def test_video_create_propagates_sdk_error(provider: VolcengineProvider) -> None:

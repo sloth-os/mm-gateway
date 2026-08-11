@@ -19,10 +19,14 @@ from typing import Any, ClassVar
 import httpx
 
 from mm_gateway.core.base import MusicProvider
-from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.core.exceptions import (
+    ProviderNotConfiguredError,
+    ProviderRequestError,
+    TaskFailedError,
+)
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
-from mm_gateway.schemas.music import UnifiedMusicRequest, UnifiedMusicTask, MusicUsage
+from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 
 log = get_logger("provider.elevenlabs")
 
@@ -67,6 +71,11 @@ class ElevenLabsProvider(MusicProvider):
         otherwise default to 'auto' so the SDK picks the right format for the
         model (mp3_44100_128 for v1, mp3_48000_192 for v2).
         """
+        if request.sample_rate_hz is not None or request.bitrate_kbps is not None:
+            codec = _CODEC_BY_FORMAT.get((request.audio_format or "mp3").lower(), "mp3")
+            sample_rate = request.sample_rate_hz or 44100
+            bitrate = request.bitrate_kbps or 128
+            return f"{codec}_{sample_rate}_{bitrate}"
         if request.audio_quality:
             codec = _CODEC_BY_FORMAT.get((request.audio_format or "mp3").lower(), "mp3")
             return f"{codec}_{request.audio_quality}"
@@ -76,8 +85,8 @@ class ElevenLabsProvider(MusicProvider):
         return None
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
-        prompt = request.prompt()
-        if not prompt:
+        prompt = request.generation_prompt()
+        if not prompt and not request.lyrics:
             raise ProviderRequestError(
                 "elevenlabs music requires a prompt (text part)", provider="elevenlabs",
                 status_code=400,
@@ -85,7 +94,7 @@ class ElevenLabsProvider(MusicProvider):
         task_id = f"el-{uuid.uuid4().hex}"
         _MUSIC_TASKS[task_id] = {
             "model": request.model or _DEFAULT_MODEL,
-            "prompt": prompt,
+            "prompt": prompt or request.lyrics,
             "request": request,
             "status": "pending",
             "created_at": int(time.time()),
@@ -113,7 +122,7 @@ class ElevenLabsProvider(MusicProvider):
         request: UnifiedMusicRequest = rec["request"]
         try:
             audio_bytes = await self._compose(request, rec["model"])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             rec["status"] = "failed"
             rec["error"] = str(exc)
             raise ProviderRequestError(
@@ -136,8 +145,11 @@ class ElevenLabsProvider(MusicProvider):
         )
 
     async def _compose(self, request: UnifiedMusicRequest, model: str) -> bytes:
+        prompt = request.generation_prompt() or ""
+        if request.lyrics:
+            prompt = f"{prompt}\n\nLyrics:\n{request.lyrics}".strip()
         kwargs: dict[str, Any] = {
-            "prompt": request.prompt(),
+            "prompt": prompt,
             "model_id": model,
         }
         fmt = self._output_format(request)
@@ -150,6 +162,10 @@ class ElevenLabsProvider(MusicProvider):
             kwargs["seed"] = request.seed
         if request.is_instrumental is not None:
             kwargs["force_instrumental"] = request.is_instrumental
+        if request.respect_section_durations is not None:
+            kwargs["respect_sections_durations"] = request.respect_section_durations
+        if request.provenance is not None:
+            kwargs["sign_with_c_2_pa"] = request.provenance
         # Pass any provider-specific knobs the caller stashed in extra through
         # the SDK (e.g. finetune_id, store_for_inpainting).
         for k in ("finetune_id", "respect_sections_durations",

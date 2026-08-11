@@ -20,7 +20,7 @@ import pytest
 
 from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError
-from mm_gateway.schemas.music import UnifiedMusicRequest, text_part
+from mm_gateway.schemas.music import UnifiedMusicRequest, audio_part, text_part
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -48,6 +48,13 @@ def _body(request: httpx.Request) -> dict[str, Any]:
 
 def _req(prompt: str = "a happy song", **kw) -> UnifiedMusicRequest:
     return UnifiedMusicRequest(model=kw.pop("model", "m"), content=[text_part(prompt)], **kw)
+
+
+def test_elevenlabs_translates_neutral_audio_quality() -> None:
+    from mm_gateway.providers.elevenlabs import ElevenLabsProvider
+
+    request = _req(audio_format="wav", sample_rate_hz=48000, bitrate_kbps=192)
+    assert ElevenLabsProvider._output_format(request) == "wav_48000_192"
 
 
 # --------------------------------------------------------------------------- #
@@ -120,6 +127,23 @@ def test_minimax_in_progress_status_keeps_task_running() -> None:
     assert result.status == "running"
 
 
+def test_minimax_translates_quality_inline_reference_and_lyrics_control() -> None:
+    from mm_gateway.providers.minimax import MiniMaxProvider
+
+    p = MiniMaxProvider(_backend("minimax"))
+    request = UnifiedMusicRequest(
+        model="music-3.0",
+        content=[text_part("a happy song"), audio_part("data:audio/wav;base64,AAAA")],
+        sample_rate_hz=44100,
+        bitrate_kbps=192,
+        enhance_lyrics=True,
+    )
+    body = p._build_body(request, "music-3.0")
+    assert body["audio_setting"] == {"sample_rate": 44100, "bitrate": 192000}
+    assert body["audio_base64"] == "AAAA"
+    assert body["lyrics_optimizer"] is True
+
+
 def test_minimax_base_resp_error_fails_task() -> None:
     from mm_gateway.core.exceptions import TaskFailedError
     from mm_gateway.providers.minimax import _MUSIC_TASKS, MiniMaxProvider
@@ -166,7 +190,7 @@ def test_udioapi_create_returns_workid_and_poll_completes() -> None:
 
     _mount(p, handler, base_url="https://udioapi.pro")
 
-    task = asyncio.run(p.create_music_task(_req(model="chirp-v5", extra={"style": "edm"})))
+    task = asyncio.run(p.create_music_task(_req(model="chirp-v5", style="edm")))
     assert task.task_id == "w-1" and task.status == "pending"
     # Custom mode is selected because style is present.
     assert create_path[1]["prompt"] == "a happy song"
@@ -196,6 +220,22 @@ def test_udioapi_fail_message_fails_task() -> None:
     assert "moderation" in (result.error or "")
 
 
+def test_udioapi_translates_neutral_influence_controls() -> None:
+    from mm_gateway.providers.udioapi import UdioApiProvider
+
+    p = UdioApiProvider(_backend("udioapi"))
+    body = p._build_body(_req(
+        vocal_gender="female",
+        style_strength=0.8,
+        novelty=0.25,
+        reference_audio_strength=0.6,
+    ))
+    assert body["gender"] == "female"
+    assert body["style_weight"] == 0.8
+    assert body["weirdness_constraint"] == 0.25
+    assert body["audio_weight"] == 0.6
+
+
 # --------------------------------------------------------------------------- #
 # Mureka — two-phase, candidate field names + status map
 # --------------------------------------------------------------------------- #
@@ -223,7 +263,7 @@ def test_mureka_create_and_poll_succeeded() -> None:
 
     _mount(p, handler, base_url="https://platform.mureka.ai")
 
-    task = asyncio.run(p.create_music_task(_req(model="mureka-song-1", extra={"style": "pop"})))
+    task = asyncio.run(p.create_music_task(_req(model="mureka-song-1", style="pop")))
     assert task.task_id == "mk-1"
     # A single-line prompt with no lyrics -> "prompt" field, style -> tags.
     assert captured["body"]["prompt"] == "a happy song"
@@ -268,6 +308,26 @@ def test_mureka_failed_status_surfaces_error() -> None:
     result = asyncio.run(p.get_music_task("mk-3"))
     assert result.status == "failed"
     assert result.error == "nope"
+
+
+def test_mureka_translates_voice_and_audio_quality() -> None:
+    from mm_gateway.providers.mureka import MurekaProvider
+
+    p = MurekaProvider(_backend("mureka"))
+    body = p._build_body(_req(
+        voice="warm-alto",
+        audio_format="wav",
+        sample_rate_hz=44100,
+        bitrate_kbps=192,
+        seed=17,
+    ))
+    assert body["voice_id"] == "warm-alto"
+    assert body["audio_config"] == {
+        "format": "wav",
+        "sample_rate": 44100,
+        "bitrate": 192000,
+    }
+    assert body["seed"] == 17
 
 
 # --------------------------------------------------------------------------- #
@@ -330,6 +390,28 @@ def test_acestep_failed_status_surfaces_error() -> None:
     assert result.status == "failed"
 
 
+def test_acestep_translates_key_batch_steps_and_continuation_audio() -> None:
+    from mm_gateway.providers.acestep import AceStepProvider
+
+    p = AceStepProvider(_backend("acestep", base_url="https://ace.test"))
+    request = UnifiedMusicRequest(
+        model="ace-step-1.5",
+        content=[
+            text_part("a happy song"),
+            audio_part("https://assets.test/continue.wav", "continuation_audio"),
+        ],
+        key="A",
+        scale="minor",
+        inference_steps=32,
+        n=3,
+    )
+    body = p._build_body(request)
+    assert body["key_scale"] == "A minor"
+    assert body["inference_steps"] == 32
+    assert body["batch_size"] == 3
+    assert body["reference_audio_path"] == "https://assets.test/continue.wav"
+
+
 # --------------------------------------------------------------------------- #
 # Google Lyria — output extraction (steps[].content[] blocks)
 # --------------------------------------------------------------------------- #
@@ -357,3 +439,26 @@ def test_lyria_extract_returns_none_when_empty() -> None:
     from mm_gateway.providers.google import _extract_lyria_output
     audio, lyrics = _extract_lyria_output({})
     assert audio is None and lyrics is None
+
+
+def test_lyria_translates_inline_reference_media() -> None:
+    from mm_gateway.providers.google import GoogleProvider
+    from mm_gateway.schemas.music import image_part
+
+    p = GoogleProvider(_backend("google"))
+    request = UnifiedMusicRequest(
+        model="lyria-3",
+        content=[
+            text_part("a happy song"),
+            image_part("data:image/png;base64,BBBB"),
+            audio_part("data:audio/wav;base64,AAAA"),
+        ],
+    )
+    parts = p._lyria_body(request)["input"]
+    assert {"type": "image", "mime_type": "image/png", "data": "BBBB"} in parts
+    assert {
+        "type": "audio",
+        "mime_type": "audio/wav",
+        "data": "AAAA",
+        "role": "reference_audio",
+    } in parts

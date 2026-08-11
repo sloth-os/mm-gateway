@@ -1,15 +1,13 @@
-"""Unified image schemas — the canonical internal representation.
+"""Unified image schemas - the canonical internal representation.
 
 Mirrors the music/video schemas: a ``content`` array of typed parts (text /
 image) plus a flat set of generation knobs (size, n, seed, ...). Every
 front-end shape (Gemini-compatible) is translated into this one model, and
 every provider pulls the bits it cares about out of ``content`` and the knobs.
 
-The front-end format is **Gemini-compatible**: a request is ``{model, input, ...}``
-where ``input`` is a string or a parts array (``{type:"text",text}`` and
-``{type:"image",mime_type,data}``/``{type:"image",url}``), and the response is a
-task whose ``steps[].content[]`` blocks carry the generated image (inline base64
-or URL). See ``translators/image/gemini_compat.py``.
+The public REST translator builds this model directly from the strict
+provider-neutral image contract. Compatibility translators may also target the
+same model without defining the public API.
 
 Image generation is synchronous on most providers (OpenAI DALL·E, Imagen,
 Stable Image, xAI, Volcengine Seedream) and asynchronous on a few (DashScope
@@ -23,7 +21,6 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, RootModel, model_validator
-
 
 # --------------------------------------------------------------------------- #
 # Content parts
@@ -46,7 +43,7 @@ class ImageImagePart(BaseModel):
     mime_type: str | None = None
 
     @model_validator(mode="after")
-    def _one_of(self) -> "ImageImagePart":
+    def _one_of(self) -> ImageImagePart:
         if not self.url and not self.data:
             raise ValueError("ImageImagePart requires either url or data")
         return self

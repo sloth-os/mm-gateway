@@ -1,240 +1,434 @@
-"""End-to-end route tests with a fake in-memory provider.
-
-These exercise the full FastAPI stack: HTTP request -> translator -> service ->
-fake provider -> translator -> JSON response, with no network calls.
-"""
+"""End-to-end tests for the public REST resource contracts."""
 
 from __future__ import annotations
 
+from mm_gateway.core.exceptions import ProviderRequestError
+
+
+def _poll_until_done(client, url: str) -> dict:
+    for _ in range(10):
+        response = client.get(url)
+        assert response.status_code == 200, response.text
+        body = response.json()
+        if body["status"] in {"succeeded", "failed", "cancelled", "expired"}:
+            return body
+    raise AssertionError(f"task at {url} did not reach a terminal state")
+
+
 # -- Meta routes ------------------------------------------------------------ #
 
+
 def test_health(client):
-    r = client.get("/health")
-    assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
-def test_models_lists_fake_models(client):
-    r = client.get("/v1/models")
-    assert r.status_code == 200
-    ids = [m["id"] for m in r.json()["data"]]
-    assert "fake-image-1" in ids
-    assert "fake-video-1" in ids
+def test_models_can_be_filtered_by_modality(client):
+    response = client.get("/v1/models", params={"modality": "image"})
+    assert response.status_code == 200
+    assert response.json()["object"] == "list"
+    assert response.json()["data"]
+    assert {model["modality"] for model in response.json()["data"]} == {"image"}
+    assert all(set(model) == {"id", "object", "modality"}
+               for model in response.json()["data"])
+    assert response.headers["cache-control"] == "private, max-age=60"
+
+    unchanged = client.get(
+        "/v1/models",
+        params={"modality": "image"},
+        headers={"if-none-match": response.headers["etag"]},
+    )
+    assert unchanged.status_code == 304
+    assert unchanged.content == b""
 
 
 def test_metrics_exposes_prometheus(client):
-    # Make a real request first so the metrics store has a counter to render.
     client.post("/v1/images", json={"model": "fake-image-1", "input": "x"})
-    r = client.get("/metrics")
-    assert r.status_code == 200
-    assert "gateway_requests_total" in r.text
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "gateway_requests_total" in response.text
 
 
 def test_request_id_middleware(client):
-    r = client.get("/health", headers={"x-request-id": "abc-123"})
-    assert r.headers["x-request-id"] == "abc-123"
+    response = client.get("/health", headers={"x-request-id": "abc-123"})
+    assert response.headers["x-request-id"] == "abc-123"
 
 
-# -- Image routes ------------------------------------------------------------ #
-
-def test_image_create_sync_returns_just_id(client, fake_provider):
-    # image_sync_default defaults to True, so create blocks until success and
-    # returns only the Gemini interaction id.
-    r = client.post("/v1/images", json={"model": "fake-image-1", "input": "a cat", "n": 1})
-    assert r.status_code == 200, r.text
-    assert r.json() == {"id": "img-1"}
-    assert len(fake_provider.image_calls) == 1
-    assert fake_provider.image_calls[0].model == "fake-image-1"
-    assert fake_provider.image_calls[0].prompt() == "a cat"
+# -- Image resources -------------------------------------------------------- #
 
 
-def test_image_async_then_poll_returns_steps_content(client, fake_provider):
-    # Respond-async: create returns immediately without waiting.
-    r = client.post("/v1/images", json={"model": "fake-image-1", "input": "a cat"},
-                    headers={"prefer": "respond-async"})
-    assert r.status_code == 200, r.text
-    task_id = r.json()["id"]
-
-    # Poll until terminal.
-    for _ in range(10):
-        poll = client.get(f"/v1/images/{task_id}")
-        assert poll.status_code == 200, poll.text
-        if poll.json()["status"] == "succeeded":
-            break
-    body = poll.json()
-    assert body["id"] == task_id
-    assert body["status"] == "succeeded"
-    # The image rides a model_output step's content array as a typed block.
-    step = body["steps"][0]
-    assert step["type"] == "model_output"
-    blocks = step["content"]
-    assert any(b["type"] == "image" and b["url"] == "https://example.test/out.png" for b in blocks)
-    # Convenience accessor mirrors the SDK's interaction.output_image / output_image_url.
-    assert body["output_image_url"] == "https://example.test/out.png"
-    # revised_prompt surfaces as a text block.
-    assert any(b["type"] == "text" and b["text"] == "a cat" for b in blocks)
-
-
-def test_image_missing_model_is_rejected(client):
-    r = client.post("/v1/images", json={"input": "no model"})
-    assert r.status_code in (400, 422)
-
-
-def test_image_poll_unknown_task_is_404(client):
-    r = client.get("/v1/images/no-such-task")
-    assert r.status_code == 404
-
-
-def test_image_async_url_never_blocks(client, fake_provider):
-    # The /async sibling is unconditionally async: even with
-    # image_sync_default=True (the fixture default), create returns a task id
-    # immediately without waiting for the provider to finish. ?wait is ignored.
-    r = client.post("/v1/images/async?wait=true",
-                    json={"model": "fake-image-1", "input": "a cat"})
-    assert r.status_code == 200, r.text
-    task_id = r.json()["id"]
-    # The task was created but not yet driven to success — poll to complete it.
-    for _ in range(10):
-        poll = client.get(f"/v1/images/{task_id}")
-        assert poll.status_code == 200, poll.text
-        if poll.json()["status"] == "succeeded":
-            break
-    assert poll.json()["status"] == "succeeded"
-    assert len(fake_provider.image_calls) == 1
-
-
-
-# -- Video routes ------------------------------------------------------------ #
-
-def test_video_seedance_create_sync_returns_completed(client, fake_provider):
-    # video_sync_default is True, so the create call blocks until success.
-    r = client.post("/v1/videos", json={
-        "model": "fake-video-1",
-        "content": [{"type": "text", "text": "a cat playing"}],
+def test_image_create_returns_task_resource_and_rest_headers(client, fake_provider):
+    response = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": "a cat",
+        "parameters": {"output_count": 2, "size": "1024x1024"},
+        "metadata": {"job": "cover"},
     })
-    assert r.status_code == 200, r.text
-    out = r.json()
-    # Seedance create only returns the id per its contract.
-    assert out == {"id": "task-1"}
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["id"].startswith("img_")
+    assert body["object"] == "image"
+    assert body["model"] == "fake-image-1"
+    assert body["status"] == "pending"
+    assert body["outputs"] == []
+    assert body["metadata"] == {"job": "cover"}
+    assert body["links"]["self"] == response.headers["location"]
+    assert response.headers["location"].endswith(f"/v1/images/{body['id']}")
+    assert response.headers["retry-after"] == "1"
+    assert response.headers["cache-control"] == "private, no-cache"
+    assert response.headers["etag"].startswith('"')
+
+    request = fake_provider.image_calls[0]
+    assert request.prompt() == "a cat"
+    assert request.n == 2
+    assert request.size == "1024x1024"
 
 
-def test_video_seedance_async_then_poll(client, fake_provider):
-    # Respond-async: create returns a handle without waiting.
-    r = client.post("/v1/videos", json={
-        "model": "fake-video-1",
-        "content": [{"type": "text", "text": "a cat playing"}],
-    }, headers={"prefer": "respond-async"})
-    assert r.status_code == 200, r.text
-    task_id = r.json()["id"]
+def test_create_is_idempotent(client, fake_provider):
+    payload = {
+        "model": "fake-image-1",
+        "input": "a cat",
+        "metadata": {"job": "cover"},
+    }
+    headers = {"idempotency-key": "cover-001"}
 
-    # Poll until terminal.
-    for _ in range(10):
-        poll = client.get(f"/v1/videos/{task_id}")
-        assert poll.status_code == 200, poll.text
-        if poll.json()["status"] == "succeeded":
-            break
-    body = poll.json()
-    assert body["status"] == "succeeded"
+    first = client.post("/v1/images", json=payload, headers=headers)
+    replay = client.post("/v1/images", json=payload, headers=headers)
+
+    assert first.status_code == replay.status_code == 202
+    assert first.json() == replay.json()
+    assert first.headers["location"] == replay.headers["location"]
+    assert replay.headers["idempotency-replayed"] == "true"
+    assert len(fake_provider.image_calls) == 1
+
+
+def test_idempotency_key_cannot_be_reused_for_a_different_request(
+    client, fake_provider
+):
+    headers = {"idempotency-key": "cover-001"}
+    first = client.post(
+        "/v1/images",
+        json={"model": "fake-image-1", "input": "a cat"},
+        headers=headers,
+    )
+    conflict = client.post(
+        "/v1/images",
+        json={"model": "fake-image-1", "input": "a dog"},
+        headers=headers,
+    )
+
+    assert first.status_code == 202
+    assert conflict.status_code == 409
+    assert conflict.headers["content-type"].startswith("application/problem+json")
+    assert conflict.json()["code"] == "idempotency_conflict"
+    assert len(fake_provider.image_calls) == 1
+
+
+def test_image_accepts_ordered_text_and_multiple_images(client, fake_provider):
+    response = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": [
+            {"type": "image", "url": "https://example.test/one.png"},
+            {"type": "text", "text": "combine these references"},
+            {"type": "image", "data": "AAAA", "mime_type": "image/png"},
+        ],
+    })
+    assert response.status_code == 202, response.text
+    request = fake_provider.image_calls[0]
+    assert request.prompt() == "combine these references"
+    assert len(request.input_images()) == 2
+    assert request.input_images()[0].url == "https://example.test/one.png"
+    assert request.input_images()[1].data == "AAAA"
+
+
+def test_image_poll_returns_normalized_outputs(client):
+    created = client.post(
+        "/v1/images", json={"model": "fake-image-1", "input": "a cat"}
+    )
+    task_id = created.json()["id"]
+    body = _poll_until_done(client, created.headers["location"])
     assert body["id"] == task_id
-    # The video url rides the content envelope.
-    assert body["content"]["video_url"] == "https://example.test/out.mp4"
+    assert body["object"] == "image"
+    assert body["outputs"] == [{
+        "url": "https://example.test/out.png",
+        "revised_prompt": "a cat",
+    }]
+    assert body["links"]["self"].endswith(f"/v1/images/{task_id}")
 
 
-def test_video_async_url_never_blocks(client, fake_provider):
-    # The /async sibling is unconditionally async: create returns a handle
-    # immediately even though video_sync_default=True (fixture default). ?wait
-    # and Prefer are ignored on this path.
-    r = client.post("/v1/videos/async?wait=true", json={
+def test_poll_supports_etag_revalidation(client):
+    created = client.post(
+        "/v1/images", json={"model": "fake-image-1", "input": "a cat"}
+    )
+    first = client.get(created.headers["location"])
+    completed = client.get(created.headers["location"])
+    assert first.json()["created_at"] == completed.json()["created_at"]
+    assert completed.json()["status"] == "succeeded"
+
+    unchanged = client.get(
+        created.headers["location"],
+        headers={"if-none-match": completed.headers["etag"]},
+    )
+    assert unchanged.status_code == 304
+    assert unchanged.content == b""
+    assert unchanged.headers["etag"] == completed.headers["etag"]
+
+
+def test_image_unknown_task_is_404(client):
+    response = client.get("/v1/images/img_unknown")
+    assert response.status_code == 404
+    assert response.json()["code"] == "task_not_found"
+
+
+# -- Video resources -------------------------------------------------------- #
+
+
+def test_video_accepts_text_images_audio_and_video(client, fake_provider):
+    response = client.post("/v1/videos", json={
         "model": "fake-video-1",
-        "content": [{"type": "text", "text": "a cat playing"}],
-    }, headers={"prefer": "respond=wait"})
-    assert r.status_code == 200, r.text
-    task_id = r.json()["id"]
-    for _ in range(10):
-        poll = client.get(f"/v1/videos/{task_id}")
-        assert poll.status_code == 200, poll.text
-        if poll.json()["status"] == "succeeded":
-            break
-    assert poll.json()["status"] == "succeeded"
+        "input": [
+            {"type": "text", "text": "cut between all references"},
+            {"type": "image", "url": "https://example.test/first.png", "role": "first_frame"},
+            {"type": "image", "url": "https://example.test/ref.png", "role": "reference_image"},
+            {"type": "audio", "data": "AAAA", "mime_type": "audio/wav", "role": "reference_audio"},
+            {"type": "audio", "url": "https://example.test/score.mp3", "role": "reference_audio"},
+            {"type": "video", "url": "https://example.test/ref.mp4", "role": "reference_video"},
+            {"type": "video", "data": "BBBB", "mime_type": "video/webm", "role": "reference_video"},
+        ],
+        "parameters": {
+            "duration_seconds": 5,
+            "aspect_ratio": "16:9",
+            "include_audio": True,
+            "camera_motion": "fixed",
+            "enhance_prompt": True,
+            "guidance_scale": 4.5,
+            "motion_intensity": 140,
+            "frame_count": 121,
+            "file_format": "mp4",
+        },
+    })
+    assert response.status_code == 202, response.text
+    assert response.json()["id"].startswith("vid_")
+    assert response.json()["object"] == "video"
+
+    request = fake_provider.video_calls[0]
+    assert request.prompt() == "cut between all references"
+    assert request.first_image() == "https://example.test/first.png"
+    assert request.reference_images() == ["https://example.test/ref.png"]
+    assert request.reference_audios()[0].startswith("data:audio/wav;base64,")
+    assert request.reference_audios()[1] == "https://example.test/score.mp3"
+    assert request.reference_videos()[0] == "https://example.test/ref.mp4"
+    assert request.reference_videos()[1].startswith("data:video/webm;base64,")
+    assert request.duration == 5
+    assert request.ratio == "16:9"
+    assert request.generate_audio is True
+    assert request.camera_fixed is True
+    assert request.prompt_extend is True
+    assert request.guidance_scale == 4.5
+    assert request.motion_intensity == 140
+    assert request.frame_count == 121
+    assert request.output_format == "mp4"
+    assert request.extra == {}
 
 
-# -- Music routes (Gemini Lyria 3 shape) ------------------------------------- #
+def test_video_poll_returns_normalized_outputs_and_usage(client):
+    created = client.post(
+        "/v1/videos", json={"model": "fake-video-1", "input": "a cat playing"}
+    )
+    body = _poll_until_done(client, created.headers["location"])
+    assert body["object"] == "video"
+    assert body["outputs"] == [{"url": "https://example.test/out.mp4"}]
+    assert body["usage"] == {"cost": 0.01, "output_count": 1}
 
 
-def test_music_create_sync_returns_just_id(client, fake_provider):
-    # music_sync_default defaults to True, so create blocks until success and
-    # returns only the Lyria interaction id.
-    r = client.post("/v1/music", json={"model": "fake-music-1", "input": "an upbeat pop song"})
-    assert r.status_code == 200, r.text
-    assert r.json() == {"id": "music-1"}
-    assert len(fake_provider.music_calls) == 1
-    assert fake_provider.music_calls[0].prompt() == "an upbeat pop song"
+def test_task_id_cannot_be_used_on_a_different_collection(client):
+    created = client.post(
+        "/v1/videos", json={"model": "fake-video-1", "input": "x"}
+    )
+    response = client.get(f"/v1/images/{created.json()['id']}")
+    assert response.status_code == 404
 
 
-def test_music_async_then_poll_returns_steps_content(client, fake_provider):
-    # Respond-async: create returns immediately without waiting.
-    r = client.post("/v1/music", json={"model": "fake-music-1", "input": "a sad ballad"},
-                    headers={"prefer": "respond-async"})
-    assert r.status_code == 200, r.text
-    task_id = r.json()["id"]
-
-    # Poll until terminal.
-    for _ in range(10):
-        poll = client.get(f"/v1/music/{task_id}")
-        assert poll.status_code == 200, poll.text
-        if poll.json()["status"] == "succeeded":
-            break
-    body = poll.json()
-    assert body["id"] == task_id
-    assert body["status"] == "succeeded"
-    # The audio + lyrics ride a model_output step's content array as typed blocks.
-    step = body["steps"][0]
-    assert step["type"] == "model_output"
-    blocks = step["content"]
-    assert any(b["type"] == "audio" and b["data"] == "AAAA" for b in blocks)
-    assert any(b["type"] == "text" and b["text"] == "la la la" for b in blocks)
-    # Convenience accessors mirror the SDK's interaction.output_audio / output_text.
-    assert body["output_audio"] == "AAAA"
-    assert body["output_text"] == "la la la"
+# -- Music resources -------------------------------------------------------- #
 
 
-def test_music_parts_input_round_trips(client, fake_provider):
-    # ``input`` as a parts array (Lyria native) is accepted and concatenates.
-    r = client.post("/v1/music", json={
+def test_music_accepts_text_image_and_audio_inputs(client, fake_provider):
+    response = client.post("/v1/music", json={
         "model": "fake-music-1",
-        "input": [{"type": "text", "text": "verse"}, {"type": "text", "text": "chorus"}],
-        "response_format": {"type": "audio"},
+        "input": [
+            {"type": "text", "text": "verse"},
+            {"type": "text", "text": "chorus"},
+            {"type": "lyrics", "text": "we sing together"},
+            {"type": "lyrics", "text": "under one sky"},
+            {"type": "image", "url": "https://example.test/cover.png"},
+            {"type": "image", "data": "BBBB", "mime_type": "image/jpeg"},
+            {"type": "audio", "url": "https://example.test/reference.wav", "role": "reference_audio"},
+            {"type": "audio", "data": "CCCC", "mime_type": "audio/mpeg", "role": "continuation_audio"},
+        ],
+        "parameters": {
+            "file_format": "wav",
+            "sample_rate_hz": 44100,
+            "bitrate_kbps": 192,
+            "duration_seconds": 30,
+            "style": "cinematic pop",
+            "instrumental": False,
+            "output_count": 2,
+            "enhance_lyrics": True,
+            "voice": "warm-alto",
+            "vocal_gender": "female",
+            "style_strength": 0.8,
+            "novelty": 0.3,
+            "reference_audio_strength": 0.7,
+            "inference_steps": 30,
+            "respect_section_durations": True,
+            "provenance": True,
+        },
     })
-    assert r.status_code == 200, r.text
-    assert fake_provider.music_calls[0].prompt() == "verse\nchorus"
-    # response_format {"type":"audio"} selects wav output.
-    assert fake_provider.music_calls[0].audio_format == "wav"
+    assert response.status_code == 202, response.text
+    assert response.json()["id"].startswith("mus_")
+    request = fake_provider.music_calls[0]
+    assert request.prompt() == "verse\nchorus"
+    assert request.lyrics == "we sing together\nunder one sky"
+    assert request.reference_images()[0] == "https://example.test/cover.png"
+    assert request.reference_images()[1].startswith("data:image/jpeg;base64,")
+    assert request.reference_audios() == ["https://example.test/reference.wav"]
+    assert request.continuation_audio().startswith("data:audio/mpeg;base64,")
+    assert request.audio_format == "wav"
+    assert request.sample_rate_hz == 44100
+    assert request.bitrate_kbps == 192
+    assert request.duration == 30
+    assert request.style == "cinematic pop"
+    assert request.is_instrumental is False
+    assert request.n == 2
+    assert request.enhance_lyrics is True
+    assert request.voice == "warm-alto"
+    assert request.vocal_gender == "female"
+    assert request.style_strength == 0.8
+    assert request.novelty == 0.3
+    assert request.reference_audio_strength == 0.7
+    assert request.inference_steps == 30
+    assert request.respect_section_durations is True
+    assert request.provenance is True
+    assert request.extra == {}
 
 
-def test_music_missing_model_is_rejected(client):
-    r = client.post("/v1/music", json={"input": "x"})
-    assert r.status_code in (400, 422)
+def test_music_poll_returns_audio_lyrics_and_usage(client):
+    created = client.post(
+        "/v1/music", json={"model": "fake-music-1", "input": "a sad ballad"}
+    )
+    body = _poll_until_done(client, created.headers["location"])
+    assert body["object"] == "music"
+    assert body["outputs"] == [{"data": "AAAA", "mime_type": "audio/wav"}]
+    assert body["lyrics"] == "la la la"
+    assert body["usage"] == {
+        "cost": 0.01,
+        "output_count": 1,
+        "duration_seconds": 8.0,
+    }
 
 
-def test_music_poll_unknown_task_is_404(client):
-    # No record in the task store -> the service surfaces a not-found error.
-    r = client.get("/v1/music/no-such-task")
-    assert r.status_code == 404
+# -- Validation ------------------------------------------------------------- #
 
 
-def test_music_async_url_never_blocks(client, fake_provider):
-    # The /async sibling is unconditionally async: create returns a task id
-    # immediately even though music_sync_default defaults to True. ?wait is
-    # ignored on this path.
-    r = client.post("/v1/music/async?wait=true",
-                    json={"model": "fake-music-1", "input": "a sad ballad"})
-    assert r.status_code == 200, r.text
-    task_id = r.json()["id"]
-    for _ in range(10):
-        poll = client.get(f"/v1/music/{task_id}")
-        assert poll.status_code == 200, poll.text
-        if poll.json()["status"] == "succeeded":
-            break
-    assert poll.json()["status"] == "succeeded"
-    assert len(fake_provider.music_calls) == 1
+def test_validation_uses_problem_details(client):
+    response = client.post("/v1/images", json={"input": "no model"})
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    problem = response.json()
+    assert problem["type"] == "urn:mm-gateway:problem:validation_error"
+    assert problem["title"] == "Validation Error"
+    assert problem["status"] == 422
+    assert problem["code"] == "validation_error"
+    assert problem["instance"] == "/v1/images"
+    assert problem["request_id"] == response.headers["x-request-id"]
+    assert problem["errors"]
 
+
+def test_upstream_failures_are_sanitized_problem_details(
+    client, fake_provider, monkeypatch
+):
+    async def fail_create(_request, **_kwargs):
+        raise ProviderRequestError(
+            "provider wire error with private context",
+            provider="private-provider",
+            details={"upstream_body": "secret"},
+        )
+
+    monkeypatch.setattr(fake_provider, "create_image_task", fail_create)
+    response = client.post(
+        "/v1/images",
+        json={"model": "fake-image-1", "input": "x"},
+    )
+    problem = response.json()
+
+    assert response.status_code == 502
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert problem["code"] == "generation_service_error"
+    assert problem["detail"] == "The generation service returned an error."
+    assert "provider" not in problem
+    assert "secret" not in response.text
+
+
+def test_top_level_unknown_fields_are_rejected(client):
+    response = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": "x",
+        "size": "1024x1024",
+    })
+    assert response.status_code == 422
+
+
+def test_provider_specific_parameters_are_rejected(client):
+    response = client.post("/v1/videos", json={
+        "model": "fake-video-1",
+        "input": "x",
+        "parameters": {"service_tier": "provider-specific"},
+    })
+    assert response.status_code == 422
+
+
+def test_routing_rejects_provider_or_backend_selectors(client):
+    response = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": "x",
+        "routing": {"backend": "fake", "tag": "prod"},
+    })
+    assert response.status_code == 422
+
+
+def test_visual_dimensions_are_unambiguous(client):
+    missing_height = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": "x",
+        "parameters": {"width": 1024},
+    })
+    conflicting = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": "x",
+        "parameters": {"size": "1024x1024", "width": 1024, "height": 1024},
+    })
+    assert missing_height.status_code == 422
+    assert conflicting.status_code == 422
+
+
+def test_duration_is_explicitly_seconds_and_positive(client, fake_provider):
+    accepted = client.post("/v1/videos", json={
+        "model": "fake-video-1",
+        "input": "x",
+        "parameters": {"duration_seconds": 2.5},
+    })
+    rejected = client.post("/v1/videos", json={
+        "model": "fake-video-1",
+        "input": "x",
+        "parameters": {"duration_seconds": 0},
+    })
+    legacy_name = client.post("/v1/videos", json={
+        "model": "fake-video-1",
+        "input": "x",
+        "parameters": {"duration": 2.5},
+    })
+    assert accepted.status_code == 202
+    assert fake_provider.video_calls[0].duration == 2.5
+    assert rejected.status_code == 422
+    assert legacy_name.status_code == 422

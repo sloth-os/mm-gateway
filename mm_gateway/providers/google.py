@@ -12,7 +12,6 @@ synthetic in-memory task for the gateway's uniform poll surface.
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import time
 import uuid
@@ -23,11 +22,20 @@ from google import genai
 from google.genai import types
 
 from mm_gateway.core.base import ImageProvider, MusicProvider, VideoProvider
-from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.core.exceptions import (
+    ProviderNotConfiguredError,
+    ProviderRequestError,
+    TaskFailedError,
+)
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
-from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.image import (
+    ImageData,
+    ImageUsage,
+    UnifiedImageRequest,
+    UnifiedImageResponse,
+)
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
@@ -42,8 +50,16 @@ _GLM_BASE = "https://generativelanguage.googleapis.com"
 
 class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProvider):
     name = "google"
-    image_models = ["imagen-4.0-generate-001", "imagen-3.0-generate-001", "gemini-2.5-flash-image"]
-    video_models = ["veo-2.0-generate-001", "veo-3.0-generate-001", "veo-3.1-generate-preview"]
+    image_models: ClassVar[list[str]] = [
+        "imagen-4.0-generate-001",
+        "imagen-3.0-generate-001",
+        "gemini-2.5-flash-image",
+    ]
+    video_models: ClassVar[list[str]] = [
+        "veo-2.0-generate-001",
+        "veo-3.0-generate-001",
+        "veo-3.1-generate-preview",
+    ]
     music_models: ClassVar[list[str]] = ["lyria-3"]
 
     def __init__(self, backend):
@@ -85,7 +101,7 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
             if model.startswith("gemini"):
                 return await self._generate_content_image(request)
             return await self._generate_imagen(request)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(f"google image failed: {exc}", provider="google") from exc
 
     async def _generate_imagen(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
@@ -167,7 +183,7 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
             op = await self._client_video.aio.models.generate_videos(
                 model=request.model, source=source, config=config
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(f"google video create failed: {exc}", provider="google") from exc
         return UnifiedVideoTask(
             task_id=op.name or op.response and "unknown",
@@ -180,7 +196,7 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
         op = types.Operation(name=task_id)  # type: ignore[arg-type]
         try:
             op = await self._client_video.aio.operations.get(op)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(f"google video poll failed: {exc}", provider="google") from exc
         status: str = "running" if not op.done else "succeeded"
         task = UnifiedVideoTask(task_id=task_id, provider=self.name, model="", status=status)  # type: ignore[arg-type]
@@ -198,8 +214,8 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
     # -- Lyria music ------------------------------------------------------- #
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
-        prompt = request.prompt()
-        if not prompt:
+        prompt = request.generation_prompt()
+        if not prompt and not request.lyrics:
             raise ProviderRequestError(
                 "google lyria music requires a prompt (text part)", provider="google",
                 status_code=400,
@@ -272,19 +288,51 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
         )
 
     def _lyria_body(self, request: UnifiedMusicRequest) -> dict[str, Any]:
-        # The unified content[] maps directly onto Lyria's input parts: text ->
-        # {type:"text", text}; inline reference images (extra["images"]) ->
-        # {type:"image", mime_type, data}.
+        # The canonical inputs map onto Lyria parts. Provider-specific wire
+        # names stay here rather than leaking into the public REST schema.
         parts: list[dict[str, Any]] = []
+        if prompt := request.generation_prompt():
+            parts.append({"type": "text", "text": prompt})
+        if request.lyrics:
+            parts.append({"type": "text", "text": f"Lyrics:\n{request.lyrics}"})
         for p in request.content:
             root = p.root
-            if hasattr(root, "text"):
-                parts.append({"type": "text", "text": root.text})
+            if hasattr(root, "image_url"):
+                url = root.image_url.url
+                if url.startswith("data:"):
+                    header, _, data = url.partition(",")
+                    parts.append({
+                        "type": "image",
+                        "mime_type": header[5:].split(";", 1)[0] or "image/png",
+                        "data": data,
+                    })
+                else:
+                    parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": url},
+                        "role": getattr(root, "role", "reference_image"),
+                    })
+            elif hasattr(root, "audio_url"):
+                url = root.audio_url.url
+                if url.startswith("data:"):
+                    header, _, data = url.partition(",")
+                    parts.append({
+                        "type": "audio",
+                        "mime_type": header[5:].split(";", 1)[0] or "audio/mpeg",
+                        "data": data,
+                        "role": getattr(root, "role", "reference_audio"),
+                    })
+                else:
+                    parts.append({
+                        "type": "audio_url",
+                        "audio_url": {"url": url},
+                        "role": getattr(root, "role", "reference_audio"),
+                    })
         for img in request.extra.get("images", []) or []:
             parts.append({"type": "image", "mime_type": img.get("mime_type", "image/jpeg"),
                           "data": img.get("data")})
         if not parts:
-            parts.append({"type": "text", "text": request.prompt() or ""})
+            parts.append({"type": "text", "text": request.lyrics or ""})
         body: dict[str, Any] = {"model": request.model, "input": parts}
         config: dict[str, Any] = {"response_modalities": ["AUDIO"]}
         if request.audio_format:

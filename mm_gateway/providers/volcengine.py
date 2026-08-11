@@ -15,7 +15,7 @@ Both modalities are served by the same ``AsyncArk`` client:
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 from volcenginesdkarkruntime import AsyncArk
@@ -25,7 +25,12 @@ from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderReque
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
-from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.image import (
+    ImageData,
+    ImageUsage,
+    UnifiedImageRequest,
+    UnifiedImageResponse,
+)
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask, VideoUsage
 
 log = get_logger("provider.volcengine")
@@ -49,8 +54,11 @@ _STATUS_MAP = {
 
 class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "volcengine"
-    image_models = ["doubao-seedream-3-0-t2i-250415", "doubao-seedream-4-0-t2i-250828"]
-    video_models = [
+    image_models: ClassVar[list[str]] = [
+        "doubao-seedream-3-0-t2i-250415",
+        "doubao-seedream-4-0-t2i-250828",
+    ]
+    video_models: ClassVar[list[str]] = [
         # Seedance 1.0 — distinct t2v / i2v model ids.
         "doubao-seedance-1-0-pro-250528",
         "doubao-seedance-1-0-lite-i2v-250428",
@@ -93,7 +101,7 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
 
         try:
             resp = await self._ark.images.generate(**kwargs)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(f"volcengine image failed: {exc}", provider="volcengine") from exc
 
         data = [ImageData(url=getattr(d, "url", None), b64_json=getattr(d, "b64_json", None))
@@ -132,8 +140,11 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         if request.return_last_frame is not None:
             kwargs["return_last_frame"] = request.return_last_frame
         # Seedance-specific knobs the unified model doesn't name.
-        if (v := request.extra.get("frames")) is not None:
-            kwargs["frames"] = v
+        frames = request.frame_count
+        if frames is None:
+            frames = request.extra.get("frames")
+        if frames is not None:
+            kwargs["frames"] = frames
         if (v := request.extra.get("draft")) is not None:
             kwargs["draft"] = v
         if (v := request.extra.get("service_tier")) is not None:
@@ -143,7 +154,7 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
 
         try:
             result = await self._ark_video.content_generation.tasks.create(**kwargs)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(f"volcengine video create failed: {exc}", provider="volcengine") from exc
 
         task_id = getattr(result, "id", None) or ""
@@ -154,7 +165,7 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     async def get_video_task(self, task_id: str) -> UnifiedVideoTask:
         try:
             result = await self._ark_video.content_generation.tasks.get(task_id=task_id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(f"volcengine video poll failed: {exc}", provider="volcengine") from exc
 
         status = _STATUS_MAP.get(getattr(result, "status", "") or "", "running")
