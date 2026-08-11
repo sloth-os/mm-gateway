@@ -10,14 +10,15 @@ inputs, controls, outputs, and capability discovery evolve differently.
 1. Image, video, and music use separate collection and item endpoints.
 2. Creation is always asynchronous and returns `202 Accepted`.
 3. Every request uses `{model, input, parameters, routing, metadata}`.
-4. `input` is ordered and multimodal; repeated media types are valid.
-5. Public request envelopes, input parts, and parameter objects reject unknown
+4. Every public request and response field has one canonical JSON shape.
+5. `input` is a non-empty ordered typed-parts array; repeated media types are valid.
+6. Public request envelopes, input parts, and parameter objects reject unknown
    fields; response objects permit additive extension members.
-6. A backend wire field is never accepted just because an adapter supports it.
-7. Adapters translate neutral concepts to native names, units, and structures.
-8. Responses never use a provider's task id or result envelope.
-9. Task ownership is bound to the authenticated API key.
-10. Create retries are idempotent when the client supplies `Idempotency-Key`.
+7. A backend wire field is never accepted just because an adapter supports it.
+8. Adapters translate neutral concepts to native names, units, and structures.
+9. Responses never use a provider's task id or result envelope.
+10. Task ownership is bound to the authenticated API key.
+11. Create retries are idempotent when the client supplies `Idempotency-Key`.
 
 The public contract lives in `mm_gateway/schemas/api.py`. Translation to the
 canonical internal models lives in `mm_gateway/translators/rest.py`. Provider
@@ -64,7 +65,7 @@ as internal tasks and still follow the same public lifecycle.
 ```json
 {
   "model": "gateway-video-pro",
-  "input": [],
+  "input": [{"type": "text", "text": "a prompt"}],
   "parameters": {},
   "routing": {"profile": "quality"},
   "metadata": {}
@@ -72,7 +73,8 @@ as internal tasks and still follow the same public lifecycle.
 ```
 
 - `model` selects an id from `GET /v1/models`.
-- `input` contains semantic content consumed by the model.
+- `input` is a non-empty ordered typed-parts array containing semantic content
+  consumed by the model.
 - `parameters` controls generation and output using neutral names.
 - `routing` is deployment policy, not a place for provider SDK options.
 - `metadata` is opaque client state echoed in the task.
@@ -85,8 +87,10 @@ profile fails with `400` instead of silently falling back to a different route.
 
 ## Ordered multimodal input
 
-Text may be passed as a string for the common one-prompt case. An array is used
-when order, roles, multiple prompts, or media references matter.
+`input` always uses a non-empty array, including the one-prompt case. This gives
+the field one stable shape while preserving order, roles, repeated prompts, and
+multiple media references. A text-only request is
+`[{"type":"text","text":"..."}]`; a bare string is invalid.
 
 ### Images
 

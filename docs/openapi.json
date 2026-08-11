@@ -356,7 +356,12 @@
       "ImageRequest": {
         "additionalProperties": false,
         "example": {
-          "input": "a cyberpunk cat in the rain",
+          "input": [
+            {
+              "text": "a cyberpunk cat in the rain",
+              "type": "text"
+            }
+          ],
           "metadata": {
             "requester": "design-tool"
           },
@@ -369,34 +374,27 @@
         },
         "properties": {
           "input": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "items": {
-                  "discriminator": {
-                    "mapping": {
-                      "image": "#/components/schemas/ImageInput",
-                      "text": "#/components/schemas/TextInput"
-                    },
-                    "propertyName": "type"
-                  },
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/TextInput"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ImageInput"
-                    }
-                  ]
+            "description": "Non-empty ordered image-generation inputs.",
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "image": "#/components/schemas/ImageInput",
+                  "text": "#/components/schemas/TextInput"
                 },
-                "minItems": 1,
-                "type": "array"
-              }
-            ],
-            "title": "Input"
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TextInput"
+                },
+                {
+                  "$ref": "#/components/schemas/ImageInput"
+                }
+              ]
+            },
+            "minItems": 1,
+            "title": "Input",
+            "type": "array"
           },
           "metadata": {
             "additionalProperties": true,
@@ -1056,7 +1054,12 @@
       "MusicRequest": {
         "additionalProperties": false,
         "example": {
-          "input": "an upbeat pop song about summer",
+          "input": [
+            {
+              "text": "an upbeat pop song about summer",
+              "type": "text"
+            }
+          ],
           "model": "gateway-music-lyria",
           "parameters": {
             "bpm": 120,
@@ -1066,42 +1069,35 @@
         },
         "properties": {
           "input": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "items": {
-                  "discriminator": {
-                    "mapping": {
-                      "audio": "#/components/schemas/MusicAudioInput",
-                      "image": "#/components/schemas/MusicImageInput",
-                      "lyrics": "#/components/schemas/LyricsInput",
-                      "text": "#/components/schemas/TextInput"
-                    },
-                    "propertyName": "type"
-                  },
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/TextInput"
-                    },
-                    {
-                      "$ref": "#/components/schemas/LyricsInput"
-                    },
-                    {
-                      "$ref": "#/components/schemas/MusicImageInput"
-                    },
-                    {
-                      "$ref": "#/components/schemas/MusicAudioInput"
-                    }
-                  ]
+            "description": "Non-empty ordered music-generation inputs.",
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "audio": "#/components/schemas/MusicAudioInput",
+                  "image": "#/components/schemas/MusicImageInput",
+                  "lyrics": "#/components/schemas/LyricsInput",
+                  "text": "#/components/schemas/TextInput"
                 },
-                "minItems": 1,
-                "type": "array"
-              }
-            ],
-            "title": "Input"
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TextInput"
+                },
+                {
+                  "$ref": "#/components/schemas/LyricsInput"
+                },
+                {
+                  "$ref": "#/components/schemas/MusicImageInput"
+                },
+                {
+                  "$ref": "#/components/schemas/MusicAudioInput"
+                }
+              ]
+            },
+            "minItems": 1,
+            "title": "Input",
+            "type": "array"
           },
           "metadata": {
             "additionalProperties": true,
@@ -1943,7 +1939,12 @@
       "VideoRequest": {
         "additionalProperties": false,
         "example": {
-          "input": "a cinematic drone shot over mountains",
+          "input": [
+            {
+              "text": "a cinematic drone shot over mountains",
+              "type": "text"
+            }
+          ],
           "model": "gateway-video-pro",
           "parameters": {
             "aspect_ratio": "16:9",
@@ -1952,42 +1953,35 @@
         },
         "properties": {
           "input": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "items": {
-                  "discriminator": {
-                    "mapping": {
-                      "audio": "#/components/schemas/VideoAudioInput",
-                      "image": "#/components/schemas/VideoImageInput",
-                      "text": "#/components/schemas/TextInput",
-                      "video": "#/components/schemas/VideoInput"
-                    },
-                    "propertyName": "type"
-                  },
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/TextInput"
-                    },
-                    {
-                      "$ref": "#/components/schemas/VideoImageInput"
-                    },
-                    {
-                      "$ref": "#/components/schemas/VideoAudioInput"
-                    },
-                    {
-                      "$ref": "#/components/schemas/VideoInput"
-                    }
-                  ]
+            "description": "Non-empty ordered video-generation inputs.",
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "audio": "#/components/schemas/VideoAudioInput",
+                  "image": "#/components/schemas/VideoImageInput",
+                  "text": "#/components/schemas/TextInput",
+                  "video": "#/components/schemas/VideoInput"
                 },
-                "minItems": 1,
-                "type": "array"
-              }
-            ],
-            "title": "Input"
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TextInput"
+                },
+                {
+                  "$ref": "#/components/schemas/VideoImageInput"
+                },
+                {
+                  "$ref": "#/components/schemas/VideoAudioInput"
+                },
+                {
+                  "$ref": "#/components/schemas/VideoInput"
+                }
+              ]
+            },
+            "minItems": 1,
+            "title": "Input",
+            "type": "array"
           },
           "metadata": {
             "additionalProperties": true,

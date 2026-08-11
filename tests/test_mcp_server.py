@@ -26,6 +26,11 @@ from mm_gateway.config import BackendConfig, KeyConfig, Settings
 from mm_gateway.server.app import create_app
 from tests.conftest import FakeProvider
 
+
+def _text(value: str) -> list[dict[str, str]]:
+    return [{"type": "text", "text": value}]
+
+
 # --------------------------------------------------------------------------- #
 # Multi-backend fixture
 # --------------------------------------------------------------------------- #
@@ -204,6 +209,8 @@ async def test_create_tool_schemas_are_provider_neutral(mcp_app):
     for name in ("create_image", "create_video", "create_music"):
         schema = tools[name]
         assert set(schema["properties"]) == expected
+        assert schema["properties"]["input"]["type"] == "array"
+        assert schema["properties"]["input"]["minItems"] == 1
         serialized = json.dumps(schema)
         for field in forbidden:
             assert f'"{field}":' not in serialized
@@ -259,7 +266,7 @@ async def test_valid_token_succeeds(mcp_app):
 
 async def test_create_image_returns_normalized_task(mcp_app):
     is_error, text = await _call(mcp_app, "alice-token", "create_image",
-                                 {"model": "fake-image-1", "input": "a cat"})
+                                 {"model": "fake-image-1", "input": _text("a cat")})
     assert not is_error, text
     body = json.loads(text)
     assert body["id"].startswith("img_")
@@ -271,7 +278,7 @@ async def test_create_image_returns_normalized_task(mcp_app):
 async def test_create_image_routes_to_pinned_backend(mcp_app):
     # Bob is pinned to fake-img; verify the request landed there.
     is_error, text = await _call(mcp_app, "bob-token", "create_image",
-                                 {"model": "fake-image-1", "input": "x"})
+                                 {"model": "fake-image-1", "input": _text("x")})
     assert not is_error, text
     prov = mcp_app.state.registry._backends["fake-img"]
     assert prov.image_calls and prov.image_calls[0].provider == "fake-img"
@@ -280,7 +287,7 @@ async def test_create_image_routes_to_pinned_backend(mcp_app):
 async def test_create_image_tag_routing_via_tool_arg(mcp_app):
     # Alice may use any backend; select a provider-neutral routing profile.
     is_error, text = await _call(mcp_app, "alice-token", "create_image",
-                                 {"model": "fake-image-1", "input": "x",
+                                 {"model": "fake-image-1", "input": _text("x"),
                                   "routing": {"profile": "other"}})
     assert not is_error, text
     prov = mcp_app.state.registry._backends["fake-other"]
@@ -290,7 +297,7 @@ async def test_create_image_tag_routing_via_tool_arg(mcp_app):
 async def test_create_image_idempotency_key_replays_the_task(mcp_app):
     args = {
         "model": "fake-image-1",
-        "input": "x",
+        "input": _text("x"),
         "idempotency_key": "mcp-image-001",
     }
     async with _client(mcp_app, "alice-token") as session:
@@ -311,7 +318,7 @@ async def test_get_image_polls_to_succeeded(mcp_app):
     # Create returns immediately; follow-up calls converge on a normalized output.
     async with _client(mcp_app, "alice-token") as sess:
         res = await sess.call_tool("create_image", {
-            "model": "fake-image-1", "input": "a cat",
+            "model": "fake-image-1", "input": _text("a cat"),
         })
         assert not res.is_error, res.content
         task_id = json.loads(res.content[0].text)["id"]
@@ -380,7 +387,7 @@ async def test_get_video_polls_to_succeeded(mcp_app):
 async def test_create_music_returns_interaction_id(mcp_app):
     is_error, text = await _call(mcp_app, "alice-token", "create_music", {
         "model": "fake-music-1",
-        "input": "an upbeat pop song",
+        "input": _text("an upbeat pop song"),
         "routing": {"profile": "music-primary"},
     })
     assert not is_error, text
@@ -409,7 +416,7 @@ async def test_get_music_polls_to_succeeded(mcp_app):
     async with _client(mcp_app, "alice-token") as sess:
         res = await sess.call_tool("create_music", {
             "model": "fake-music-1",
-            "input": "a sad ballad",
+            "input": _text("a sad ballad"),
             "routing": {"profile": "music-primary"},
         })
         assert not res.is_error, res.content

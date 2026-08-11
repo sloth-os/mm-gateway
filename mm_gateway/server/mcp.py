@@ -34,21 +34,16 @@ from mm_gateway.config import Settings
 from mm_gateway.core.exceptions import GatewayError, TaskNotFoundError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.schemas.api import (
-    ImageInput,
+    ImageInputList,
     ImageParameters,
     ImageRequest,
     ImageTaskResponse,
-    LyricsInput,
-    MusicAudioInput,
-    MusicImageInput,
+    MusicInputList,
     MusicParameters,
     MusicRequest,
     MusicTaskResponse,
     RoutingDirective,
-    TextInput,
-    VideoAudioInput,
-    VideoImageInput,
-    VideoInput,
+    VideoInputList,
     VideoParameters,
     VideoRequest,
     VideoTaskResponse,
@@ -197,7 +192,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
     async def create_image(
         ctx: Context,
         model: str,
-        input: str | list[TextInput | ImageInput],
+        input: ImageInputList,
         parameters: ImageParameters | None = None,
         routing: RoutingDirective | None = None,
         metadata: dict[str, Any] | None = None,
@@ -275,7 +270,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
     async def create_video(
         ctx: Context,
         model: str,
-        input: str | list[TextInput | VideoImageInput | VideoAudioInput | VideoInput],
+        input: VideoInputList,
         parameters: VideoParameters | None = None,
         routing: RoutingDirective | None = None,
         metadata: dict[str, Any] | None = None,
@@ -353,7 +348,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
     async def create_music(
         ctx: Context,
         model: str,
-        input: str | list[TextInput | LyricsInput | MusicImageInput | MusicAudioInput],
+        input: MusicInputList,
         parameters: MusicParameters | None = None,
         routing: RoutingDirective | None = None,
         metadata: dict[str, Any] | None = None,

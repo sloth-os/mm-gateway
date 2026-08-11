@@ -173,9 +173,18 @@ MusicInputPart = Annotated[
     Field(discriminator="type"),
 ]
 
-ImageInputList = Annotated[list[ImageInputPart], Field(min_length=1)]
-VideoInputList = Annotated[list[VideoInputPart], Field(min_length=1)]
-MusicInputList = Annotated[list[MusicInputPart], Field(min_length=1)]
+ImageInputList = Annotated[
+    list[ImageInputPart],
+    Field(min_length=1, description="Non-empty ordered image-generation inputs."),
+]
+VideoInputList = Annotated[
+    list[VideoInputPart],
+    Field(min_length=1, description="Non-empty ordered video-generation inputs."),
+]
+MusicInputList = Annotated[
+    list[MusicInputPart],
+    Field(min_length=1, description="Non-empty ordered music-generation inputs."),
+]
 
 
 class _RequestBase(BaseModel):
@@ -231,7 +240,9 @@ class ImageRequest(_RequestBase):
         json_schema_extra={
             "example": {
                 "model": "gateway-image-pro",
-                "input": "a cyberpunk cat in the rain",
+                "input": [
+                    {"type": "text", "text": "a cyberpunk cat in the rain"}
+                ],
                 "parameters": {
                     "size": "1024x1024",
                     "quality": "high",
@@ -242,7 +253,7 @@ class ImageRequest(_RequestBase):
         },
     )
 
-    input: Prompt | ImageInputList
+    input: ImageInputList
     parameters: ImageParameters = Field(default_factory=ImageParameters)
 
 
@@ -319,13 +330,18 @@ class VideoRequest(_RequestBase):
         json_schema_extra={
             "example": {
                 "model": "gateway-video-pro",
-                "input": "a cinematic drone shot over mountains",
+                "input": [
+                    {
+                        "type": "text",
+                        "text": "a cinematic drone shot over mountains",
+                    }
+                ],
                 "parameters": {"duration_seconds": 5, "aspect_ratio": "16:9"},
             }
         },
     )
 
-    input: Prompt | VideoInputList
+    input: VideoInputList
     parameters: VideoParameters = Field(default_factory=VideoParameters)
 
 
@@ -394,7 +410,9 @@ class MusicRequest(_RequestBase):
         json_schema_extra={
             "example": {
                 "model": "gateway-music-lyria",
-                "input": "an upbeat pop song about summer",
+                "input": [
+                    {"type": "text", "text": "an upbeat pop song about summer"}
+                ],
                 "parameters": {
                     "duration_seconds": 30,
                     "bpm": 120,
@@ -404,7 +422,7 @@ class MusicRequest(_RequestBase):
         },
     )
 
-    input: Prompt | MusicInputList
+    input: MusicInputList
     parameters: MusicParameters = Field(default_factory=MusicParameters)
 
 
@@ -469,6 +487,7 @@ __all__ = [
     "AudioInput",
     "HealthResponse",
     "ImageInput",
+    "ImageInputList",
     "ImageOutput",
     "ImageParameters",
     "ImageRequest",
@@ -478,6 +497,7 @@ __all__ = [
     "ModelListResponse",
     "MusicAudioInput",
     "MusicImageInput",
+    "MusicInputList",
     "MusicOutput",
     "MusicParameters",
     "MusicRequest",
@@ -492,6 +512,7 @@ __all__ = [
     "VideoAudioInput",
     "VideoImageInput",
     "VideoInput",
+    "VideoInputList",
     "VideoOutput",
     "VideoParameters",
     "VideoRequest",

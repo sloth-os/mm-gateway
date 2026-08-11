@@ -120,7 +120,7 @@ def test_frontend_request_logged_in_curl_format_with_masked_headers(
         "/v1/images",
         json={
             "model": "fake-image-1",
-            "input": "a cat",
+            "input": [{"type": "text", "text": "a cat"}],
             "parameters": {"output_count": 1},
         },
         headers={"x-request-id": "req-1", "authorization": "Bearer super-secret-key-9999"},

@@ -15,6 +15,10 @@ def _poll_until_done(client, url: str) -> dict:
     raise AssertionError(f"task at {url} did not reach a terminal state")
 
 
+def _text(value: str) -> list[dict[str, str]]:
+    return [{"type": "text", "text": value}]
+
+
 # -- Meta routes ------------------------------------------------------------ #
 
 
@@ -44,7 +48,7 @@ def test_models_can_be_filtered_by_modality(client):
 
 
 def test_metrics_exposes_prometheus(client):
-    client.post("/v1/images", json={"model": "fake-image-1", "input": "x"})
+    client.post("/v1/images", json={"model": "fake-image-1", "input": _text("x")})
     response = client.get("/metrics")
     assert response.status_code == 200
     assert "gateway_requests_total" in response.text
@@ -61,7 +65,7 @@ def test_request_id_middleware(client):
 def test_image_create_returns_task_resource_and_rest_headers(client, fake_provider):
     response = client.post("/v1/images", json={
         "model": "fake-image-1",
-        "input": "a cat",
+        "input": _text("a cat"),
         "parameters": {"output_count": 2, "size": "1024x1024"},
         "metadata": {"job": "cover"},
     })
@@ -88,7 +92,7 @@ def test_image_create_returns_task_resource_and_rest_headers(client, fake_provid
 def test_create_is_idempotent(client, fake_provider):
     payload = {
         "model": "fake-image-1",
-        "input": "a cat",
+        "input": _text("a cat"),
         "metadata": {"job": "cover"},
     }
     headers = {"idempotency-key": "cover-001"}
@@ -109,12 +113,12 @@ def test_idempotency_key_cannot_be_reused_for_a_different_request(
     headers = {"idempotency-key": "cover-001"}
     first = client.post(
         "/v1/images",
-        json={"model": "fake-image-1", "input": "a cat"},
+        json={"model": "fake-image-1", "input": _text("a cat")},
         headers=headers,
     )
     conflict = client.post(
         "/v1/images",
-        json={"model": "fake-image-1", "input": "a dog"},
+        json={"model": "fake-image-1", "input": _text("a dog")},
         headers=headers,
     )
 
@@ -144,7 +148,7 @@ def test_image_accepts_ordered_text_and_multiple_images(client, fake_provider):
 
 def test_image_poll_returns_normalized_outputs(client):
     created = client.post(
-        "/v1/images", json={"model": "fake-image-1", "input": "a cat"}
+        "/v1/images", json={"model": "fake-image-1", "input": _text("a cat")}
     )
     task_id = created.json()["id"]
     body = _poll_until_done(client, created.headers["location"])
@@ -159,7 +163,7 @@ def test_image_poll_returns_normalized_outputs(client):
 
 def test_poll_supports_etag_revalidation(client):
     created = client.post(
-        "/v1/images", json={"model": "fake-image-1", "input": "a cat"}
+        "/v1/images", json={"model": "fake-image-1", "input": _text("a cat")}
     )
     first = client.get(created.headers["location"])
     completed = client.get(created.headers["location"])
@@ -234,7 +238,7 @@ def test_video_accepts_text_images_audio_and_video(client, fake_provider):
 
 def test_video_poll_returns_normalized_outputs_and_usage(client):
     created = client.post(
-        "/v1/videos", json={"model": "fake-video-1", "input": "a cat playing"}
+        "/v1/videos", json={"model": "fake-video-1", "input": _text("a cat playing")}
     )
     body = _poll_until_done(client, created.headers["location"])
     assert body["object"] == "video"
@@ -244,7 +248,7 @@ def test_video_poll_returns_normalized_outputs_and_usage(client):
 
 def test_task_id_cannot_be_used_on_a_different_collection(client):
     created = client.post(
-        "/v1/videos", json={"model": "fake-video-1", "input": "x"}
+        "/v1/videos", json={"model": "fake-video-1", "input": _text("x")}
     )
     response = client.get(f"/v1/images/{created.json()['id']}")
     assert response.status_code == 404
@@ -315,7 +319,7 @@ def test_music_accepts_text_image_and_audio_inputs(client, fake_provider):
 
 def test_music_poll_returns_audio_lyrics_and_usage(client):
     created = client.post(
-        "/v1/music", json={"model": "fake-music-1", "input": "a sad ballad"}
+        "/v1/music", json={"model": "fake-music-1", "input": _text("a sad ballad")}
     )
     body = _poll_until_done(client, created.headers["location"])
     assert body["object"] == "music"
@@ -332,7 +336,7 @@ def test_music_poll_returns_audio_lyrics_and_usage(client):
 
 
 def test_validation_uses_problem_details(client):
-    response = client.post("/v1/images", json={"input": "no model"})
+    response = client.post("/v1/images", json={"input": _text("no model")})
     assert response.status_code == 422
     assert response.headers["content-type"].startswith("application/problem+json")
     problem = response.json()
@@ -358,7 +362,7 @@ def test_upstream_failures_are_sanitized_problem_details(
     monkeypatch.setattr(fake_provider, "create_image_task", fail_create)
     response = client.post(
         "/v1/images",
-        json={"model": "fake-image-1", "input": "x"},
+        json={"model": "fake-image-1", "input": _text("x")},
     )
     problem = response.json()
 
@@ -373,7 +377,7 @@ def test_upstream_failures_are_sanitized_problem_details(
 def test_top_level_unknown_fields_are_rejected(client):
     response = client.post("/v1/images", json={
         "model": "fake-image-1",
-        "input": "x",
+        "input": _text("x"),
         "size": "1024x1024",
     })
     assert response.status_code == 422
@@ -382,7 +386,7 @@ def test_top_level_unknown_fields_are_rejected(client):
 def test_provider_specific_parameters_are_rejected(client):
     response = client.post("/v1/videos", json={
         "model": "fake-video-1",
-        "input": "x",
+        "input": _text("x"),
         "parameters": {"service_tier": "provider-specific"},
     })
     assert response.status_code == 422
@@ -391,7 +395,7 @@ def test_provider_specific_parameters_are_rejected(client):
 def test_routing_rejects_provider_or_backend_selectors(client):
     response = client.post("/v1/images", json={
         "model": "fake-image-1",
-        "input": "x",
+        "input": _text("x"),
         "routing": {"backend": "fake", "tag": "prod"},
     })
     assert response.status_code == 422
@@ -400,12 +404,12 @@ def test_routing_rejects_provider_or_backend_selectors(client):
 def test_visual_dimensions_are_unambiguous(client):
     missing_height = client.post("/v1/images", json={
         "model": "fake-image-1",
-        "input": "x",
+        "input": _text("x"),
         "parameters": {"width": 1024},
     })
     conflicting = client.post("/v1/images", json={
         "model": "fake-image-1",
-        "input": "x",
+        "input": _text("x"),
         "parameters": {"size": "1024x1024", "width": 1024, "height": 1024},
     })
     assert missing_height.status_code == 422
@@ -415,20 +419,33 @@ def test_visual_dimensions_are_unambiguous(client):
 def test_duration_is_explicitly_seconds_and_positive(client, fake_provider):
     accepted = client.post("/v1/videos", json={
         "model": "fake-video-1",
-        "input": "x",
+        "input": _text("x"),
         "parameters": {"duration_seconds": 2.5},
     })
     rejected = client.post("/v1/videos", json={
         "model": "fake-video-1",
-        "input": "x",
+        "input": _text("x"),
         "parameters": {"duration_seconds": 0},
     })
     legacy_name = client.post("/v1/videos", json={
         "model": "fake-video-1",
-        "input": "x",
+        "input": _text("x"),
         "parameters": {"duration": 2.5},
     })
     assert accepted.status_code == 202
     assert fake_provider.video_calls[0].duration == 2.5
     assert rejected.status_code == 422
     assert legacy_name.status_code == 422
+
+
+def test_input_requires_a_non_empty_typed_parts_array(client):
+    resources = (
+        ("/v1/images", "fake-image-1"),
+        ("/v1/videos", "fake-video-1"),
+        ("/v1/music", "fake-music-1"),
+    )
+    for path, model in resources:
+        string_input = client.post(path, json={"model": model, "input": "x"})
+        empty_input = client.post(path, json={"model": model, "input": []})
+        assert string_input.status_code == 422
+        assert empty_input.status_code == 422

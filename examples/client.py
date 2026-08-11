@@ -52,7 +52,9 @@ def generate_image(client: httpx.Client) -> None:
             },
             json={
                 "model": "gateway-image-pro",
-                "input": "a cat in a spacesuit, cinematic",
+                "input": [
+                    {"type": "text", "text": "a cat in a spacesuit, cinematic"},
+                ],
                 "parameters": {
                     "size": "1024x1024",
                     "output_count": 1,

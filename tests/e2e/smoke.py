@@ -276,7 +276,7 @@ def generate_image(client: httpx.Client, model: str) -> dict[str, Any]:
     create = client.post(
         "/v1/images",
         headers={**auth_headers(), "content-type": "application/json"},
-        json={"model": model, "input": PROMPT},
+        json={"model": model, "input": [{"type": "text", "text": PROMPT}]},
         timeout=TIMEOUT,
     )
     if create.status_code != 202:

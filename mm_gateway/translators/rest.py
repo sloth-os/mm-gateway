@@ -45,16 +45,13 @@ def _data_url(data: str, mime_type: str) -> str:
 
 def from_image_request(body: ImageRequest) -> UnifiedImageRequest:
     content = []
-    if isinstance(body.input, str):
-        content.append(image_text_part(body.input))
-    else:
-        for part in body.input:
-            if isinstance(part, TextInput):
-                content.append(image_text_part(part.text))
-            else:
-                content.append(image_image_part(
-                    part.url, data=part.data, mime_type=part.mime_type
-                ))
+    for part in body.input:
+        if isinstance(part, TextInput):
+            content.append(image_text_part(part.text))
+        else:
+            content.append(image_image_part(
+                part.url, data=part.data, mime_type=part.mime_type
+            ))
     parameters = body.parameters.model_dump(exclude_none=True)
     parameters["n"] = parameters.pop("output_count", None)
     parameters["num_inference_steps"] = parameters.pop("inference_steps", None)
@@ -71,22 +68,19 @@ def from_image_request(body: ImageRequest) -> UnifiedImageRequest:
 
 
 def from_video_request(body: VideoRequest) -> UnifiedVideoRequest:
-    if isinstance(body.input, str):
-        content = [video_text_part(body.input)]
-    else:
-        content = []
-        for part in body.input:
-            if isinstance(part, TextInput):
-                content.append(video_text_part(part.text))
-            elif isinstance(part, VideoImageInput):
-                url = part.url or _data_url(part.data or "", part.mime_type or "image/png")
-                content.append(video_image_part(url, part.role))
-            elif isinstance(part, VideoAudioInput):
-                url = part.url or _data_url(part.data or "", part.mime_type or "audio/mpeg")
-                content.append(video_audio_part(url, part.role))
-            elif isinstance(part, VideoInput):
-                url = part.url or _data_url(part.data or "", part.mime_type or "video/mp4")
-                content.append(video_part(url, part.role))
+    content = []
+    for part in body.input:
+        if isinstance(part, TextInput):
+            content.append(video_text_part(part.text))
+        elif isinstance(part, VideoImageInput):
+            url = part.url or _data_url(part.data or "", part.mime_type or "image/png")
+            content.append(video_image_part(url, part.role))
+        elif isinstance(part, VideoAudioInput):
+            url = part.url or _data_url(part.data or "", part.mime_type or "audio/mpeg")
+            content.append(video_audio_part(url, part.role))
+        elif isinstance(part, VideoInput):
+            url = part.url or _data_url(part.data or "", part.mime_type or "video/mp4")
+            content.append(video_part(url, part.role))
     parameters = body.parameters.model_dump(exclude_none=True)
     parameters["duration"] = parameters.pop("duration_seconds", None)
     parameters["ratio"] = parameters.pop("aspect_ratio", None)
@@ -107,20 +101,17 @@ def from_video_request(body: VideoRequest) -> UnifiedVideoRequest:
 def from_music_request(body: MusicRequest) -> UnifiedMusicRequest:
     lyrics_parts = []
     content = []
-    if isinstance(body.input, str):
-        content.append(music_text_part(body.input))
-    else:
-        for part in body.input:
-            if isinstance(part, TextInput):
-                content.append(music_text_part(part.text))
-            elif isinstance(part, LyricsInput):
-                lyrics_parts.append(part.text)
-            elif isinstance(part, MusicImageInput):
-                url = part.url or _data_url(part.data or "", part.mime_type or "image/png")
-                content.append(music_image_part(url, part.role))
-            elif isinstance(part, MusicAudioInput):
-                url = part.url or _data_url(part.data or "", part.mime_type or "audio/mpeg")
-                content.append(music_audio_part(url, part.role))
+    for part in body.input:
+        if isinstance(part, TextInput):
+            content.append(music_text_part(part.text))
+        elif isinstance(part, LyricsInput):
+            lyrics_parts.append(part.text)
+        elif isinstance(part, MusicImageInput):
+            url = part.url or _data_url(part.data or "", part.mime_type or "image/png")
+            content.append(music_image_part(url, part.role))
+        elif isinstance(part, MusicAudioInput):
+            url = part.url or _data_url(part.data or "", part.mime_type or "audio/mpeg")
+            content.append(music_audio_part(url, part.role))
     parameters = body.parameters.model_dump(exclude_none=True)
     title = parameters.pop("title", None)
     style = parameters.pop("style", None)

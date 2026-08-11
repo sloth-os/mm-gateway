@@ -135,6 +135,17 @@ def test_requests_are_strict_but_responses_allow_additive_fields():
         assert schemas[name]["additionalProperties"] is True
 
 
+def test_inputs_have_one_canonical_non_empty_array_shape():
+    schemas = _spec()["components"]["schemas"]
+    for name in ("ImageRequest", "VideoRequest", "MusicRequest"):
+        schema = schemas[name]
+        input_schema = schema["properties"]["input"]
+        assert input_schema["type"] == "array"
+        assert input_schema["minItems"] == 1
+        assert "anyOf" not in input_schema
+        assert isinstance(schema["example"]["input"], list)
+
+
 def test_model_catalogue_does_not_expose_backend_details():
     properties = _spec()["components"]["schemas"]["ModelEntry"]["properties"]
     assert set(properties) == {"id", "object", "modality"}

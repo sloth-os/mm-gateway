@@ -42,7 +42,7 @@ Every create body uses this strict envelope:
 ```json
 {
   "model": "gateway-image-pro",
-  "input": "a prompt or an ordered array of typed parts",
+  "input": [{"type": "text", "text": "a prompt"}],
   "parameters": {},
   "routing": {"profile": "quality"},
   "metadata": {"job_id": "job-123"}
@@ -50,7 +50,8 @@ Every create body uses this strict envelope:
 ```
 
 - `model` is an id returned by `GET /v1/models`.
-- `input` is a non-empty string or a non-empty ordered list of typed parts.
+- `input` is always a non-empty ordered list of typed parts. There is no string
+  shorthand.
 - `parameters` contains only provider-neutral generation controls.
 - `routing.profile` optionally selects a server-defined policy such as
   `quality`, `fast`, or `eu`; provider and backend names are never accepted.
@@ -69,8 +70,8 @@ problem-detail extensions without forcing a new API version.
 
 ### Image
 
-Image input supports any number of interleaved text and image parts. An image
-may be supplied by URL or inline base64.
+Image input supports one or more interleaved text and image parts. An image may
+be supplied by URL or inline base64.
 
 ```bash
 curl -i http://localhost:8000/v1/images \

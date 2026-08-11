@@ -20,6 +20,11 @@ from mm_gateway.config import BackendConfig, KeyConfig, Settings
 from mm_gateway.server.app import create_app
 from tests.conftest import FakeProvider
 
+
+def _text(value: str) -> list[dict[str, str]]:
+    return [{"type": "text", "text": value}]
+
+
 # --------------------------------------------------------------------------- #
 # Multi-backend fixture
 # --------------------------------------------------------------------------- #
@@ -153,7 +158,7 @@ def test_valid_token_lists_usable_models_without_backend_details(client):
 def test_key_with_no_usable_backend_403(client):
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer dave-token"},
-                    json={"model": "fake-image-1", "input": "x"})
+                    json={"model": "fake-image-1", "input": _text("x")})
     assert r.status_code == 403
     body = r.json()
     assert body["code"] == "forbidden"
@@ -167,7 +172,7 @@ def test_carol_denied_backend_routes_away(client, multi):
     # whole key (which would be a 403).
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer carol-token"},
-                    json={"model": "fake-image-1", "input": "x"})
+                    json={"model": "fake-image-1", "input": _text("x")})
     assert r.status_code == 202, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-b")
@@ -178,7 +183,7 @@ def test_erin_denied_by_type_403(client):
     # Erin denies the 'fake' type entirely -> no backend usable -> forbidden.
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer erin-token"},
-                    json={"model": "fake-image-1", "input": "x"})
+                    json={"model": "fake-image-1", "input": _text("x")})
     assert r.status_code == 403
     assert r.json()["code"] == "forbidden"
 
@@ -191,7 +196,7 @@ def test_erin_denied_by_type_403(client):
 def test_profile_routing_via_request_body(client, multi):
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer alice-token"},
-                    json={"model": "fake-image-1", "input": "x",
+                    json={"model": "fake-image-1", "input": _text("x"),
                           "routing": {"profile": "image-secondary"}})
     assert r.status_code == 202, r.text
     provs = _providers(multi)
@@ -206,7 +211,7 @@ def test_profile_routing_via_request_body(client, multi):
 def test_profile_can_select_a_uniquely_tagged_backend(client, multi):
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer alice-token"},
-                    json={"model": "fake-image-1", "input": "x",
+                    json={"model": "fake-image-1", "input": _text("x"),
                           "routing": {"profile": "image-secondary"}})
     assert r.status_code == 202, r.text
     provs = _providers(multi)
@@ -219,7 +224,7 @@ def test_unknown_routing_profile_is_rejected(client):
         headers={"authorization": "Bearer alice-token"},
         json={
             "model": "fake-image-1",
-            "input": "x",
+            "input": _text("x"),
             "routing": {"profile": "does-not-exist"},
         },
     )
@@ -233,7 +238,7 @@ def test_bob_pinned_to_img_a_short_circuits(client, multi):
     # so the pin need not even be named on the request.)
     r = client.post("/v1/images",
                     headers={"authorization": "Bearer bob-token"},
-                    json={"model": "fake-image-1", "input": "x"})
+                    json={"model": "fake-image-1", "input": _text("x")})
     assert r.status_code == 202, r.text
     provs = _providers(multi)
     assert _image_landed(provs, "img-a")
@@ -273,7 +278,7 @@ def test_default_image_backend_is_picked_without_override(client, multi):
     zoe_client = TestClient(app)
     r = zoe_client.post("/v1/images",
                         headers={"authorization": "Bearer zoe-token"},
-                        json={"model": "fake-image-1", "input": "x"})
+                        json={"model": "fake-image-1", "input": _text("x")})
     assert r.status_code == 202, r.text
     provs = {n: p for n, p in app.state.registry._backends.items()}
     assert _image_landed(provs, "img-b")
@@ -297,7 +302,7 @@ def test_default_video_tag_is_picked(client, multi):
     yara_client = TestClient(app)
     r = yara_client.post("/v1/videos",
                          headers={"authorization": "Bearer yara-token"},
-                         json={"model": "fake-video-1", "input": "x"})
+                         json={"model": "fake-video-1", "input": _text("x")})
     assert r.status_code == 202, r.text
     provs = {n: p for n, p in app.state.registry._backends.items()}
     assert provs["vid-b"].video_calls
@@ -318,7 +323,7 @@ def test_poll_denied_when_key_not_authorised_for_tasks_backend(client, multi):
     created = client.post("/v1/videos",
                           headers={"authorization": "Bearer alice-token"},
                           json={"model": "fake-video-1",
-                                "input": "x",
+                                "input": _text("x"),
                                 "routing": {"profile": "video-primary"}})
     assert created.status_code == 202, created.text
     task_id = created.json()["id"]
@@ -335,7 +340,7 @@ def test_poll_allowed_when_key_authorised_for_tasks_backend(client, multi):
     created = client.post("/v1/videos",
                           headers={"authorization": "Bearer alice-token"},
                           json={"model": "fake-video-1",
-                                "input": "x",
+                                "input": _text("x"),
                                 "routing": {"profile": "video-primary"}})
     task_id = created.json()["id"]
     poll = client.get(f"/v1/videos/{task_id}",
@@ -350,7 +355,7 @@ def test_poll_denied_to_another_key_even_on_the_same_backend(client):
         headers={"authorization": "Bearer alice-token"},
         json={
             "model": "fake-image-1",
-            "input": "x",
+            "input": _text("x"),
             "routing": {"profile": "image-primary"},
         },
     )
