@@ -208,14 +208,15 @@ def test_video_create_reference_images_videos_audios(provider: VolcengineProvide
 def test_video_create_passes_seedance_knobs(provider: VolcengineProvider) -> None:
     req = UnifiedVideoRequest(
         model="doubao-seedance-2-0-260128", content=[text_part("x")], seed=42, camera_fixed=True,
-        resolution="1080p", callback_url="https://x.test/cb", return_last_frame=True,
+        width=1920, height=1080, callback_url="https://x.test/cb", return_last_frame=True,
         frame_count=121,
         extra={"service_tier": "default", "priority": 5},
     )
     asyncio.run(provider.create_video_task(req))
     kw = provider._ark.content_generation.tasks.create_calls[0]
     assert kw["seed"] == 42 and kw["camera_fixed"] is True
-    assert kw["resolution"] == "1080p" and kw["callback_url"] == "https://x.test/cb"
+    assert kw["resolution"] == "1080p" and kw["ratio"] == "16:9"
+    assert kw["callback_url"] == "https://x.test/cb"
     assert kw["return_last_frame"] is True and kw["service_tier"] == "default" and kw["priority"] == 5
     assert kw["frames"] == 121
 

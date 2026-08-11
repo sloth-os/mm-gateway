@@ -22,6 +22,16 @@ def _spec() -> dict:
     return create_app(Settings()).openapi()
 
 
+def _walk_schema(value, path=()):
+    if isinstance(value, dict):
+        yield path, value
+        for key, child in value.items():
+            yield from _walk_schema(child, (*path, key))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _walk_schema(child, (*path, index))
+
+
 def test_openapi_has_only_the_intended_rest_paths_and_operation_ids():
     spec = _spec()
     assert set(spec["paths"]) == {path for path, _ in EXPECTED_OPERATIONS}
@@ -108,6 +118,9 @@ def test_public_parameter_schemas_are_strict_and_provider_neutral():
         "style_weight",
         "weirdness_constraint",
         "audio_weight",
+        "size",
+        "aspect_ratio",
+        "resolution",
     }
     for name in ("ImageParameters", "VideoParameters", "MusicParameters"):
         schema = schemas[name]
@@ -124,6 +137,7 @@ def test_requests_are_strict_but_responses_allow_additive_fields():
         "ImageParameters",
         "VideoParameters",
         "MusicParameters",
+        "Dimensions",
     ):
         assert schemas[name]["additionalProperties"] is False
     for name in (
@@ -144,6 +158,68 @@ def test_inputs_have_one_canonical_non_empty_array_shape():
         assert input_schema["minItems"] == 1
         assert "anyOf" not in input_schema
         assert isinstance(schema["example"]["input"], list)
+
+
+def test_fields_do_not_publish_alternate_non_null_shapes():
+    allowed_one_of = {
+        ("components", "schemas", name, "properties", "input", "items")
+        for name in ("ImageRequest", "VideoRequest", "MusicRequest")
+    }
+    seen_one_of = set()
+
+    for path, schema in _walk_schema(_spec()):
+        if "anyOf" in schema:
+            non_null = [
+                item for item in schema["anyOf"] if item.get("type") != "null"
+            ]
+            assert len(non_null) <= 1, ".".join(map(str, path))
+        if "oneOf" in schema:
+            seen_one_of.add(path)
+
+    assert seen_one_of == allowed_one_of
+
+
+def test_media_parts_and_outputs_use_one_uri_shape():
+    schemas = _spec()["components"]["schemas"]
+    inputs = (
+        "ImageInput",
+        "VideoImageInput",
+        "VideoAudioInput",
+        "VideoInput",
+        "MusicImageInput",
+        "MusicAudioInput",
+    )
+    for name in inputs:
+        schema = schemas[name]
+        assert "uri" in schema["properties"]
+        assert "uri" in schema["required"]
+        assert {"url", "data", "mime_type"}.isdisjoint(schema["properties"])
+
+    for name in ("ImageOutput", "VideoOutput", "MusicOutput"):
+        schema = schemas[name]
+        assert "uri" in schema["properties"]
+        assert "uri" in schema["required"]
+        assert {"url", "data", "cover_url"}.isdisjoint(schema["properties"])
+
+
+def test_visual_parameters_use_one_dimensions_shape():
+    schemas = _spec()["components"]["schemas"]
+    dimensions = schemas["Dimensions"]
+    assert dimensions["additionalProperties"] is False
+    assert set(dimensions["properties"]) == {"width", "height"}
+    assert set(dimensions["required"]) == {"width", "height"}
+
+    legacy = {"size", "width", "height", "aspect_ratio", "resolution"}
+    for name in ("ImageParameters", "VideoParameters"):
+        properties = schemas[name]["properties"]
+        assert "dimensions" in properties
+        assert legacy.isdisjoint(properties)
+
+
+def test_unused_fastapi_validation_envelopes_are_not_published():
+    schemas = _spec()["components"]["schemas"]
+    assert "HTTPValidationError" not in schemas
+    assert "ValidationError" not in schemas
 
 
 def test_model_catalogue_does_not_expose_backend_details():

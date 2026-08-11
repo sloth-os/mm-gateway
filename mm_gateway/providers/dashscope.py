@@ -100,6 +100,7 @@ from mm_gateway.observability.httplog import (
     log_backend_response,
 )
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._dimensions import aspect_ratio, pixel_size
 from mm_gateway.providers._http import _map_status
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
@@ -303,7 +304,7 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     # task poll endpoint is broken (returns 500 SYSTEM_ERROR on the very poll
     # the gateway needs to resolve).
     _sync_aware_image: ClassVar[bool] = True
-    image_models = [
+    image_models: ClassVar[list[str]] = [
         "wanx2.1-t2i-turbo",
         "wanx2.1-t2i-plus",
         "wanx2.1-t2i-flash",
@@ -316,7 +317,7 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         "wan2.7-image",
         "wan2.6-image",
     ]
-    video_models = [
+    video_models: ClassVar[list[str]] = [
         "wanx2.1-t2v-turbo",
         "wanx2.1-i2v-turbo",
         "wanx2.1-t2v-plus",
@@ -378,8 +379,8 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         }
         if request.n:
             kwargs["n"] = request.n
-        if request.size:
-            kwargs["size"] = request.size.replace("x", "*")
+        if size := pixel_size(request, "*"):
+            kwargs["size"] = size
         if request.seed is not None:
             kwargs["seed"] = request.seed
         if request.negative_prompt:
@@ -412,8 +413,8 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             "model": request.model,
             "messages": [{"role": "user", "content": content}],
         }
-        if request.size:
-            kwargs["size"] = request.size
+        if size := pixel_size(request, "*"):
+            kwargs["size"] = size
         if request.n:
             kwargs["n"] = request.n
         if request.seed is not None:
@@ -665,10 +666,10 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             "model": request.model,
             "prompt": request.prompt() or "",
         }
-        if request.size:
-            kwargs["size"] = request.size.replace("x", "*")
-        if request.ratio:
-            kwargs["ratio"] = request.ratio
+        if size := pixel_size(request, "*"):
+            kwargs["size"] = size
+        if ratio := aspect_ratio(request):
+            kwargs["ratio"] = ratio
         if request.duration is not None:
             kwargs["duration"] = int(request.duration)
         if request.seed is not None:

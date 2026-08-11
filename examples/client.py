@@ -56,9 +56,9 @@ def generate_image(client: httpx.Client) -> None:
                     {"type": "text", "text": "a cat in a spacesuit, cinematic"},
                 ],
                 "parameters": {
-                    "size": "1024x1024",
+                    "dimensions": {"width": 1024, "height": 1024},
                     "output_count": 1,
-                    "delivery": "url",
+                    "delivery": "remote",
                 },
             },
         ),
@@ -81,7 +81,7 @@ def generate_video(client: httpx.Client) -> None:
                 ],
                 "parameters": {
                     "duration_seconds": 5,
-                    "aspect_ratio": "16:9",
+                    "dimensions": {"width": 1280, "height": 720},
                     "include_audio": True,
                 },
             },

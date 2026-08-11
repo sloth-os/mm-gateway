@@ -25,6 +25,11 @@ from mm_gateway.core.exceptions import (
     ProviderTimeoutError,
 )
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._dimensions import (
+    aspect_ratio,
+    image_resolution,
+    video_resolution,
+)
 from mm_gateway.providers._http import _map_status, make_client, request_json
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
@@ -109,10 +114,10 @@ class XAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             body["n"] = min(request.n, 10)
         if request.response_format:
             body["response_format"] = request.response_format
-        if request.aspect_ratio:
-            body["aspect_ratio"] = request.aspect_ratio
-        if request.resolution:
-            body["resolution"] = request.resolution
+        if ratio := aspect_ratio(request):
+            body["aspect_ratio"] = ratio
+        if resolution := image_resolution(request):
+            body["resolution"] = resolution
         if request.user:
             body["user"] = request.user
         body.update(request.extra)
@@ -153,10 +158,10 @@ class XAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         }
         if request.duration is not None:
             body["duration"] = int(request.duration)
-        if request.ratio:
-            body["aspect_ratio"] = request.ratio
-        if request.resolution:
-            body["resolution"] = request.resolution
+        if ratio := aspect_ratio(request):
+            body["aspect_ratio"] = ratio
+        if resolution := video_resolution(request):
+            body["resolution"] = resolution
         if request.first_image():
             body["image"] = {"url": request.first_image()}
         if request.reference_images():

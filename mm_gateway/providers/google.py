@@ -29,6 +29,7 @@ from mm_gateway.core.exceptions import (
 )
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._dimensions import aspect_ratio, video_resolution
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
     ImageData,
@@ -108,8 +109,8 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
         cfg_fields: dict[str, Any] = {}
         if request.n:
             cfg_fields["number_of_images"] = request.n
-        if request.aspect_ratio:
-            cfg_fields["aspect_ratio"] = request.aspect_ratio
+        if ratio := aspect_ratio(request):
+            cfg_fields["aspect_ratio"] = ratio
         if request.negative_prompt:
             cfg_fields["negative_prompt"] = request.negative_prompt
         if request.seed is not None:
@@ -136,8 +137,8 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
 
     async def _generate_content_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         image_config = types.ImageConfig()
-        if request.aspect_ratio:
-            image_config.aspect_ratio = request.aspect_ratio
+        if ratio := aspect_ratio(request):
+            image_config.aspect_ratio = ratio
         config = types.GenerateContentConfig(response_modalities=["IMAGE"], image_config=image_config)
         resp = await self._client.aio.models.generate_content(
             model=request.model, contents=request.prompt() or "", config=config
@@ -162,10 +163,10 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
         source = types.GenerateVideosSource(**source_fields)
 
         cfg: dict[str, Any] = {}
-        if request.ratio:
-            cfg["aspect_ratio"] = request.ratio
-        if request.resolution:
-            cfg["resolution"] = request.resolution
+        if ratio := aspect_ratio(request):
+            cfg["aspect_ratio"] = ratio
+        if resolution := video_resolution(request):
+            cfg["resolution"] = resolution
         if request.duration is not None:
             cfg["duration_seconds"] = int(request.duration)
         if request.seed is not None:

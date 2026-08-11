@@ -17,7 +17,8 @@ import pytest
 from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.providers.xai import XAIProvider
-from mm_gateway.schemas.image import UnifiedImageRequest, text_part as image_text_part
+from mm_gateway.schemas.image import UnifiedImageRequest
+from mm_gateway.schemas.image import text_part as image_text_part
 from mm_gateway.schemas.video import UnifiedVideoRequest, image_part, text_part
 
 
@@ -149,8 +150,8 @@ def test_image_generate_maps_params_and_response() -> None:
         content=[image_text_part("a cat")],
         n=2,
         response_format="url",
-        aspect_ratio="1:1",
-        resolution="1k",
+        width=1024,
+        height=1024,
         user="u1",
     )
     task = asyncio.run(p.create_image_task(req))
@@ -295,8 +296,8 @@ def test_video_create_t2v_maps_body() -> None:
         model="grok-imagine-video",
         content=[text_part("a cat playing")],
         duration=11.9,
-        ratio="16:9",
-        resolution="720p",
+        width=1280,
+        height=720,
     )
     task = asyncio.run(p.create_video_task(req))
 
@@ -309,6 +310,7 @@ def test_video_create_t2v_maps_body() -> None:
     # the float 11.9 in JSON, so assert the deserialized value is an int, not float.
     assert b["duration"] == 11  # truncated to int
     assert isinstance(b["duration"], int) and not isinstance(b["duration"], bool)
+    assert b["aspect_ratio"] == "16:9"
     assert b["resolution"] == "720p"
     assert task.task_id == "req-123"
     assert task.status == "pending" and task.provider == "xai"

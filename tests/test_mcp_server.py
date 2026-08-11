@@ -334,7 +334,7 @@ async def test_get_image_polls_to_succeeded(mcp_app):
     assert body["id"] == task_id
     assert body["status"] == "succeeded"
     assert body["outputs"] == [{
-        "url": "https://example.test/out.png",
+        "uri": "https://example.test/out.png",
         "revised_prompt": "a cat",
     }]
 
@@ -376,7 +376,7 @@ async def test_get_video_polls_to_succeeded(mcp_app):
     assert body is not None
     assert body["id"] == task_id
     assert body["status"] == "succeeded"
-    assert body["outputs"] == [{"url": "https://example.test/out.mp4"}]
+    assert body["outputs"] == [{"uri": "https://example.test/out.mp4"}]
 
 
 # --------------------------------------------------------------------------- #
@@ -434,7 +434,10 @@ async def test_get_music_polls_to_succeeded(mcp_app):
     assert body is not None
     assert body["id"] == task_id
     assert body["status"] == "succeeded"
-    assert body["outputs"] == [{"data": "AAAA", "mime_type": "audio/wav"}]
+    assert body["outputs"] == [{
+        "uri": "data:audio/wav;base64,AAAA",
+        "mime_type": "audio/wav",
+    }]
     assert body["lyrics"] == "la la la"
 
 

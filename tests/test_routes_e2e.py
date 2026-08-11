@@ -66,7 +66,11 @@ def test_image_create_returns_task_resource_and_rest_headers(client, fake_provid
     response = client.post("/v1/images", json={
         "model": "fake-image-1",
         "input": _text("a cat"),
-        "parameters": {"output_count": 2, "size": "1024x1024"},
+        "parameters": {
+            "output_count": 2,
+            "dimensions": {"width": 1024, "height": 1024},
+            "delivery": "inline",
+        },
         "metadata": {"job": "cover"},
     })
     assert response.status_code == 202, response.text
@@ -86,7 +90,9 @@ def test_image_create_returns_task_resource_and_rest_headers(client, fake_provid
     request = fake_provider.image_calls[0]
     assert request.prompt() == "a cat"
     assert request.n == 2
-    assert request.size == "1024x1024"
+    assert request.width == 1024
+    assert request.height == 1024
+    assert request.response_format == "b64_json"
 
 
 def test_create_is_idempotent(client, fake_provider):
@@ -133,9 +139,9 @@ def test_image_accepts_ordered_text_and_multiple_images(client, fake_provider):
     response = client.post("/v1/images", json={
         "model": "fake-image-1",
         "input": [
-            {"type": "image", "url": "https://example.test/one.png"},
+            {"type": "image", "uri": "https://example.test/one.png"},
             {"type": "text", "text": "combine these references"},
-            {"type": "image", "data": "AAAA", "mime_type": "image/png"},
+            {"type": "image", "uri": "data:image/png;base64,AAAA"},
         ],
     })
     assert response.status_code == 202, response.text
@@ -155,7 +161,7 @@ def test_image_poll_returns_normalized_outputs(client):
     assert body["id"] == task_id
     assert body["object"] == "image"
     assert body["outputs"] == [{
-        "url": "https://example.test/out.png",
+        "uri": "https://example.test/out.png",
         "revised_prompt": "a cat",
     }]
     assert body["links"]["self"].endswith(f"/v1/images/{task_id}")
@@ -193,16 +199,16 @@ def test_video_accepts_text_images_audio_and_video(client, fake_provider):
         "model": "fake-video-1",
         "input": [
             {"type": "text", "text": "cut between all references"},
-            {"type": "image", "url": "https://example.test/first.png", "role": "first_frame"},
-            {"type": "image", "url": "https://example.test/ref.png", "role": "reference_image"},
-            {"type": "audio", "data": "AAAA", "mime_type": "audio/wav", "role": "reference_audio"},
-            {"type": "audio", "url": "https://example.test/score.mp3", "role": "reference_audio"},
-            {"type": "video", "url": "https://example.test/ref.mp4", "role": "reference_video"},
-            {"type": "video", "data": "BBBB", "mime_type": "video/webm", "role": "reference_video"},
+            {"type": "image", "uri": "https://example.test/first.png", "role": "first_frame"},
+            {"type": "image", "uri": "https://example.test/ref.png", "role": "reference_image"},
+            {"type": "audio", "uri": "data:audio/wav;base64,AAAA", "role": "reference_audio"},
+            {"type": "audio", "uri": "https://example.test/score.mp3", "role": "reference_audio"},
+            {"type": "video", "uri": "https://example.test/ref.mp4", "role": "reference_video"},
+            {"type": "video", "uri": "data:video/webm;base64,BBBB", "role": "reference_video"},
         ],
         "parameters": {
             "duration_seconds": 5,
-            "aspect_ratio": "16:9",
+            "dimensions": {"width": 1280, "height": 720},
             "include_audio": True,
             "camera_motion": "fixed",
             "enhance_prompt": True,
@@ -225,7 +231,8 @@ def test_video_accepts_text_images_audio_and_video(client, fake_provider):
     assert request.reference_videos()[0] == "https://example.test/ref.mp4"
     assert request.reference_videos()[1].startswith("data:video/webm;base64,")
     assert request.duration == 5
-    assert request.ratio == "16:9"
+    assert request.width == 1280
+    assert request.height == 720
     assert request.generate_audio is True
     assert request.camera_fixed is True
     assert request.prompt_extend is True
@@ -242,7 +249,7 @@ def test_video_poll_returns_normalized_outputs_and_usage(client):
     )
     body = _poll_until_done(client, created.headers["location"])
     assert body["object"] == "video"
-    assert body["outputs"] == [{"url": "https://example.test/out.mp4"}]
+    assert body["outputs"] == [{"uri": "https://example.test/out.mp4"}]
     assert body["usage"] == {"cost": 0.01, "output_count": 1}
 
 
@@ -265,10 +272,10 @@ def test_music_accepts_text_image_and_audio_inputs(client, fake_provider):
             {"type": "text", "text": "chorus"},
             {"type": "lyrics", "text": "we sing together"},
             {"type": "lyrics", "text": "under one sky"},
-            {"type": "image", "url": "https://example.test/cover.png"},
-            {"type": "image", "data": "BBBB", "mime_type": "image/jpeg"},
-            {"type": "audio", "url": "https://example.test/reference.wav", "role": "reference_audio"},
-            {"type": "audio", "data": "CCCC", "mime_type": "audio/mpeg", "role": "continuation_audio"},
+            {"type": "image", "uri": "https://example.test/cover.png"},
+            {"type": "image", "uri": "data:image/jpeg;base64,BBBB"},
+            {"type": "audio", "uri": "https://example.test/reference.wav", "role": "reference_audio"},
+            {"type": "audio", "uri": "data:audio/mpeg;base64,CCCC", "role": "continuation_audio"},
         ],
         "parameters": {
             "file_format": "wav",
@@ -323,7 +330,10 @@ def test_music_poll_returns_audio_lyrics_and_usage(client):
     )
     body = _poll_until_done(client, created.headers["location"])
     assert body["object"] == "music"
-    assert body["outputs"] == [{"data": "AAAA", "mime_type": "audio/wav"}]
+    assert body["outputs"] == [{
+        "uri": "data:audio/wav;base64,AAAA",
+        "mime_type": "audio/wav",
+    }]
     assert body["lyrics"] == "la la la"
     assert body["usage"] == {
         "cost": 0.01,
@@ -401,19 +411,54 @@ def test_routing_rejects_provider_or_backend_selectors(client):
     assert response.status_code == 422
 
 
-def test_visual_dimensions_are_unambiguous(client):
+def test_visual_dimensions_have_one_canonical_shape(client, fake_provider):
+    accepted = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": _text("x"),
+        "parameters": {"dimensions": {"width": 1024, "height": 768}},
+    })
     missing_height = client.post("/v1/images", json={
         "model": "fake-image-1",
         "input": _text("x"),
-        "parameters": {"width": 1024},
+        "parameters": {"dimensions": {"width": 1024}},
     })
-    conflicting = client.post("/v1/images", json={
-        "model": "fake-image-1",
-        "input": _text("x"),
-        "parameters": {"size": "1024x1024", "width": 1024, "height": 1024},
-    })
+    legacy_fields = ("size", "width", "height", "aspect_ratio", "resolution")
+    legacy_responses = [
+        client.post("/v1/images", json={
+            "model": "fake-image-1",
+            "input": _text("x"),
+            "parameters": {field: 1024 if field in {"width", "height"} else "legacy"},
+        })
+        for field in legacy_fields
+    ]
+    assert accepted.status_code == 202
+    assert fake_provider.image_calls[0].width == 1024
+    assert fake_provider.image_calls[0].height == 768
     assert missing_height.status_code == 422
-    assert conflicting.status_code == 422
+    assert all(response.status_code == 422 for response in legacy_responses)
+
+
+def test_media_parts_require_one_absolute_uri_field(client):
+    valid = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": [{"type": "image", "uri": "data:image/png;base64,AAAA"}],
+    })
+    legacy_source = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": [{"type": "image", "url": "https://example.test/image.png"}],
+    })
+    relative_uri = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": [{"type": "image", "uri": "/image.png"}],
+    })
+    raw_base64 = client.post("/v1/images", json={
+        "model": "fake-image-1",
+        "input": [{"type": "image", "uri": "AAAA"}],
+    })
+    assert valid.status_code == 202
+    assert legacy_source.status_code == 422
+    assert relative_uri.status_code == 422
+    assert raw_base64.status_code == 422
 
 
 def test_duration_is_explicitly_seconds_and_positive(client, fake_provider):

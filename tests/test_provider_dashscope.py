@@ -252,7 +252,8 @@ def test_image_generate_native_async_path(provider: DashScopeProvider) -> None:
     req = UnifiedImageRequest(
         model="wanx2.1-t2i-turbo",
         content=[image_text_part("a cat")],
-        size="1024x1024",
+        width=1024,
+        height=1024,
         seed=7,
         n=1,
         negative_prompt="blurry",

@@ -294,7 +294,7 @@ _RESOURCE_EXAMPLES: dict[tuple[str, str, str], dict] = {
         "model": "gateway-image-pro",
         "status": "succeeded",
         "outputs": [{
-            "url": "https://cdn.example.test/img/abc.png",
+            "uri": "https://cdn.example.test/img/abc.png",
             "mime_type": "image/png",
             "revised_prompt": "a cyberpunk cat in the rain",
         }],
@@ -320,8 +320,8 @@ _RESOURCE_EXAMPLES: dict[tuple[str, str, str], dict] = {
         "model": "gateway-video-pro",
         "status": "succeeded",
         "outputs": [{
-            "url": "https://cdn.example.test/vid/abc.mp4",
-            "cover_url": "https://cdn.example.test/vid/abc-last.png",
+            "uri": "https://cdn.example.test/vid/abc.mp4",
+            "cover_uri": "https://cdn.example.test/vid/abc-last.png",
             "mime_type": "video/mp4",
         }],
         "usage": {"cost": 0.08, "output_count": 1, "duration_seconds": 5},
@@ -346,7 +346,7 @@ _RESOURCE_EXAMPLES: dict[tuple[str, str, str], dict] = {
         "model": "gateway-music-lyria",
         "status": "succeeded",
         "outputs": [{
-            "url": "https://cdn.example.test/mus/abc.wav",
+            "uri": "https://cdn.example.test/mus/abc.wav",
             "mime_type": "audio/wav",
         }],
         "lyrics": "[verse]\nWalking down the street...",
@@ -454,6 +454,12 @@ def _install_openapi_customization(app: FastAPI) -> None:
                         ex = _SUCCESS_EXAMPLES.get(schema_name)
                     if ex and "examples" not in media and "example" not in media:
                         media.setdefault("example", ex)
+
+        # FastAPI generates these for its default 422 envelope. Every public
+        # operation uses ProblemDetail instead, so leaving them in components
+        # would publish an unreachable second validation format.
+        schemas.pop("HTTPValidationError", None)
+        schemas.pop("ValidationError", None)
 
         # Make the required/optional split explicit: Pydantic omits the
         # `required` key when every field is optional, which reads ambiguously

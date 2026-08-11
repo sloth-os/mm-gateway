@@ -24,6 +24,7 @@ from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._dimensions import aspect_ratio, pixel_size, video_resolution
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
     ImageData,
@@ -85,8 +86,8 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
-        if request.size:
-            kwargs["size"] = request.size
+        if size := pixel_size(request):
+            kwargs["size"] = size
         if request.response_format:
             kwargs["response_format"] = request.response_format
         if request.seed is not None:
@@ -123,10 +124,10 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         kwargs: dict[str, Any] = {"model": request.model, "content": content}
         if request.duration is not None:
             kwargs["duration"] = int(request.duration)
-        if request.resolution:
-            kwargs["resolution"] = request.resolution
-        if request.ratio:
-            kwargs["ratio"] = request.ratio
+        if resolution := video_resolution(request):
+            kwargs["resolution"] = resolution
+        if ratio := aspect_ratio(request):
+            kwargs["ratio"] = ratio
         if request.camera_fixed is not None:
             kwargs["camera_fixed"] = request.camera_fixed
         if request.seed is not None:

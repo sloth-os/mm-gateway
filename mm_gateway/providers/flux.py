@@ -16,11 +16,21 @@ from runapi.core.options import ClientOptions
 from runapi.flux_2 import Flux2Client
 
 from mm_gateway.core.base import ImageProvider
-from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError, TaskFailedError
+from mm_gateway.core.exceptions import (
+    ProviderNotConfiguredError,
+    ProviderRequestError,
+    TaskFailedError,
+)
 from mm_gateway.observability.httplog import backend_sync_event_hooks
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._dimensions import aspect_ratio, image_resolution
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
-from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.image import (
+    ImageData,
+    ImageUsage,
+    UnifiedImageRequest,
+    UnifiedImageResponse,
+)
 
 log = get_logger("provider.flux")
 
@@ -65,7 +75,7 @@ class FluxProvider(SyncImageTaskMixin, ImageProvider):
             try:
                 from runapi.core import configure
                 configure(base_url=backend.base_url)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001, S110
                 pass
         # Inject an HttpClient whose httpx.Clients carry backend logging
         # hooks. ``ClientOptions`` resolves its own base_url fallback from the
@@ -77,10 +87,10 @@ class FluxProvider(SyncImageTaskMixin, ImageProvider):
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         is_remix = request.model.endswith("remix-image") or bool(request.input_images())
         params: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
-        if request.aspect_ratio:
-            params["aspect_ratio"] = request.aspect_ratio
-        if request.resolution:
-            params["output_resolution"] = request.resolution
+        if ratio := aspect_ratio(request):
+            params["aspect_ratio"] = ratio
+        if resolution := image_resolution(request):
+            params["output_resolution"] = resolution
         if is_remix and request.input_images():
             params["source_image_urls"] = [i.url for i in request.input_images() if i.url]
         params.update(request.extra)
@@ -90,7 +100,7 @@ class FluxProvider(SyncImageTaskMixin, ImageProvider):
                 task = await asyncio.to_thread(self._client.remix_image.create, **params)
             else:
                 task = await asyncio.to_thread(self._client.text_to_image.create, **params)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise ProviderRequestError(f"flux create failed: {exc}", provider="flux") from exc
 
         task_id = getattr(task, "id", None)
@@ -104,7 +114,7 @@ class FluxProvider(SyncImageTaskMixin, ImageProvider):
             await asyncio.sleep(2)
             try:
                 status = await asyncio.to_thread(resource.get, task_id)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 raise ProviderRequestError(f"flux poll failed: {exc}", provider="flux") from exc
             st = getattr(status, "status", "") or ""
             if st == "completed":

@@ -24,6 +24,7 @@ from mm_gateway.core.exceptions import (
     TaskFailedError,
 )
 from mm_gateway.observability.httplog import backend_event_hooks
+from mm_gateway.providers._dimensions import aspect_ratio
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
     ImageData,
@@ -100,8 +101,8 @@ class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             data["model"] = request.model
         if request.seed is not None:
             data["seed"] = request.seed
-        if request.aspect_ratio:
-            data["aspect_ratio"] = request.aspect_ratio
+        if ratio := aspect_ratio(request):
+            data["aspect_ratio"] = ratio
         if request.output_format:
             data["output_format"] = request.output_format
         if request.guidance_scale is not None:

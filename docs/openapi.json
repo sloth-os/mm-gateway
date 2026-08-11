@@ -1,18 +1,26 @@
 {
   "components": {
     "schemas": {
-      "HTTPValidationError": {
+      "Dimensions": {
+        "additionalProperties": false,
+        "description": "Exact output dimensions in pixels.",
         "properties": {
-          "detail": {
-            "items": {
-              "$ref": "#/components/schemas/ValidationError"
-            },
-            "title": "Detail",
-            "type": "array"
+          "height": {
+            "minimum": 1.0,
+            "title": "Height",
+            "type": "integer"
+          },
+          "width": {
+            "minimum": 1.0,
+            "title": "Width",
+            "type": "integer"
           }
         },
-        "required": [],
-        "title": "HTTPValidationError",
+        "required": [
+          "width",
+          "height"
+        ],
+        "title": "Dimensions",
         "type": "object"
       },
       "HealthResponse": {
@@ -32,50 +40,22 @@
       "ImageInput": {
         "additionalProperties": false,
         "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Base64-encoded image bytes.",
-            "title": "Data"
-          },
-          "mime_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mime Type"
-          },
           "type": {
             "const": "image",
             "title": "Type",
             "type": "string"
           },
-          "url": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
+          "uri": {
+            "description": "Absolute media URI. Inline media uses a base64 data URI.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Uri",
+            "type": "string"
           }
         },
         "required": [
-          "type"
+          "type",
+          "uri"
         ],
         "title": "ImageInput",
         "type": "object"
@@ -83,18 +63,6 @@
       "ImageOutput": {
         "additionalProperties": true,
         "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Base64-encoded image bytes.",
-            "title": "Data"
-          },
           "mime_type": {
             "anyOf": [
               {
@@ -117,36 +85,23 @@
             ],
             "title": "Revised Prompt"
           },
-          "url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
+          "uri": {
+            "description": "Absolute media URI. Inline media uses a base64 data URI.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Uri",
+            "type": "string"
           }
         },
-        "required": [],
+        "required": [
+          "uri"
+        ],
         "title": "ImageOutput",
         "type": "object"
       },
       "ImageParameters": {
         "additionalProperties": false,
         "properties": {
-          "aspect_ratio": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Aspect Ratio"
-          },
           "background": {
             "anyOf": [
               {
@@ -175,8 +130,8 @@
             "anyOf": [
               {
                 "enum": [
-                  "url",
-                  "base64"
+                  "remote",
+                  "inline"
                 ],
                 "type": "string"
               },
@@ -185,6 +140,16 @@
               }
             ],
             "title": "Delivery"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dimensions"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "file_format": {
             "anyOf": [
@@ -208,18 +173,6 @@
               }
             ],
             "title": "Guidance Scale"
-          },
-          "height": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Height"
           },
           "inference_steps": {
             "anyOf": [
@@ -268,17 +221,6 @@
             ],
             "title": "Quality"
           },
-          "resolution": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Resolution"
-          },
           "seed": {
             "anyOf": [
               {
@@ -289,17 +231,6 @@
               }
             ],
             "title": "Seed"
-          },
-          "size": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Size"
           },
           "strength": {
             "anyOf": [
@@ -335,18 +266,6 @@
               }
             ],
             "title": "Watermark"
-          },
-          "width": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Width"
           }
         },
         "required": [],
@@ -367,9 +286,12 @@
           },
           "model": "gateway-image-pro",
           "parameters": {
-            "delivery": "url",
-            "quality": "high",
-            "size": "1024x1024"
+            "delivery": "remote",
+            "dimensions": {
+              "height": 1024,
+              "width": 1024
+            },
+            "quality": "high"
           }
         },
         "properties": {
@@ -598,30 +520,6 @@
       "MusicAudioInput": {
         "additionalProperties": false,
         "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Base64-encoded audio bytes.",
-            "title": "Data"
-          },
-          "mime_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mime Type"
-          },
           "role": {
             "default": "reference_audio",
             "enum": [
@@ -636,21 +534,17 @@
             "title": "Type",
             "type": "string"
           },
-          "url": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
+          "uri": {
+            "description": "Absolute media URI. Inline media uses a base64 data URI.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Uri",
+            "type": "string"
           }
         },
         "required": [
-          "type"
+          "type",
+          "uri"
         ],
         "title": "MusicAudioInput",
         "type": "object"
@@ -658,30 +552,6 @@
       "MusicImageInput": {
         "additionalProperties": false,
         "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Base64-encoded image bytes.",
-            "title": "Data"
-          },
-          "mime_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mime Type"
-          },
           "role": {
             "const": "reference_image",
             "default": "reference_image",
@@ -693,21 +563,17 @@
             "title": "Type",
             "type": "string"
           },
-          "url": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
+          "uri": {
+            "description": "Absolute media URI. Inline media uses a base64 data URI.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Uri",
+            "type": "string"
           }
         },
         "required": [
-          "type"
+          "type",
+          "uri"
         ],
         "title": "MusicImageInput",
         "type": "object"
@@ -715,18 +581,6 @@
       "MusicOutput": {
         "additionalProperties": true,
         "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Base64-encoded audio bytes.",
-            "title": "Data"
-          },
           "mime_type": {
             "anyOf": [
               {
@@ -738,19 +592,17 @@
             ],
             "title": "Mime Type"
           },
-          "url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
+          "uri": {
+            "description": "Absolute media URI. Inline media uses a base64 data URI.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Uri",
+            "type": "string"
           }
         },
-        "required": [],
+        "required": [
+          "uri"
+        ],
         "title": "MusicOutput",
         "type": "object"
       },
@@ -1467,73 +1319,9 @@
         "title": "Usage",
         "type": "object"
       },
-      "ValidationError": {
-        "properties": {
-          "ctx": {
-            "title": "Context",
-            "type": "object"
-          },
-          "input": {
-            "title": "Input"
-          },
-          "loc": {
-            "items": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "integer"
-                }
-              ]
-            },
-            "title": "Location",
-            "type": "array"
-          },
-          "msg": {
-            "title": "Message",
-            "type": "string"
-          },
-          "type": {
-            "title": "Error Type",
-            "type": "string"
-          }
-        },
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
-        "title": "ValidationError",
-        "type": "object"
-      },
       "VideoAudioInput": {
         "additionalProperties": false,
         "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Base64-encoded audio bytes.",
-            "title": "Data"
-          },
-          "mime_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mime Type"
-          },
           "role": {
             "const": "reference_audio",
             "default": "reference_audio",
@@ -1545,21 +1333,17 @@
             "title": "Type",
             "type": "string"
           },
-          "url": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
+          "uri": {
+            "description": "Absolute media URI. Inline media uses a base64 data URI.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Uri",
+            "type": "string"
           }
         },
         "required": [
-          "type"
+          "type",
+          "uri"
         ],
         "title": "VideoAudioInput",
         "type": "object"
@@ -1567,30 +1351,6 @@
       "VideoImageInput": {
         "additionalProperties": false,
         "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Base64-encoded image bytes.",
-            "title": "Data"
-          },
-          "mime_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mime Type"
-          },
           "role": {
             "default": "first_frame",
             "enum": [
@@ -1606,21 +1366,17 @@
             "title": "Type",
             "type": "string"
           },
-          "url": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
+          "uri": {
+            "description": "Absolute media URI. Inline media uses a base64 data URI.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Uri",
+            "type": "string"
           }
         },
         "required": [
-          "type"
+          "type",
+          "uri"
         ],
         "title": "VideoImageInput",
         "type": "object"
@@ -1628,30 +1384,6 @@
       "VideoInput": {
         "additionalProperties": false,
         "properties": {
-          "data": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Base64-encoded video bytes.",
-            "title": "Data"
-          },
-          "mime_type": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mime Type"
-          },
           "role": {
             "const": "reference_video",
             "default": "reference_video",
@@ -1663,21 +1395,17 @@
             "title": "Type",
             "type": "string"
           },
-          "url": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Url"
+          "uri": {
+            "description": "Absolute media URI. Inline media uses a base64 data URI.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Uri",
+            "type": "string"
           }
         },
         "required": [
-          "type"
+          "type",
+          "uri"
         ],
         "title": "VideoInput",
         "type": "object"
@@ -1685,16 +1413,19 @@
       "VideoOutput": {
         "additionalProperties": true,
         "properties": {
-          "cover_url": {
+          "cover_uri": {
             "anyOf": [
               {
+                "description": "Absolute media URI. Inline media uses a base64 data URI.",
+                "format": "uri",
+                "minLength": 1,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Cover Url"
+            "title": "Cover Uri"
           },
           "mime_type": {
             "anyOf": [
@@ -1707,13 +1438,16 @@
             ],
             "title": "Mime Type"
           },
-          "url": {
-            "title": "Url",
+          "uri": {
+            "description": "Absolute media URI. Inline media uses a base64 data URI.",
+            "format": "uri",
+            "minLength": 1,
+            "title": "Uri",
             "type": "string"
           }
         },
         "required": [
-          "url"
+          "uri"
         ],
         "title": "VideoOutput",
         "type": "object"
@@ -1721,17 +1455,6 @@
       "VideoParameters": {
         "additionalProperties": false,
         "properties": {
-          "aspect_ratio": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Aspect Ratio"
-          },
           "camera_motion": {
             "anyOf": [
               {
@@ -1746,6 +1469,16 @@
               }
             ],
             "title": "Camera Motion"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dimensions"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "duration_seconds": {
             "anyOf": [
@@ -1817,18 +1550,6 @@
             ],
             "title": "Guidance Scale"
           },
-          "height": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Height"
-          },
           "include_audio": {
             "anyOf": [
               {
@@ -1875,17 +1596,6 @@
             ],
             "title": "Negative Prompt"
           },
-          "resolution": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Resolution"
-          },
           "seed": {
             "anyOf": [
               {
@@ -1897,17 +1607,6 @@
             ],
             "title": "Seed"
           },
-          "size": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Size"
-          },
           "watermark": {
             "anyOf": [
               {
@@ -1918,18 +1617,6 @@
               }
             ],
             "title": "Watermark"
-          },
-          "width": {
-            "anyOf": [
-              {
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Width"
           }
         },
         "required": [],
@@ -1947,7 +1634,10 @@
           ],
           "model": "gateway-video-pro",
           "parameters": {
-            "aspect_ratio": "16:9",
+            "dimensions": {
+              "height": 720,
+              "width": 1280
+            },
             "duration_seconds": 5
           }
         },
@@ -2558,7 +2248,7 @@
                     {
                       "mime_type": "image/png",
                       "revised_prompt": "a cyberpunk cat in the rain",
-                      "url": "https://cdn.example.test/img/abc.png"
+                      "uri": "https://cdn.example.test/img/abc.png"
                     }
                   ],
                   "status": "succeeded",
@@ -3543,7 +3233,7 @@
                   "outputs": [
                     {
                       "mime_type": "audio/wav",
-                      "url": "https://cdn.example.test/mus/abc.wav"
+                      "uri": "https://cdn.example.test/mus/abc.wav"
                     }
                   ],
                   "status": "succeeded",
@@ -4178,9 +3868,9 @@
                   "object": "video",
                   "outputs": [
                     {
-                      "cover_url": "https://cdn.example.test/vid/abc-last.png",
+                      "cover_uri": "https://cdn.example.test/vid/abc-last.png",
                       "mime_type": "video/mp4",
-                      "url": "https://cdn.example.test/vid/abc.mp4"
+                      "uri": "https://cdn.example.test/vid/abc.mp4"
                     }
                   ],
                   "status": "succeeded",

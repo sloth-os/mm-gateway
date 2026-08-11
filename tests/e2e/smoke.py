@@ -271,7 +271,7 @@ def choose_models(client: httpx.Client, cands: list[tuple[str, str, str]]) -> li
     return kept
 
 
-def generate_image(client: httpx.Client, model: str) -> dict[str, Any]:
+def generate_image(client: httpx.Client, model: str) -> str:
     """Create an image task and poll its normalized resource."""
     create = client.post(
         "/v1/images",
@@ -296,11 +296,10 @@ def generate_image(client: httpx.Client, model: str) -> dict[str, Any]:
         status = last.get("status")
         if status == "succeeded":
             img = (last.get("outputs") or [{}])[0]
-            url = img.get("url")
-            b64 = img.get("data")
-            if not (url or b64):
+            uri = img.get("uri")
+            if not uri:
                 raise RuntimeError(f"image succeeded but has no output: {str(last)[:500]}")
-            return {"url": url, "data": b64}
+            return uri
         if status in ("failed", "cancelled", "expired"):
             raise RuntimeError(f"image task {status}: {str(last)[:500]}")
         time.sleep(2)
@@ -308,7 +307,7 @@ def generate_image(client: httpx.Client, model: str) -> dict[str, Any]:
 
 
 def generate_video(client: httpx.Client, model: str) -> str:
-    """Create a video task and poll until it has a video URL."""
+    """Create a video task and poll until it has a video URI."""
     create = client.post(
         "/v1/videos",
         headers={**auth_headers(), "content-type": "application/json"},
@@ -331,10 +330,10 @@ def generate_video(client: httpx.Client, model: str) -> str:
         last = r.json()
         status = last.get("status")
         if status == "succeeded":
-            url = ((last.get("outputs") or [{}])[0]).get("url")
-            if not url:
-                raise RuntimeError(f"video succeeded but no video_url: {str(last)[:500]}")
-            return url
+            uri = ((last.get("outputs") or [{}])[0]).get("uri")
+            if not uri:
+                raise RuntimeError(f"video succeeded but has no output: {str(last)[:500]}")
+            return uri
         if status in ("failed", "cancelled", "expired"):
             raise RuntimeError(f"video task {status}: {str(last)[:500]}")
         time.sleep(2)
@@ -372,11 +371,10 @@ def generate_music(client: httpx.Client, model: str) -> str:
         status = last.get("status")
         if status == "succeeded":
             audio = (last.get("outputs") or [{}])[0]
-            url = audio.get("url")
-            b64 = audio.get("data")
-            if not (url or b64):
+            uri = audio.get("uri")
+            if not uri:
                 raise RuntimeError(f"music succeeded but has no output: {str(last)[:500]}")
-            return url or "<b64_audio>"
+            return uri
         if status in ("failed", "cancelled", "expired"):
             raise RuntimeError(f"music task {status}: {str(last)[:500]}")
         time.sleep(3)
@@ -395,8 +393,8 @@ def run_one(candidate: tuple[str, str, str]) -> tuple[str, str, str, str]:
     try:
         with httpx.Client(base_url=BASE, timeout=TIMEOUT) as client:
             if modality == "image":
-                out = generate_image(client, model)
-                return backend, modality, model, f"image ok: {out.get('url') or '<b64_json>'}"
+                uri = generate_image(client, model)
+                return backend, modality, model, f"image ok: {uri}"
             if modality == "video":
                 url = generate_video(client, model)
                 return backend, modality, model, f"video ok: {url}"

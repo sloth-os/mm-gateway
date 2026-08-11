@@ -94,8 +94,10 @@ multiple media references. A text-only request is
 
 ### Images
 
-Allowed parts are `text` and `image`. Every image has exactly one source:
-`url` or base64 `data`; `mime_type` accompanies inline data.
+Allowed parts are `text` and `image`. Every image part has one required `uri`.
+Remote media uses an absolute URI such as `https://...`; inline media uses a
+base64 data URI such as `data:image/png;base64,...`. Separate `url`, `data`, and
+`mime_type` input fields are not accepted.
 
 The canonical image request preserves all parts. Adapters that support multiple
 references receive them in order. Adapters with a smaller capability select the
@@ -105,12 +107,12 @@ supported subset at their own boundary.
 
 Allowed parts are:
 
-| Type | Sources | Roles |
+| Type | Source | Roles |
 |---|---|---|
 | `text` | `text` | none |
-| `image` | `url` or base64 `data` | `first_frame`, `last_frame`, `reference_image` |
-| `audio` | `url` or base64 `data` | `reference_audio` |
-| `video` | `url` or base64 `data` | `reference_video` |
+| `image` | `uri` | `first_frame`, `last_frame`, `reference_image` |
+| `audio` | `uri` | `reference_audio` |
+| `video` | `uri` | `reference_video` |
 
 The REST translator represents inline media as data URLs internally. This keeps
 the canonical content list ordered while allowing an adapter to translate the
@@ -120,12 +122,12 @@ same value to a native inline block, upload, URL field, or base64 field.
 
 Allowed parts are:
 
-| Type | Sources | Roles |
+| Type | Source | Roles |
 |---|---|---|
 | `text` | `text` | none |
 | `lyrics` | `text` | none |
-| `image` | `url` or base64 `data` | `reference_image` |
-| `audio` | `url` or base64 `data` | `reference_audio`, `continuation_audio` |
+| `image` | `uri` | `reference_image` |
+| `audio` | `uri` | `reference_audio`, `continuation_audio` |
 
 Multiple text and lyrics parts remain ordered. Text parts form the descriptive
 prompt; lyrics parts are joined with newlines into the canonical lyrics field.
@@ -140,22 +142,23 @@ names, but those are not wire contracts.
 | Public concept | Canonical field | Adapter examples |
 |---|---|---|
 | `output_count` | `n` | image count, number of images, number of outputs |
-| `delivery: base64` | `response_format: b64_json` | Accept header or native response mode |
+| `delivery: remote` or `inline` | `response_format: url` or `b64_json` | Accept header or native response mode |
 | `file_format` | `output_format` | MIME type, output codec, multipart field |
 | `compression` | `output_compression` | native image compression control |
 | `inference_steps` | `num_inference_steps` | sampling steps |
 | `guidance_scale` | `guidance_scale` | guidance or CFG scale |
 
-Dimensions, aspect ratio, resolution, quality, style, seed, edit strength,
-watermarking, and background retain their semantic names. Adapters convert
-formats such as `WxH` versus `W*H` where necessary.
+Clients specify visual size only as `dimensions: {width, height}` in pixels.
+Adapters derive native pixel strings (`WxH` or `W*H`), reduced aspect ratios,
+and provider resolution tiers from those dimensions. Quality, style, seed, edit
+strength, watermarking, and background retain their semantic names.
 
 ### Video mapping
 
 | Public concept | Canonical field | Adapter examples |
 |---|---|---|
 | `duration_seconds` | `duration` | seconds, integer enum, or native duration unit |
-| `aspect_ratio` | `ratio` | aspect ratio or ratio |
+| `dimensions` | `width`, `height` | pixel size, aspect ratio, or resolution tier |
 | `include_audio` | `generate_audio` | native audio-generation switch |
 | `camera_motion: fixed` | `camera_fixed: true` | fixed-camera switch |
 | `enhance_prompt` | `prompt_extend` | prompt expansion switch |
@@ -218,10 +221,14 @@ created_at, completed_at, links.self
 
 Output types are intentionally separate:
 
-- Image: `url` or base64 `data`, `mime_type`, optional `revised_prompt`.
-- Video: `url`, optional `cover_url`, optional `mime_type`.
-- Music: `url` or base64 `data`, optional `mime_type`; generated lyrics are a
+- Image: required `uri`, optional `mime_type` and `revised_prompt`.
+- Video: required `uri`, optional `cover_uri` and `mime_type`.
+- Music: required `uri` and optional `mime_type`; generated lyrics are a
   task-level field.
+
+Output `uri` follows the same rule as media input: remote media is an absolute
+URI and inline media is a base64 data URI. There are no alternate `url` or
+`data` output shapes.
 
 Usage exposes only shared concepts: cost, token counts, output count, and output
 duration. Provider raw payloads and arbitrary usage dictionaries remain inside

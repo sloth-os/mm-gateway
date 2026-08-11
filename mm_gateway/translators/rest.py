@@ -39,8 +39,22 @@ from mm_gateway.schemas.video import text_part as video_text_part
 from mm_gateway.tasks.store import TaskRecord
 
 
-def _data_url(data: str, mime_type: str) -> str:
+def _data_uri(data: str, mime_type: str) -> str:
     return data if data.startswith("data:") else f"data:{mime_type};base64,{data}"
+
+
+def _image_source(uri: str):
+    if not uri.lower().startswith("data:"):
+        return image_image_part(uri)
+    header, _, data = uri.partition(",")
+    mime_type = header[5:].split(";", 1)[0] or "image/png"
+    return image_image_part(data=data, mime_type=mime_type)
+
+
+def _apply_dimensions(parameters: dict) -> None:
+    dimensions = parameters.pop("dimensions", None)
+    if dimensions is not None:
+        parameters.update(dimensions)
 
 
 def from_image_request(body: ImageRequest) -> UnifiedImageRequest:
@@ -49,15 +63,16 @@ def from_image_request(body: ImageRequest) -> UnifiedImageRequest:
         if isinstance(part, TextInput):
             content.append(image_text_part(part.text))
         else:
-            content.append(image_image_part(
-                part.url, data=part.data, mime_type=part.mime_type
-            ))
+            content.append(_image_source(part.uri))
     parameters = body.parameters.model_dump(exclude_none=True)
+    _apply_dimensions(parameters)
     parameters["n"] = parameters.pop("output_count", None)
     parameters["num_inference_steps"] = parameters.pop("inference_steps", None)
     delivery = parameters.pop("delivery", None)
     if delivery is not None:
-        parameters["response_format"] = "url" if delivery == "url" else "b64_json"
+        parameters["response_format"] = (
+            "url" if delivery == "remote" else "b64_json"
+        )
     parameters["output_format"] = parameters.pop("file_format", None)
     parameters["output_compression"] = parameters.pop("compression", None)
     return UnifiedImageRequest(
@@ -73,17 +88,14 @@ def from_video_request(body: VideoRequest) -> UnifiedVideoRequest:
         if isinstance(part, TextInput):
             content.append(video_text_part(part.text))
         elif isinstance(part, VideoImageInput):
-            url = part.url or _data_url(part.data or "", part.mime_type or "image/png")
-            content.append(video_image_part(url, part.role))
+            content.append(video_image_part(part.uri, part.role))
         elif isinstance(part, VideoAudioInput):
-            url = part.url or _data_url(part.data or "", part.mime_type or "audio/mpeg")
-            content.append(video_audio_part(url, part.role))
+            content.append(video_audio_part(part.uri, part.role))
         elif isinstance(part, VideoInput):
-            url = part.url or _data_url(part.data or "", part.mime_type or "video/mp4")
-            content.append(video_part(url, part.role))
+            content.append(video_part(part.uri, part.role))
     parameters = body.parameters.model_dump(exclude_none=True)
+    _apply_dimensions(parameters)
     parameters["duration"] = parameters.pop("duration_seconds", None)
-    parameters["ratio"] = parameters.pop("aspect_ratio", None)
     parameters["generate_audio"] = parameters.pop("include_audio", None)
     camera_motion = parameters.pop("camera_motion", None)
     if camera_motion is not None:
@@ -107,11 +119,9 @@ def from_music_request(body: MusicRequest) -> UnifiedMusicRequest:
         elif isinstance(part, LyricsInput):
             lyrics_parts.append(part.text)
         elif isinstance(part, MusicImageInput):
-            url = part.url or _data_url(part.data or "", part.mime_type or "image/png")
-            content.append(music_image_part(url, part.role))
+            content.append(music_image_part(part.uri, part.role))
         elif isinstance(part, MusicAudioInput):
-            url = part.url or _data_url(part.data or "", part.mime_type or "audio/mpeg")
-            content.append(music_audio_part(url, part.role))
+            content.append(music_audio_part(part.uri, part.role))
     parameters = body.parameters.model_dump(exclude_none=True)
     title = parameters.pop("title", None)
     style = parameters.pop("style", None)
@@ -162,8 +172,8 @@ def to_image_response(task: UnifiedImageTask, record: TaskRecord, *, self_url: s
                       ) -> ImageTaskResponse:
     outputs = [
         ImageOutput(
-            url=item.url,
-            data=item.b64_json,
+            uri=item.url
+            or _data_uri(item.b64_json or "", item.media_type or "image/png"),
             mime_type=item.media_type,
             revised_prompt=item.revised_prompt,
         )
@@ -197,8 +207,8 @@ def to_video_response(task: UnifiedVideoTask, record: TaskRecord, *, self_url: s
                       ) -> VideoTaskResponse:
     outputs = [
         VideoOutput(
-            url=url,
-            cover_url=task.cover_url if index == 0 else None,
+            uri=url,
+            cover_uri=task.cover_url if index == 0 else None,
         )
         for index, url in enumerate(task.video_urls)
     ]
@@ -227,8 +237,11 @@ def to_music_response(task: UnifiedMusicTask, record: TaskRecord, *, self_url: s
                       ) -> MusicTaskResponse:
     outputs = []
     if task.audio_b64:
-        outputs.append(MusicOutput(data=task.audio_b64, mime_type=task.audio_media_type))
-    outputs.extend(MusicOutput(url=url, mime_type=task.audio_media_type)
+        outputs.append(MusicOutput(
+            uri=_data_uri(task.audio_b64, task.audio_media_type or "audio/mpeg"),
+            mime_type=task.audio_media_type,
+        ))
+    outputs.extend(MusicOutput(uri=url, mime_type=task.audio_media_type)
                    for url in task.audio_urls)
     usage = None
     if task.usage:

@@ -70,8 +70,8 @@ problem-detail extensions without forcing a new API version.
 
 ### Image
 
-Image input supports one or more interleaved text and image parts. An image may
-be supplied by URL or inline base64.
+Image input supports one or more interleaved text and image parts. Every media
+part uses one required `uri`; inline bytes use a base64 data URI.
 
 ```bash
 curl -i http://localhost:8000/v1/images \
@@ -81,23 +81,23 @@ curl -i http://localhost:8000/v1/images \
   -d '{
     "model": "gateway-image-pro",
     "input": [
-      {"type":"image","url":"https://assets.example/subject.png"},
+      {"type":"image","uri":"https://assets.example/subject.png"},
       {"type":"text","text":"place the subject in a rainy city"},
-      {"type":"image","data":"BASE64","mime_type":"image/png"}
+      {"type":"image","uri":"data:image/png;base64,BASE64"}
     ],
     "parameters": {
       "output_count": 2,
-      "aspect_ratio": "16:9",
+      "dimensions": {"width": 1280, "height": 720},
       "quality": "high",
-      "delivery": "url",
+      "delivery": "remote",
       "file_format": "png"
     }
   }'
 ```
 
-Image parameters include dimensions, aspect ratio, resolution, quality, style,
-seed, guidance, inference steps, edit strength, watermarking, delivery form,
-file format, compression, and background.
+Image parameters include exact pixel dimensions, quality, style, seed, guidance,
+inference steps, edit strength, watermarking, delivery form, file format,
+compression, and background.
 
 ### Video
 
@@ -109,14 +109,14 @@ clips. Roles express semantics without exposing an upstream wire format.
   "model": "gateway-video-pro",
   "input": [
     {"type":"text","text":"cut between these references"},
-    {"type":"image","url":"https://assets.example/first.png","role":"first_frame"},
-    {"type":"image","url":"https://assets.example/style.png","role":"reference_image"},
-    {"type":"audio","data":"BASE64","mime_type":"audio/wav","role":"reference_audio"},
-    {"type":"video","url":"https://assets.example/motion.mp4","role":"reference_video"}
+    {"type":"image","uri":"https://assets.example/first.png","role":"first_frame"},
+    {"type":"image","uri":"https://assets.example/style.png","role":"reference_image"},
+    {"type":"audio","uri":"data:audio/wav;base64,BASE64","role":"reference_audio"},
+    {"type":"video","uri":"https://assets.example/motion.mp4","role":"reference_video"}
   ],
   "parameters": {
     "duration_seconds": 8,
-    "aspect_ratio": "16:9",
+    "dimensions": {"width": 1280, "height": 720},
     "include_audio": true,
     "camera_motion": "auto",
     "enhance_prompt": true
@@ -125,8 +125,8 @@ clips. Roles express semantics without exposing an upstream wire format.
 ```
 
 Images support `first_frame`, `last_frame`, and `reference_image`. Audio and
-video use `reference_audio` and `reference_video`. URL and inline base64 video
-inputs are both valid.
+video use `reference_audio` and `reference_video`. Remote and inline media use
+the same `uri` field.
 
 ### Music
 
@@ -139,8 +139,8 @@ images, and reference or continuation audio.
   "input": [
     {"type":"text","text":"cinematic pop with a warm vocal"},
     {"type":"lyrics","text":"[Verse]\nUnder the city lights"},
-    {"type":"image","url":"https://assets.example/mood.jpg"},
-    {"type":"audio","url":"https://assets.example/theme.wav","role":"reference_audio"}
+    {"type":"image","uri":"https://assets.example/mood.jpg"},
+    {"type":"audio","uri":"https://assets.example/theme.wav","role":"reference_audio"}
   ],
   "parameters": {
     "title": "City Lights",
@@ -174,7 +174,7 @@ the output schema are modality-specific.
   "model": "gateway-video-pro",
   "status": "succeeded",
   "outputs": [
-    {"url": "https://cdn.example/video.mp4", "mime_type": "video/mp4"}
+    {"uri": "https://cdn.example/video.mp4", "mime_type": "video/mp4"}
   ],
   "usage": {"output_count": 1, "duration_seconds": 8},
   "metadata": {"job_id": "job-123"},
@@ -184,10 +184,10 @@ the output schema are modality-specific.
 }
 ```
 
-Image outputs contain `url` or base64 `data`, `mime_type`, and an optional
-`revised_prompt`. Video outputs contain `url`, optional `cover_url`, and
-`mime_type`. Music outputs contain `url` or base64 `data` and `mime_type`; any
-generated lyrics are returned in the task's `lyrics` field.
+Every output contains one `uri`; inline results are base64 data URIs. Image
+outputs may also contain `mime_type` and `revised_prompt`, video outputs may
+contain `cover_uri` and `mime_type`, and music outputs may contain `mime_type`.
+Generated lyrics are returned in the music task's `lyrics` field.
 
 HTTP errors use RFC 9457 Problem Details with the
 `application/problem+json` media type:

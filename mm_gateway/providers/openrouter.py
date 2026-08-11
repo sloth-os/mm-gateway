@@ -9,14 +9,25 @@ should delegate routing/billing to OpenRouter instead of picking a provider.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderRequestError
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._dimensions import (
+    aspect_ratio,
+    image_resolution,
+    pixel_size,
+    video_resolution,
+)
 from mm_gateway.providers._http import make_client, request_json
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
-from mm_gateway.schemas.image import ImageData, ImageUsage, UnifiedImageRequest, UnifiedImageResponse
+from mm_gateway.schemas.image import (
+    ImageData,
+    ImageUsage,
+    UnifiedImageRequest,
+    UnifiedImageResponse,
+)
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 log = get_logger("provider.openrouter")
@@ -31,8 +42,9 @@ _STATUS_MAP = {
 
 class OpenRouterProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "openrouter"
-    image_models = []  # OpenRouter's catalogue is dynamic; resolved at request time.
-    video_models = []
+    # OpenRouter's catalogue is dynamic; models are resolved at request time.
+    image_models: ClassVar[list[str]] = []
+    video_models: ClassVar[list[str]] = []
 
     def __init__(self, backend):
         super().__init__(backend)
@@ -94,12 +106,12 @@ def _image_body(request: UnifiedImageRequest) -> dict[str, Any]:
     body: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}
     if request.n:
         body["n"] = request.n
-    if request.aspect_ratio:
-        body["aspect_ratio"] = request.aspect_ratio
-    if request.resolution:
-        body["resolution"] = request.resolution
-    if request.size:
-        body["size"] = request.size
+    if ratio := aspect_ratio(request):
+        body["aspect_ratio"] = ratio
+    if resolution := image_resolution(request):
+        body["resolution"] = resolution
+    if size := pixel_size(request):
+        body["size"] = size
     if request.quality:
         body["quality"] = request.quality
     if request.seed is not None:
@@ -124,12 +136,12 @@ def _video_body(request: UnifiedVideoRequest) -> dict[str, Any]:
     prompt = request.prompt()
     if prompt:
         body["prompt"] = prompt
-    if request.ratio:
-        body["aspect_ratio"] = request.ratio
-    if request.resolution:
-        body["resolution"] = request.resolution
-    if request.size:
-        body["size"] = request.size
+    if ratio := aspect_ratio(request):
+        body["aspect_ratio"] = ratio
+    if resolution := video_resolution(request):
+        body["resolution"] = resolution
+    if size := pixel_size(request):
+        body["size"] = size
     if request.duration is not None:
         body["duration"] = int(request.duration)
     if request.seed is not None:

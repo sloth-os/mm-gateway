@@ -14,14 +14,39 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 TaskStatus = Literal["pending", "running", "succeeded", "failed", "cancelled", "expired"]
 Prompt = Annotated[str, Field(min_length=1)]
 
 _STRICT = ConfigDict(extra="forbid")
 _RESPONSE = ConfigDict(extra="allow")
+
+
+def _validate_media_uri(value: str) -> str:
+    if any(character.isspace() for character in value):
+        raise ValueError("media URI must not contain whitespace")
+    parsed = urlsplit(value)
+    if not parsed.scheme:
+        raise ValueError("media URI must be absolute")
+    if parsed.scheme.lower() == "data":
+        metadata, separator, payload = value[5:].partition(",")
+        if not separator or ";base64" not in metadata.lower() or not payload:
+            raise ValueError("inline media must use a base64 data URI")
+    return value
+
+
+MediaUri = Annotated[
+    str,
+    Field(
+        min_length=1,
+        description="Absolute media URI. Inline media uses a base64 data URI.",
+        json_schema_extra={"format": "uri"},
+    ),
+    AfterValidator(_validate_media_uri),
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -88,6 +113,15 @@ class Usage(BaseModel):
     duration_seconds: float | None = None
 
 
+class Dimensions(BaseModel):
+    """Exact output dimensions in pixels."""
+
+    model_config = _STRICT
+
+    width: int = Field(..., ge=1)
+    height: int = Field(..., ge=1)
+
+
 class TextInput(BaseModel):
     model_config = _STRICT
 
@@ -99,46 +133,22 @@ class ImageInput(BaseModel):
     model_config = _STRICT
 
     type: Literal["image"]
-    url: str | None = Field(None, min_length=1)
-    data: str | None = Field(None, min_length=1, description="Base64-encoded image bytes.")
-    mime_type: str | None = None
-
-    @model_validator(mode="after")
-    def exactly_one_source(self) -> ImageInput:
-        if bool(self.url) == bool(self.data):
-            raise ValueError("image input requires exactly one of `url` or `data`")
-        return self
+    uri: MediaUri
 
 
 class AudioInput(BaseModel):
     model_config = _STRICT
 
     type: Literal["audio"]
-    url: str | None = Field(None, min_length=1)
-    data: str | None = Field(None, min_length=1, description="Base64-encoded audio bytes.")
-    mime_type: str | None = None
-
-    @model_validator(mode="after")
-    def exactly_one_source(self) -> AudioInput:
-        if bool(self.url) == bool(self.data):
-            raise ValueError("audio input requires exactly one of `url` or `data`")
-        return self
+    uri: MediaUri
 
 
 class VideoInput(BaseModel):
     model_config = _STRICT
 
     type: Literal["video"]
-    url: str | None = Field(None, min_length=1)
-    data: str | None = Field(None, min_length=1, description="Base64-encoded video bytes.")
-    mime_type: str | None = None
+    uri: MediaUri
     role: Literal["reference_video"] = "reference_video"
-
-    @model_validator(mode="after")
-    def exactly_one_source(self) -> VideoInput:
-        if bool(self.url) == bool(self.data):
-            raise ValueError("video input requires exactly one of `url` or `data`")
-        return self
 
 
 class VideoImageInput(ImageInput):
@@ -208,11 +218,7 @@ class ImageParameters(BaseModel):
 
     negative_prompt: str | None = None
     output_count: int | None = Field(None, ge=1, le=16)
-    size: str | None = None
-    width: int | None = Field(None, ge=1)
-    height: int | None = Field(None, ge=1)
-    aspect_ratio: str | None = None
-    resolution: str | None = None
+    dimensions: Dimensions | None = None
     quality: str | None = None
     style: str | None = None
     seed: int | None = None
@@ -220,19 +226,10 @@ class ImageParameters(BaseModel):
     inference_steps: int | None = Field(None, ge=1)
     strength: float | None = Field(None, ge=0, le=1)
     watermark: bool | None = None
-    delivery: Literal["url", "base64"] | None = None
+    delivery: Literal["remote", "inline"] | None = None
     file_format: str | None = None
     compression: int | None = Field(None, ge=0, le=100)
     background: str | None = None
-
-    @model_validator(mode="after")
-    def unambiguous_dimensions(self) -> ImageParameters:
-        if (self.width is None) != (self.height is None):
-            raise ValueError("`width` and `height` must be provided together")
-        if self.size is not None and self.width is not None:
-            raise ValueError("use either `size` or `width` and `height`, not both")
-        return self
-
 
 class ImageRequest(_RequestBase):
     model_config = ConfigDict(
@@ -244,9 +241,9 @@ class ImageRequest(_RequestBase):
                     {"type": "text", "text": "a cyberpunk cat in the rain"}
                 ],
                 "parameters": {
-                    "size": "1024x1024",
+                    "dimensions": {"width": 1024, "height": 1024},
                     "quality": "high",
-                    "delivery": "url",
+                    "delivery": "remote",
                 },
                 "metadata": {"requester": "design-tool"},
             }
@@ -260,16 +257,9 @@ class ImageRequest(_RequestBase):
 class ImageOutput(BaseModel):
     model_config = _RESPONSE
 
-    url: str | None = None
-    data: str | None = Field(None, description="Base64-encoded image bytes.")
+    uri: MediaUri
     mime_type: str | None = None
     revised_prompt: str | None = None
-
-    @model_validator(mode="after")
-    def exactly_one_source(self) -> ImageOutput:
-        if bool(self.url) == bool(self.data):
-            raise ValueError("image output requires exactly one of `url` or `data`")
-        return self
 
 
 class ImageTaskResponse(BaseModel):
@@ -298,11 +288,7 @@ class VideoParameters(BaseModel):
 
     negative_prompt: str | None = None
     duration_seconds: float | None = Field(None, gt=0)
-    aspect_ratio: str | None = None
-    resolution: str | None = None
-    size: str | None = None
-    width: int | None = Field(None, ge=1)
-    height: int | None = Field(None, ge=1)
+    dimensions: Dimensions | None = None
     fps: int | None = Field(None, ge=1)
     seed: int | None = None
     include_audio: bool | None = None
@@ -314,15 +300,6 @@ class VideoParameters(BaseModel):
     motion_intensity: int | None = Field(None, ge=0, le=255)
     frame_count: int | None = Field(None, ge=1)
     file_format: str | None = None
-
-    @model_validator(mode="after")
-    def unambiguous_dimensions(self) -> VideoParameters:
-        if (self.width is None) != (self.height is None):
-            raise ValueError("`width` and `height` must be provided together")
-        if self.size is not None and self.width is not None:
-            raise ValueError("use either `size` or `width` and `height`, not both")
-        return self
-
 
 class VideoRequest(_RequestBase):
     model_config = ConfigDict(
@@ -336,7 +313,10 @@ class VideoRequest(_RequestBase):
                         "text": "a cinematic drone shot over mountains",
                     }
                 ],
-                "parameters": {"duration_seconds": 5, "aspect_ratio": "16:9"},
+                "parameters": {
+                    "duration_seconds": 5,
+                    "dimensions": {"width": 1280, "height": 720},
+                },
             }
         },
     )
@@ -348,8 +328,8 @@ class VideoRequest(_RequestBase):
 class VideoOutput(BaseModel):
     model_config = _RESPONSE
 
-    url: str
-    cover_url: str | None = None
+    uri: MediaUri
+    cover_uri: MediaUri | None = None
     mime_type: str | None = None
 
 
@@ -429,15 +409,8 @@ class MusicRequest(_RequestBase):
 class MusicOutput(BaseModel):
     model_config = _RESPONSE
 
-    url: str | None = None
-    data: str | None = Field(None, description="Base64-encoded audio bytes.")
+    uri: MediaUri
     mime_type: str | None = None
-
-    @model_validator(mode="after")
-    def exactly_one_source(self) -> MusicOutput:
-        if bool(self.url) == bool(self.data):
-            raise ValueError("music output requires exactly one of `url` or `data`")
-        return self
 
 
 class MusicTaskResponse(BaseModel):
@@ -485,6 +458,7 @@ class HealthResponse(BaseModel):
 
 __all__ = [
     "AudioInput",
+    "Dimensions",
     "HealthResponse",
     "ImageInput",
     "ImageInputList",
@@ -493,6 +467,7 @@ __all__ = [
     "ImageRequest",
     "ImageTaskResponse",
     "LyricsInput",
+    "MediaUri",
     "ModelEntry",
     "ModelListResponse",
     "MusicAudioInput",
