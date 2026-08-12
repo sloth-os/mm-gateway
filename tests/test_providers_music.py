@@ -471,7 +471,166 @@ def test_acestep_translates_key_batch_steps_and_continuation_audio() -> None:
     assert body["key_scale"] == "A minor"
     assert body["inference_steps"] == 32
     assert body["batch_size"] == 3
-    assert body["reference_audio_path"] == "https://assets.test/continue.wav"
+    assert body["src_audio_path"] == "https://assets.test/continue.wav"
+    assert body["task_type"] == "cover"
+    # Official acestep.sh native defaults.
+    assert body["thinking"] is True
+    assert body["use_format"] is True
+    assert body["use_cot_caption"] is True
+    assert body["use_cot_language"] is True
+    assert body["use_random_seed"] is True
+
+
+# --------------------------------------------------------------------------- #
+# ACE-Step — completion mode (POST /v1/chat/completions, synthetic task)
+# --------------------------------------------------------------------------- #
+
+
+def test_acestep_auto_mode_picks_completion_for_acemusic_host() -> None:
+    from mm_gateway.providers.acestep import AceStepProvider
+    assert AceStepProvider._resolve_mode(_backend("acestep", base_url="https://api.acemusic.ai")) == "completion"
+    assert AceStepProvider._resolve_mode(_backend("acestep", base_url="http://127.0.0.1:8001")) == "native"
+
+
+def test_acestep_explicit_mode_override() -> None:
+    from mm_gateway.config import BackendConfig
+    from mm_gateway.providers.acestep import AceStepProvider
+    b = BackendConfig(name="acestep", type="acestep", base_url="https://api.acemusic.ai",
+                      extra={"acestep_api_mode": "native"})
+    assert AceStepProvider._resolve_mode(b) == "native"
+
+
+def test_acestep_completion_create_mints_synthetic_task() -> None:
+    from mm_gateway.providers.acestep import _COMPLETION_TASKS, AceStepProvider
+    _COMPLETION_TASKS.clear()
+    p = AceStepProvider(_backend("acestep", base_url="https://api.acemusic.ai"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)  # create must NOT hit the network
+
+    _mount(p, handler, base_url="https://api.acemusic.ai")
+    task = asyncio.run(p.create_music_task(_req(model="acestep-v15-turbo")))
+    assert task.status == "pending"
+    assert task.task_id.startswith("acestep-")
+    assert task.task_id in _COMPLETION_TASKS
+
+
+def test_acestep_completion_body_matches_official_spec() -> None:
+    from mm_gateway.providers.acestep import AceStepProvider
+    p = AceStepProvider(_backend("acestep", base_url="https://api.acemusic.ai"))
+    request = UnifiedMusicRequest(
+        model="acestep-v15-turbo",
+        content=[text_part("soft rock")],
+        lyrics="[Verse]\nhello",
+        duration=180, bpm=120, key="A", scale="minor",
+        vocal_language="en", audio_format="mp3",
+    )
+    body = p._build_completion_body(request, request.model)
+    assert body["model"] == "acemusic/acestep-v15-turbo"  # prefix added
+    assert body["stream"] is False
+    assert body["thinking"] is True
+    assert body["use_format"] is True
+    assert body["use_cot_caption"] is True
+    assert body["use_cot_language"] is True
+    msg = body["messages"][0]
+    assert msg["role"] == "user"
+    assert "<prompt>soft rock</prompt>" in msg["content"]
+    assert "<lyrics>[Verse]\nhello</lyrics>" in msg["content"]
+    assert body["audio_config"] == {
+        "format": "mp3", "vocal_language": "en", "duration": 180.0,
+        "bpm": 120, "key_scale": "A minor",
+    }
+
+
+def test_acestep_completion_poll_inlines_data_url_audio() -> None:
+    from mm_gateway.providers.acestep import _COMPLETION_TASKS, AceStepProvider
+    _COMPLETION_TASKS.clear()
+    p = AceStepProvider(_backend("acestep", base_url="https://api.acemusic.ai"))
+    audio_b64 = base64.b64encode(b"FAKEAUDIO").decode()
+    data_url = f"data:audio/mpeg;base64,{audio_b64}"
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            captured["body"] = _body(request)
+            return httpx.Response(200, json={
+                "id": "chatcmpl-1",
+                "choices": [{"finish_reason": "stop", "message": {
+                    "content": "la la la",
+                    "audio": [{"type": "audio_url", "audio_url": {"url": data_url}}],
+                }}],
+            })
+        return httpx.Response(404)
+
+    _mount(p, handler, base_url="https://api.acemusic.ai")
+    task = asyncio.run(p.create_music_task(_req(model="acestep-v15-turbo")))
+    result = asyncio.run(p.get_music_task(task.task_id))
+    assert result.status == "succeeded"
+    assert result.audio_b64 == audio_b64
+    assert result.audio_media_type == "audio/mpeg"
+    assert result.lyrics == "la la la"
+    assert captured["body"]["model"] == "acemusic/acestep-v15-turbo"
+
+
+def test_acestep_completion_finish_reason_error_fails() -> None:
+    from mm_gateway.providers.acestep import _COMPLETION_TASKS, AceStepProvider
+    _COMPLETION_TASKS.clear()
+    p = AceStepProvider(_backend("acestep", base_url="https://api.acemusic.ai"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(200, json={
+                "id": "chatcmpl-err",
+                "choices": [{"finish_reason": "error", "message": {"content": ""}}],
+                "detail": "invalid lyrics",
+            })
+        return httpx.Response(404)
+
+    _mount(p, handler, base_url="https://api.acemusic.ai")
+    task = asyncio.run(p.create_music_task(_req()))
+    result = asyncio.run(p.get_music_task(task.task_id))
+    assert result.status == "failed"
+    assert "invalid lyrics" in (result.error or "")
+
+
+def test_acestep_completion_no_audio_fails() -> None:
+    from mm_gateway.providers.acestep import _COMPLETION_TASKS, AceStepProvider
+    _COMPLETION_TASKS.clear()
+    p = AceStepProvider(_backend("acestep", base_url="https://api.acemusic.ai"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/chat/completions":
+            return httpx.Response(200, json={"id": "x", "choices": [{"finish_reason": "stop", "message": {}}]})
+        return httpx.Response(404)
+
+    _mount(p, handler, base_url="https://api.acemusic.ai")
+    task = asyncio.run(p.create_music_task(_req()))
+    result = asyncio.run(p.get_music_task(task.task_id))
+    assert result.status == "failed"
+
+
+def test_acestep_native_use_random_seed_false_when_seed_set() -> None:
+    from mm_gateway.providers.acestep import AceStepProvider
+    p = AceStepProvider(_backend("acestep", base_url="http://ace.local:8001"))
+    body = p._build_body(_req(seed=42))
+    assert body["seed"] == 42
+    assert body["use_random_seed"] is False
+
+
+def test_acestep_native_cover_and_repaint_fields_from_extra() -> None:
+    from mm_gateway.providers.acestep import AceStepProvider
+    p = AceStepProvider(_backend("acestep", base_url="http://ace.local:8001"))
+    request = UnifiedMusicRequest(
+        model="ace-step-1.5",
+        content=[text_part("cover"), audio_part("https://assets.test/src.wav", "continuation_audio")],
+        extra={"audio_cover_strength": 0.7, "repainting_start": 10, "repainting_end": 50},
+    )
+    body = p._build_body(request)
+    assert body["src_audio_path"] == "https://assets.test/src.wav"
+    assert body["task_type"] == "cover"
+    assert body["audio_cover_strength"] == 0.7
+    assert body["repainting_start"] == 10
+    assert body["repainting_end"] == 50
 
 
 # --------------------------------------------------------------------------- #
