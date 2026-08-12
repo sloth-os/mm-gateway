@@ -341,6 +341,68 @@ def test_acestep_requires_base_url() -> None:
         AceStepProvider(BackendConfig(name="acestep", type="acestep", api_key="k"))
 
 
+def test_acestep_create_retries_transient_504_then_succeeds() -> None:
+    from mm_gateway.providers.acestep import AceStepProvider
+    p = AceStepProvider(_backend("acestep", base_url="https://ace.test"))
+    p._create_backoff_base = 0.0  # no real sleeping in the test
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/release_task":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Cloudflare-style transient gateway timeout (observed in CI).
+                return httpx.Response(504, text="<html>504 Gateway Timeout</html>")
+            return httpx.Response(200, json={"data": {"task_id": "ac-r"}})
+        return httpx.Response(404)
+
+    _mount(p, handler, base_url="https://ace.test")
+    task = asyncio.run(p.create_music_task(_req(model="acestep-v15-xl-turbo")))
+    assert task.task_id == "ac-r"
+    assert calls["n"] == 2  # one transient 504, then success
+
+
+def test_acestep_create_does_not_retry_4xx() -> None:
+    from mm_gateway.core.exceptions import ProviderRequestError
+    from mm_gateway.providers.acestep import AceStepProvider
+    p = AceStepProvider(_backend("acestep", base_url="https://ace.test"))
+    p._create_backoff_base = 0.0
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/release_task":
+            calls["n"] += 1
+            return httpx.Response(400, json={"error": "bad prompt"})
+        return httpx.Response(404)
+
+    _mount(p, handler, base_url="https://ace.test")
+    with pytest.raises(ProviderRequestError):
+        asyncio.run(p.create_music_task(_req()))
+    assert calls["n"] == 1  # 4xx is not retried
+
+
+def test_acestep_create_surfaces_error_after_exhausting_retries() -> None:
+    from mm_gateway.core.exceptions import ProviderRequestError
+    from mm_gateway.providers.acestep import AceStepProvider
+    p = AceStepProvider(_backend("acestep", base_url="https://ace.test"))
+    p._create_backoff_base = 0.0
+
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/release_task":
+            calls["n"] += 1
+            return httpx.Response(504, text="<html>504</html>")
+        return httpx.Response(404)
+
+    _mount(p, handler, base_url="https://ace.test")
+    with pytest.raises(ProviderRequestError):
+        asyncio.run(p.create_music_task(_req()))
+    assert calls["n"] == p._create_max_attempts
+
+
 def test_acestep_create_and_poll_fetches_audio() -> None:
     from mm_gateway.providers.acestep import AceStepProvider
     p = AceStepProvider(_backend("acestep", base_url="https://ace.test"))

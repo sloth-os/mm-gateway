@@ -242,6 +242,60 @@ def _mount_video(provider: DashScopeProvider, handler) -> list[str]:
     return captured
 
 
+def _synthesis_succeeded(url: str = "https://dashscope.test/img.png") -> dict:
+    """A SUCCEEDED image-synthesis poll body — images in ``output.results[].url``."""
+    return {
+        "output": {
+            "task_status": "SUCCEEDED",
+            "results": [{"url": url}],
+        }
+    }
+
+
+def _generation_succeeded_body(url: str = "https://dashscope.test/gen.png") -> dict:
+    """A SUCCEEDED multimodal-generation poll body — image in
+    ``output.choices[].message.content[]``.
+
+    The message carries ``role`` (as the real DashScope task-poll envelope does);
+    ``ImageGenerationResponse.from_api_response`` materializes ``Choice →
+    Message(**message)`` and ``Message.__init__`` requires ``role``, so omitting
+    it would crash the poll with a spurious ``Message.__init__`` TypeError.
+    """
+    return {
+        "output": {
+            "task_status": "SUCCEEDED",
+            "choices": [{"message": {"role": "assistant", "content": [{"image": url}]}}],
+        }
+    }
+
+
+def _mount_image(provider: DashScopeProvider, handler) -> list[str]:
+    """Replace the provider's image-poll httpx client with a ``MockTransport``
+    driven by ``handler``; return the list of polled URLs (captured in order).
+
+    The image *poll* is hand-rolled over httpx (see ``_poll_task``): it no
+    longer goes through the SDK's ``AioImageSynthesis.wait`` /
+    ``AioImageGeneration.wait``, so image-poll tests script the response here
+    rather than setting ``_wait_result`` on the fakes. The client carries no
+    base_url — the adapter builds the full slashless URL.
+    """
+    captured: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(str(request.url))
+        return handler(request)
+
+    provider._client_image = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    return captured
+
+
+def _mount_image_succeeded(provider: DashScopeProvider, *, generation: bool = False) -> list[str]:
+    """Convenience: mount a SUCCEEDED image poll (synthesis by default, or the
+    generation surface) and return the captured poll URLs."""
+    body = _generation_succeeded_body() if generation else _synthesis_succeeded()
+    return _mount_image(provider, lambda req: httpx.Response(200, json=body))
+
+
 def test_provider_requires_api_key() -> None:
     with pytest.raises(ProviderNotConfiguredError):
         DashScopeProvider(BackendConfig(name="dashscope", type="dashscope"))
@@ -263,7 +317,8 @@ def test_image_generate_native_async_path(provider: DashScopeProvider) -> None:
     task = asyncio.run(provider.create_image_task(req))
     assert task.status == "pending" and task.task_id.startswith("img-")
     assert provider._fake_image.async_calls == 0  # type: ignore[attr-defined]
-    # The first poll runs async_call + wait (native async) and completes.
+    # The first poll runs async_call (submit) + the hand-rolled httpx poll.
+    _mount_image_succeeded(provider)
     task = asyncio.run(provider.get_image_task(task.task_id))
     img = provider._fake_image  # type: ignore[attr-defined]
     kw = img.async_kwargs
@@ -276,7 +331,7 @@ def test_image_generate_native_async_path(provider: DashScopeProvider) -> None:
     assert "prompt_extend" not in kw
     assert task.images[0].url == "https://dashscope.test/img.png"
     assert task.provider == "dashscope" and task.model == "wanx2.1-t2i-turbo"
-    assert img.async_calls == 1 and img.wait_calls == ["ds-task-1"]
+    assert img.async_calls == 1 and img.wait_calls == []  # SDK wait bypassed
     assert img.sync_calls == 0  # no fallback
     # A second poll returns the cached terminal task without re-calling.
     asyncio.run(provider.get_image_task(task.task_id))
@@ -292,6 +347,7 @@ def test_image_generate_qwen_image_uses_native_async(
         model="qwen-image-2.0-pro", content=[image_text_part("a cat")]
     )
     task = asyncio.run(provider.create_image_task(req))
+    _mount_image_succeeded(provider)
     task = asyncio.run(provider.get_image_task(task.task_id))
     img = provider._fake_image  # type: ignore[attr-defined]
     assert img.async_calls == 1 and img.sync_calls == 0
@@ -308,6 +364,7 @@ def test_image_generate_passes_prompt_extend_via_extra(
         extra={"prompt_extend": True},
     )
     task = asyncio.run(provider.create_image_task(req))
+    _mount_image_succeeded(provider)
     asyncio.run(provider.get_image_task(task.task_id))
     kw = provider._fake_image.async_kwargs  # type: ignore[attr-defined]
     assert kw["prompt_extend"] is True
@@ -384,20 +441,27 @@ def test_image_sync_intent_is_native_async_when_false(
         model="wanx2.1-t2i-turbo", content=[image_text_part("a cat")]
     )
     task = asyncio.run(provider.create_image_task(req, sync=False))
+    _mount_image_succeeded(provider)
     task = asyncio.run(provider.get_image_task(task.task_id))
-    assert img.async_calls == 1 and img.wait_calls == ["ds-task-1"]
+    assert img.async_calls == 1 and img.wait_calls == []  # SDK wait bypassed
     assert img.sync_calls == 0
+    assert task.status == "succeeded"
 
 
 def test_image_failed_status_is_clean_error(provider: DashScopeProvider) -> None:
-    """A wait whose response is not SUCCEEDED (e.g. an upstream error or a
-    non-DashScope-shaped body when base_url is pointed elsewhere) surfaces as a
-    clean TaskFailedError — not an opaque AttributeError on
-    ``resp.output.results`` (the original CI failure)."""
-
-    img = provider._fake_image  # type: ignore[attr-defined]
-    img._wait_result = SimpleNamespace(
-        status_code=400, code="Bad Request", message="no task", output=None
+    """A poll whose task is FAILED surfaces as a clean ``TaskFailedError`` —
+    not an opaque AttributeError on ``resp.output.results`` (the original CI
+    failure)."""
+    _mount_image(
+        provider,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "code": "Bad Request",
+                "message": "no task",
+                "output": {"task_status": "FAILED"},
+            },
+        ),
     )
     task = asyncio.run(
         provider.create_image_task(
@@ -413,13 +477,12 @@ def test_image_failed_status_is_clean_error(provider: DashScopeProvider) -> None
 
 
 def test_image_propagates_sdk_error(provider: DashScopeProvider) -> None:
-    """A non-rejection error from wait surfaces as ProviderRequestError."""
-
-    async def boom_wait(task_id: str, **kw: Any) -> Any:
-        raise RuntimeError("upstream down")
-
-    img = provider._fake_image  # type: ignore[attr-defined]
-    img.wait = boom_wait  # type: ignore[method-assign]
+    """A non-rejection error from the poll (an upstream 500) surfaces as
+    ProviderRequestError."""
+    _mount_image(
+        provider,
+        lambda req: httpx.Response(500, json={"code": "InternalError", "message": "upstream down"}),
+    )
     task = asyncio.run(
         provider.create_image_task(
             UnifiedImageRequest(model="m", content=[image_text_part("x")])
@@ -465,6 +528,7 @@ def test_generation_routes_wan27_image_to_generation_surface(
     ``400 InvalidParameter: url error``)."""
     req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("a cat")])
     task = asyncio.run(provider.create_image_task(req))
+    _mount_image_succeeded(provider, generation=True)
     task = asyncio.run(provider.get_image_task(task.task_id))
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
     syn = provider._fake_image  # type: ignore[attr-defined]
@@ -496,6 +560,7 @@ def test_generation_native_async_builds_messages_shaped_kwargs(
         watermark=False,
     )
     task = asyncio.run(provider.create_image_task(req))
+    _mount_image_succeeded(provider, generation=True)
     asyncio.run(provider.get_image_task(task.task_id))
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
     kw = gen.async_kwargs
@@ -514,8 +579,8 @@ def test_generation_native_async_builds_messages_shaped_kwargs(
     assert kw["n"] == 2 and kw["seed"] == 9
     assert kw["negative_prompt"] == "blurry"
     assert kw["watermark"] is False
-    # wait was driven against the returned task id, on the generation surface.
-    assert gen.wait_calls == ["gen-task-1"]
+    # The SDK ``wait`` is bypassed; the poll is driven over httpx.
+    assert gen.wait_calls == []
 
 
 def test_generation_image_extracted_from_choices_content(
@@ -524,8 +589,20 @@ def test_generation_image_extracted_from_choices_content(
     """The finished image rides ``output.choices[].message.content[]`` as a
     ``{"image": url}`` item (matching the SDK's ``ImageGenerationResponse``), not
     ``output.results[].url``."""
-    gen = provider._fake_image_gen  # type: ignore[attr-defined]
-    gen._wait_result = _generation_succeeded("https://dashscope.test/a.png")
+    _mount_image(
+        provider,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "output": {
+                    "task_status": "SUCCEEDED",
+                    "choices": [
+                        {"message": {"role": "assistant", "content": [{"image": "https://dashscope.test/a.png"}]}}
+                    ],
+                }
+            },
+        ),
+    )
     req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("x")])
     task = asyncio.run(provider.create_image_task(req))
     task = asyncio.run(provider.get_image_task(task.task_id))
@@ -587,12 +664,18 @@ def test_generation_sync_intent_uses_sync_inline(
 
 
 def test_generation_failed_status_is_clean_error(provider: DashScopeProvider) -> None:
-    """A non-200 response or no image content surfaces as a clean
-    ``TaskFailedError`` — not an opaque AttributeError (the original CI
-    failure mode for misrouted calls)."""
-    gen = provider._fake_image_gen  # type: ignore[attr-defined]
-    gen._wait_result = SimpleNamespace(
-        status_code=400, code="Bad Request", message="no image", output=None
+    """A FAILED task surfaces as a clean ``TaskFailedError`` — not an opaque
+    AttributeError (the original CI failure mode for misrouted calls)."""
+    _mount_image(
+        provider,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "code": "Bad Request",
+                "message": "no image",
+                "output": {"task_status": "FAILED"},
+            },
+        ),
     )
     req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("x")])
     task = asyncio.run(provider.create_image_task(req))
@@ -604,13 +687,15 @@ def test_generation_failed_status_is_clean_error(provider: DashScopeProvider) ->
 
 
 def test_generation_empty_choices_is_failed(provider: DashScopeProvider) -> None:
-    """A 200 response with no image items surfaces as a clean TaskFailedError."""
-    gen = provider._fake_image_gen  # type: ignore[attr-defined]
-    gen._wait_result = SimpleNamespace(
-        status_code=200,
-        code=None,
-        message=None,
-        output=SimpleNamespace(choices=[]),
+    """A SUCCEEDED response with no image items surfaces as a clean TaskFailedError."""
+    _mount_image(
+        provider,
+        lambda req: httpx.Response(
+            200,
+            json={
+                "output": {"task_status": "SUCCEEDED", "choices": []},
+            },
+        ),
     )
     req = UnifiedImageRequest(model="wan2.7-image", content=[image_text_part("x")])
     task = asyncio.run(provider.create_image_task(req))
@@ -639,11 +724,9 @@ def test_generation_routes_other_image_models_to_synthesis(
     ``AioImageGeneration``."""
     for model in ("wanx2.1-t2i-turbo", "qwen-image-2.0-pro"):
         req = UnifiedImageRequest(model=model, content=[image_text_part("a cat")])
-        asyncio.run(
-            provider.get_image_task(
-                asyncio.run(provider.create_image_task(req)).task_id
-            )
-        )
+        itask = asyncio.run(provider.create_image_task(req))
+        _mount_image_succeeded(provider)
+        asyncio.run(provider.get_image_task(itask.task_id))
     syn = provider._fake_image  # type: ignore[attr-defined]
     gen = provider._fake_image_gen  # type: ignore[attr-defined]
     assert syn.async_calls == 2  # both models went through synthesis
@@ -672,7 +755,9 @@ def test_split_sync_async_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
             extra={"video_base_url": "https://video.test"},
         )
     )
-    # Image native-async path: async_call + wait both carry the image base.
+    # Image native-async path: async_call submits at the image base; the poll
+    # is hand-rolled over httpx (no SDK wait) and must hit the image base too —
+    # slashless.
     itask = asyncio.run(
         p.create_image_task(
             UnifiedImageRequest(
@@ -680,9 +765,14 @@ def test_split_sync_async_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
             )
         )
     )
+    ipolled = _mount_image(
+        p, lambda req: httpx.Response(200, json=_synthesis_succeeded())
+    )
     asyncio.run(p.get_image_task(itask.task_id))
     assert img.async_kwargs["base_address"] == "https://image.test"
-    assert img.wait_kwargs["base_address"] == "https://image.test"
+    assert ipolled, "image poll issued no request"
+    assert ipolled[0] == "https://image.test/tasks/ds-task-1"
+    assert not ipolled[0].endswith("/"), f"trailing slash re-introduced: {ipolled[0]}"
     # Fallback sync path also carries the image base.
     img.reject_async = True
     itask2 = asyncio.run(

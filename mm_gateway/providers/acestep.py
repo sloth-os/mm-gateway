@@ -17,6 +17,7 @@ Docs: https://github.com/ace-step/ACE-Step-1.5/blob/main/docs/en/API.md
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import time
@@ -40,7 +41,16 @@ _STATUS_MAP = {0: "running", 1: "succeeded", 2: "failed"}
 
 class AceStepProvider(MusicProvider):
     name = "acestep"
-    music_models: ClassVar[list[str]] = ["acestep-v15-turbo", "acestep-v15-base", "ace-step-1.5"]
+    music_models: ClassVar[list[str]] = [
+        "acestep-v15-turbo",
+        "acestep-v15-xl-turbo",
+        "acestep-v15-base",
+        "acestep-v15-turbo-shift3",
+        "ace-step-1.5",
+    ]
+    # /release_task retry tuning (transient upstream 502/503/504 + timeouts).
+    _create_max_attempts: ClassVar[int] = 3
+    _create_backoff_base: ClassVar[float] = 0.5
 
     def __init__(self, backend):
         super().__init__(backend)
@@ -62,7 +72,7 @@ class AceStepProvider(MusicProvider):
                 "acestep music requires a prompt (text part)", provider="acestep", status_code=400,
             )
         body = self._build_body(request)
-        data = await request_json(self._client, "POST", "/release_task", provider="acestep", json=body)
+        data = await self._post_release_task(body)
         d = data.get("data") or {}
         task_id = d.get("task_id")
         if not task_id:
@@ -74,6 +84,40 @@ class AceStepProvider(MusicProvider):
             task_id=str(task_id), provider=self.name, model=request.model, status="pending",
             created_at=int(time.time()),
         )
+
+    async def _post_release_task(self, body: dict[str, Any]) -> dict[str, Any]:
+        """POST /release_task with a bounded retry on transient upstream failures.
+
+        ACE-Step's create is a cheap enqueue that should return immediately with a
+        ``task_id``. The hosted front end (Cloudflare in front of ``api.acemusic.ai``)
+        can intermittently return ``504 Gateway Timeout`` with ``Retry-After`` when the
+        origin briefly fails to answer — a transient condition, not a request-shape
+        error (the body/headers match the API docs). Failing the whole generation on
+        the first such blip is brittle, so retry a couple of times with a short
+        backoff before surfacing the error. A 504 returns no ``task_id``, so a retry
+        cannot collide with a task we already created from the gateway's view.
+        """
+        max_attempts = self._create_max_attempts
+        last_exc: Exception | None = None
+        for attempt in range(max_attempts):
+            try:
+                return await request_json(
+                    self._client, "POST", "/release_task", provider="acestep", json=body,
+                )
+            except ProviderTimeoutError as exc:
+                last_exc = exc
+            except ProviderRequestError as exc:
+                # Only retry transient server-side failures (5xx), not 4xx client
+                # errors (auth/validation/quota), which won't change on retry.
+                if (exc.details or {}).get("upstream_status") not in (502, 503, 504):
+                    raise
+                last_exc = exc
+            # Brief backoff; do not honor a long Retry-After (observed ~120s) so a
+            # down origin cannot stall the request for minutes.
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(self._create_backoff_base * (2 ** attempt))
+        assert last_exc is not None
+        raise last_exc
 
     async def get_music_task(self, task_id: str) -> UnifiedMusicTask:
         data = await request_json(

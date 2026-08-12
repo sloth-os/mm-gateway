@@ -69,6 +69,7 @@ omits it.
 
 from __future__ import annotations
 
+import asyncio
 import collections.abc
 import json
 import time
@@ -80,6 +81,7 @@ from dashscope.aigc.image_generation import AioImageGeneration
 from dashscope.aigc.image_synthesis import AioImageSynthesis
 from dashscope.aigc.video_synthesis import AioVideoSynthesis
 from dashscope.api_entities.dashscope_response import (
+    DashScopeAPIResponse,
     ImageGenerationResponse,
     ImageSynthesisResponse,
     VideoSynthesisResponse,
@@ -342,13 +344,22 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         self._video_base = (
             backend.extra.get("video_base_url") or backend.base_url or None
         )
-        # Dedicated httpx client for the video *poll*. The SDK's
-        # ``AioVideoSynthesis.fetch`` is bypassed here (see ``get_video_task``):
-        # its ``_build_api_request`` re-appends a trailing slash to the task URL,
-        # which the third-party proxy rejects with ``500 SYSTEM_ERROR``. The
-        # client carries no ``base_url`` — the full slashless URL is built per
-        # call so httpx's relative-URL path-joining cannot silently drop the
-        # ``/v1`` segment. The auth header rides on the client.
+        # Dedicated httpx clients for the task *poll*. The SDK's
+        # ``AioImageGeneration.wait``/``AioImageSynthesis.wait``/
+        # ``AioVideoSynthesis.fetch`` are bypassed here (see
+        # ``_poll_task``/``get_video_task``): ``_build_api_request`` re-appends a
+        # trailing slash to the task URL (``/v1/tasks/{id}/``) after
+        # ``_normalization_url``/``join_url`` strip it; the third-party proxy
+        # ``ai.ctaigw.cn`` answers ``GET /v1/tasks/{id}`` with 200 but
+        # ``GET /v1/tasks/{id}/`` with ``500 SYSTEM_ERROR``. The clients carry
+        # no ``base_url`` — the full slashless URL is built per call so httpx's
+        # relative-URL path-joining cannot silently drop the ``/v1`` segment.
+        # The auth header rides on each client.
+        self._client_image = httpx.AsyncClient(
+            timeout=300.0,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            event_hooks=backend_event_hooks(),
+        )
         self._client_video = httpx.AsyncClient(
             timeout=300.0,
             headers={"Authorization": f"Bearer {self._api_key}"},
@@ -442,6 +453,97 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
                     urls.append(url)
         return [ImageData(url=u) for u in urls]
 
+    async def _poll_task(
+        self,
+        task_id: str,
+        client: httpx.AsyncClient,
+        base: str | None,
+        resp_cls: type,
+    ) -> Any:
+        """Poll a DashScope async task by hand over httpx until it is terminal.
+
+        Mirrors ``get_video_task``'s slashless GET (the SDK's
+        ``_build_api_request`` re-appends a trailing slash to
+        ``/v1/tasks/{id}`` which the third-party proxy rejects with
+        ``500 SYSTEM_ERROR``), but — unlike the single-shot video poll — loops
+        with the SDK ``wait`` backoff until the task reaches a terminal state.
+        The image path runs the full submit→block generation inside the first
+        ``SyncImageTaskMixin`` poll, so it must return a finished response, not
+        a ``running`` snapshot. The raw JSON is wrapped in a
+        ``DashScopeAPIResponse`` and materialized through
+        ``resp_cls.from_api_response`` so the existing extractors
+        (``_generate_image`` reads ``output.results``; ``_generate_image_generation``
+        reads ``output.choices[].message.content[]``) see the same typed shape
+        the SDK ``wait`` returned.
+        """
+        url = f"{(base or 'https://dashscope.aliyuncs.com/api/v1').rstrip('/')}/tasks/{task_id}"
+        # Match BaseAsyncAioApi.wait: start at 1s, double every 3 polls, cap 5s.
+        wait_seconds = 1.0
+        max_wait_seconds = 5.0
+        step = 0
+        while True:
+            step += 1
+            try:
+                resp = await client.get(url)
+            except httpx.TimeoutException as exc:
+                raise ProviderTimeoutError(
+                    f"dashscope task poll timed out: {exc}", provider="dashscope"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise ProviderRequestError(
+                    f"dashscope task poll transport error: {exc}",
+                    provider="dashscope",
+                ) from exc
+
+            if resp.status_code >= 400:
+                raise ProviderRequestError(
+                    f"dashscope task poll returned HTTP {resp.status_code}",
+                    provider="dashscope",
+                    status_code=_map_status(resp.status_code),
+                    details={
+                        "upstream_status": resp.status_code,
+                        "upstream_body": resp.text[:1000],
+                    },
+                )
+
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise ProviderRequestError(
+                    f"dashscope task poll returned non-JSON body: {exc}",
+                    provider="dashscope",
+                    details={
+                        "upstream_status": resp.status_code,
+                        "upstream_body": resp.text[:1000],
+                    },
+                ) from exc
+
+            output = data.get("output") if isinstance(data, dict) else None
+            if isinstance(output, dict):
+                task_status = output.get("task_status")
+                st = _STATUS_MAP.get(task_status, "running")
+            else:
+                # No ``output`` block (e.g. an upstream error envelope) — mirror
+                # the SDK ``wait`` which returns the response as-is when output
+                # is None; the caller surfaces the non-SUCCEEDED result cleanly.
+                st = "running"
+            if st in ("succeeded", "failed", "cancelled", "expired"):
+                break
+            if wait_seconds < max_wait_seconds and step % 3 == 0:
+                wait_seconds = min(wait_seconds * 2, max_wait_seconds)
+            await asyncio.sleep(wait_seconds)
+
+        api_resp = DashScopeAPIResponse(
+            status_code=resp.status_code,
+            request_id=data.get("request_id") if isinstance(data, dict) else None,
+            code=data.get("code") if isinstance(data, dict) else None,
+            message=data.get("message") if isinstance(data, dict) else None,
+            output=output,
+            usage=data.get("usage") if isinstance(data, dict) else None,
+            headers=dict(resp.headers),
+        )
+        return resp_cls.from_api_response(api_resp)
+
     async def _image_generation_native_async(self, kwargs: dict[str, Any]) -> Any:
         """Submit a multimodal-generation task and block until it finishes.
 
@@ -476,9 +578,11 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             )
 
         try:
-            resp = await AioImageGeneration.wait(
-                task_id, api_key=self._api_key, base_address=self._image_base
+            resp = await self._poll_task(
+                task_id, self._client_image, self._image_base, ImageGenerationResponse
             )
+        except (ProviderTimeoutError, ProviderRequestError):
+            raise
         except Exception as exc:
             raise ProviderRequestError(
                 f"dashscope image wait failed: {exc}", provider="dashscope"
@@ -579,9 +683,11 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             )
 
         try:
-            resp = await AioImageSynthesis.wait(
-                task_id, api_key=self._api_key, base_address=self._image_base
+            resp = await self._poll_task(
+                task_id, self._client_image, self._image_base, ImageSynthesisResponse
             )
+        except (ProviderTimeoutError, ProviderRequestError):
+            raise
         except Exception as exc:
             raise ProviderRequestError(
                 f"dashscope image wait failed: {exc}", provider="dashscope"
