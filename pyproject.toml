@@ -9,7 +9,7 @@ description = "Provider-neutral image, video, and music generation gateway."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
-authors = [{ name = "mm-gateway" }]
+authors = [{ name = "sloth", email = "sloth.os@outlook.com" }]
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
