@@ -71,8 +71,8 @@ import httpx
 # names for it (so it can never be "fully configured"). OpenRouter has no
 # first-class image/video alias, so its *_MODEL (a real upstream slug) is used
 # directly — the registry accepts any model id when the backend's catalogue is
-# dynamic. The five music-only providers (elevenlabs, minimax, udioapi, mureka,
-# acestep) carry only a music triple.
+# dynamic. The four music-only providers (elevenlabs, udioapi, mureka, acestep)
+# carry only a music triple; minimax carries a video triple (H3) plus music.
 PROVIDERS: list[tuple[str, str, str, str, str, str, str, str, str, str, str, str, str]] = [
     # type,
     #   img_key, img_url, img_model, img_alias,
@@ -106,7 +106,7 @@ PROVIDERS: list[tuple[str, str, str, str, str, str, str, str, str, str, str, str
      "", "", "", "",
      "ELEVENLABS_MUSIC_API_KEY", "ELEVENLABS_MUSIC_BASE_URL", "ELEVENLABS_MUSIC_MODEL", "gateway-music-elevenlabs"),
     ("minimax", "", "", "", "",
-     "", "", "", "",
+     "MINIMAX_VIDEO_API_KEY", "MINIMAX_VIDEO_BASE_URL", "MINIMAX_VIDEO_MODEL", "gateway-video-minimax",
      "MINIMAX_MUSIC_API_KEY", "MINIMAX_MUSIC_BASE_URL", "MINIMAX_MUSIC_MODEL", "gateway-music-minimax"),
     ("udioapi", "", "", "", "",
      "", "", "", "",

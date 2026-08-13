@@ -67,6 +67,8 @@ _MODEL_ALIASES: dict[str, tuple[str, str]] = {
     "gateway-video-grok": ("xai", "grok-imagine-video"),
     "gateway-video-wan": ("dashscope", "wanx2.1-t2v-turbo"),
     "gateway-video-svd": ("stability", "stable-video-diffusion"),
+    # MiniMax H3 — one omni model; the content parts pick t2v / i2v / r2v.
+    "gateway-video-minimax": ("minimax", "MiniMax-H3"),
     # Seedance 2.0 is a single Ark model; the content parts pick t2v / i2v, so
     # both aliases resolve to the same omni model id.
     "gateway-video-seedance-2": ("volcengine", "doubao-seedance-2-0-260128"),
