@@ -62,7 +62,7 @@ async def list_models(
         Header(
             alias="Authorization",
             description='Bearer token: "Bearer <api-key>".',
-            examples={"default": {"value": "Bearer sk-gateway-demo"}},
+            examples=["Bearer sk-gateway-demo"],
         ),
     ] = None,
     x_request_id: Annotated[
@@ -70,7 +70,7 @@ async def list_models(
         Header(
             alias="X-Request-Id",
             description="Client-supplied request id (echoed back).",
-            examples={"default": {"value": "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"}},
+            examples=["req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"],
         ),
     ] = None,
     if_none_match: IfNoneMatchHeader = None,

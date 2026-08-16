@@ -7,6 +7,14 @@ name: OpenAPI docs
 #    raw spec straight from the repo).
 # 2. Deploy the spec to GitHub Pages at ``https://<owner>.github.io/<repo>/`` —
 #    Swagger UI renders it read-only, no server or secrets required.
+# 3. Generate a Go client SDK from the spec and push it to the dedicated
+#    ``sloth-os/mm-gateway-go`` repo, so consumers can
+#    ``go get github.com/sloth-os/mm-gateway-go`` instead of hand-rolling HTTP.
+#    The cross-repo push needs a PAT (the default ``GITHUB_TOKEN`` is scoped to
+#    this repo) stored as the ``SDK_PUSH_TOKEN`` secret (repo Settings → Secrets
+#    and variables → Actions, with ``repo`` scope on ``mm-gateway-go``). When the
+#    secret is absent the SDK still builds and is verified — only the push is
+#    skipped, so the run stays green until the secret is configured.
 #
 # The OpenAPI schema is independent of provider configuration: ``create_app``
 # registers every route unconditionally, and provider credentials only affect
@@ -199,3 +207,119 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  # Generate a Go client SDK from the published OpenAPI spec and push it to the
+  # dedicated ``sloth-os/mm-gateway-go`` repo. ``needs: generate`` so it reuses
+  # the freshly-built ``openapi.json`` artifact (the same spec that gets
+  # committed and rendered in Swagger UI), not the checked-in copy — the three
+  # consumers never drift.
+  sdk-go:
+    name: Publish Go SDK
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Bump here when refreshing the generator. Pinned to a stable release tag
+      # (see https://github.com/OpenAPITools/openapi-generator/releases) — the
+      # matching Docker image is openapitools/openapi-generator-cli:<tag>.
+      GEN_VERSION: "7.24.0"
+      SDK_REPO: sloth-os/mm-gateway-go
+    steps:
+      # Reuse the spec artifact rather than regenerating — keeps the SDK
+      # derived from exactly the bytes the commit + Pages jobs publish.
+      - name: Download openapi.json artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openapi-spec
+          path: spec
+
+      - name: Generate Go SDK
+        # The openapi-generator-cli image runs the generator in a container;
+        # map the workspace to /local and run as the runner uid so the emitted
+        # files are owned by the workspace user (not root) and can be cleaned up.
+        #
+        # --global-property=apiTests=false,modelTests=false skips the generated
+        # ``test/`` package: the go generator's test templates emit method names
+        # with a stray ``_0`` suffix (e.g. ``GetHealth_0``) that don't exist on
+        # the service, so the package does not compile. Consumers write their own
+        # tests against the SDK; shipping broken generated tests is worse than
+        # shipping none.
+        run: |
+          mkdir -p sdk-out
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -v "$PWD:/local" \
+            openapitools/openapi-generator-cli:v${GEN_VERSION} generate \
+              -i /local/spec/openapi.json \
+              -g go \
+              -o /local/sdk-out \
+              --git-user-id sloth-os \
+              --git-repo-id mm-gateway-go \
+              --package-name mmgateway \
+              --additional-properties=isGoSubmodule=false \
+              --global-property=apiTests=false,modelTests=false
+          # The generator emits a git_push.sh meant for manual publishing; the
+          # workflow handles the push itself, so drop the helper to avoid
+          # committing a stale, credential-bearing script.
+          rm -f sdk-out/git_push.sh
+          echo "## Generated SDK tree" >> "$GITHUB_STEP_SUMMARY"
+          find sdk-out -maxdepth 2 -type f | sort | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: sdk-out/go.sum
+
+      - name: Verify SDK builds
+        # ``go build ./...`` is the gate: it compiles every non-test package, so
+        # a spec change that yields non-compiling Go fails here before anything
+        # is published. ``go mod tidy`` first reconciles the generator's go.sum
+        # (and its tidied go.mod/go.sum are what get committed). ``go vet`` is
+        # deliberately NOT run: the go generator emits ``unreachable code`` in
+        # the oneOf/anyOf union models (model_input_inner*.go), which fails vet
+        # on every run — a generator wart, not a real defect.
+        working-directory: sdk-out
+        run: |
+          go mod tidy
+          go build ./...
+
+      # Only publish from the default branch — PR runs generate + verify but
+      # never push, so a PR can prove the SDK still builds without side effects.
+      - name: Publish to sloth-os/mm-gateway-go
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SDK_PUSH_TOKEN: ${{ secrets.SDK_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SDK_PUSH_TOKEN}" ]; then
+            echo "SDK_PUSH_TOKEN secret is not set — skipping Go SDK push."
+            echo "Create it in repo Settings → Secrets and variables → Actions"
+            echo "with a PAT (repo scope) for ${SDK_REPO}."
+            exit 0
+          fi
+
+          git clone "https://x-access-token:${SDK_PUSH_TOKEN}@github.com/${SDK_REPO}.git" target
+          cd target
+          # An empty target repo clones to an unborn branch — normalize to main
+          # so the initial commit lands on the expected default branch.
+          if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+            git symbolic-ref HEAD refs/heads/main
+          fi
+          # Overlay the freshly generated SDK over the target tree, deleting any
+          # stale files the generator no longer emits, while preserving .git.
+          rsync -a --delete --exclude='.git' ../sdk-out/ .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Go SDK unchanged — nothing to push"
+            exit 0
+          fi
+          git commit -m "chore(sdk): regenerate Go SDK from openapi spec
+
+          Auto-generated by the openapi.yml workflow (openapi-generator-cli
+          v${GEN_VERSION}) from the gateway's current routes and schemas.
+          Co-Authored-By: Claude <noreply@anthropic.com>"
+          git push origin HEAD:main
+          echo "✓ pushed Go SDK to ${SDK_REPO}" >> "$GITHUB_STEP_SUMMARY"
