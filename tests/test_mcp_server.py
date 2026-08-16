@@ -1,9 +1,10 @@
 """Tests for the HTTP MCP server (``/mcp``).
 
 These exercise the full stack — FastAPI app lifespan, the
-``StreamableHTTPSessionManager``, the delegating ``/mcp`` route, and the seven
-gateway tools (``list_models``, ``create_image``, ``get_image``, ``create_video``,
-``get_video``, ``create_music``, ``get_music``) — over an in-process httpx ASGI
+``StreamableHTTPSessionManager``, the delegating ``/mcp`` route, and the eight
+gateway tools (``list_models``, ``list_model_limits``, ``create_image``,
+``get_image``, ``create_video``, ``get_video``, ``create_music``, ``get_music``)
+— over an in-process httpx ASGI
 transport talking the real MCP Streamable-HTTP client protocol. No sockets, no
 network.
 
@@ -178,7 +179,8 @@ async def test_lists_all_gateway_tools(mcp_app):
         tools = await sess.list_tools()
     names = sorted(t.name for t in tools.tools)
     assert names == ["create_image", "create_music", "create_video",
-                     "get_image", "get_music", "get_video", "list_models"]
+                     "get_image", "get_music", "get_video",
+                     "list_model_limits", "list_models"]
 
 
 async def test_create_tool_schemas_are_provider_neutral(mcp_app):

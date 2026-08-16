@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 TaskStatus = Literal["pending", "running", "succeeded", "failed", "cancelled", "expired"]
 Prompt = Annotated[str, Field(min_length=1)]
@@ -200,12 +200,30 @@ MusicInputList = Annotated[
 class _RequestBase(BaseModel):
     model_config = _STRICT
 
-    model: str = Field(..., min_length=1, description="Model id returned by GET /v1/models.")
+    model: str | None = Field(
+        None,
+        description=(
+            "Model id returned by GET /v1/models, or omit / set to `auto` to let "
+            "the gateway auto-route to a backend whose limits fit the request's "
+            "input (modalities, dimensions, duration, ...)."
+        ),
+    )
     routing: RoutingDirective | None = None
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Client-owned metadata returned unchanged with the task.",
     )
+
+    @model_validator(mode="after")
+    def _normalize_model(self) -> "_RequestBase":
+        # Empty string is the same as omission; lowercase "auto" stays canonical.
+        if self.model is not None:
+            stripped = self.model.strip()
+            if stripped == "":
+                self.model = None
+            elif stripped.lower() == "auto":
+                self.model = "auto"
+        return self
 
 
 # --------------------------------------------------------------------------- #
@@ -450,6 +468,33 @@ class ModelListResponse(BaseModel):
     data: list[ModelEntry]
 
 
+class ModelLimitsEntry(BaseModel):
+    """A model catalogue entry enriched with its documented input/output limits.
+
+    ``limits`` carries the neutral limits the auto-router uses and that a
+    client can consult when crafting a prompt for a specific model. Unknown
+    limits are omitted; clients ignore unknown response members.
+    """
+
+    model_config = _RESPONSE
+
+    id: str
+    object: Literal["model"] = "model"
+    modality: Literal["image", "video", "music"]
+    limits: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Neutral input/output limits (modalities, max prompt, max "
+                    "output count, supported sizes/durations, role flags, ...).",
+    )
+
+
+class ModelLimitsListResponse(BaseModel):
+    model_config = _RESPONSE
+
+    object: Literal["list"] = "list"
+    data: list[ModelLimitsEntry]
+
+
 class HealthResponse(BaseModel):
     model_config = _RESPONSE
 
@@ -469,6 +514,8 @@ __all__ = [
     "LyricsInput",
     "MediaUri",
     "ModelEntry",
+    "ModelLimitsEntry",
+    "ModelLimitsListResponse",
     "ModelListResponse",
     "MusicAudioInput",
     "MusicImageInput",

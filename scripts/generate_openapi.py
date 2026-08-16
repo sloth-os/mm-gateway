@@ -35,6 +35,7 @@ from mm_gateway.server.app import create_app
 EXPECTED_PATHS = {
     "/health",
     "/v1/models",
+    "/v1/models/limits",
     "/v1/images",
     "/v1/images/{image_id}",
     "/v1/videos",

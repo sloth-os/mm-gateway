@@ -325,10 +325,16 @@
             "type": "object"
           },
           "model": {
-            "description": "Model id returned by GET /v1/models.",
-            "minLength": 1,
-            "title": "Model",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model id returned by GET /v1/models, or omit / set to `auto` to let the gateway auto-route to a backend whose limits fit the request's input (modalities, dimensions, duration, ...).",
+            "title": "Model"
           },
           "parameters": {
             "$ref": "#/components/schemas/ImageParameters"
@@ -345,7 +351,6 @@
           }
         },
         "required": [
-          "model",
           "input"
         ],
         "title": "ImageRequest",
@@ -492,6 +497,66 @@
           "modality"
         ],
         "title": "ModelEntry",
+        "type": "object"
+      },
+      "ModelLimitsEntry": {
+        "additionalProperties": true,
+        "description": "A model catalogue entry enriched with its documented input/output limits.\n\n``limits`` carries the neutral limits the auto-router uses and that a\nclient can consult when crafting a prompt for a specific model. Unknown\nlimits are omitted; clients ignore unknown response members.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "limits": {
+            "additionalProperties": true,
+            "description": "Neutral input/output limits (modalities, max prompt, max output count, supported sizes/durations, role flags, ...).",
+            "title": "Limits",
+            "type": "object"
+          },
+          "modality": {
+            "enum": [
+              "image",
+              "video",
+              "music"
+            ],
+            "title": "Modality",
+            "type": "string"
+          },
+          "object": {
+            "const": "model",
+            "default": "model",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "modality"
+        ],
+        "title": "ModelLimitsEntry",
+        "type": "object"
+      },
+      "ModelLimitsListResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ModelLimitsEntry"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "const": "list",
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ModelLimitsListResponse",
         "type": "object"
       },
       "ModelListResponse": {
@@ -958,10 +1023,16 @@
             "type": "object"
           },
           "model": {
-            "description": "Model id returned by GET /v1/models.",
-            "minLength": 1,
-            "title": "Model",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model id returned by GET /v1/models, or omit / set to `auto` to let the gateway auto-route to a backend whose limits fit the request's input (modalities, dimensions, duration, ...).",
+            "title": "Model"
           },
           "parameters": {
             "$ref": "#/components/schemas/MusicParameters"
@@ -978,7 +1049,6 @@
           }
         },
         "required": [
-          "model",
           "input"
         ],
         "title": "MusicRequest",
@@ -1680,10 +1750,16 @@
             "type": "object"
           },
           "model": {
-            "description": "Model id returned by GET /v1/models.",
-            "minLength": 1,
-            "title": "Model",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model id returned by GET /v1/models, or omit / set to `auto` to let the gateway auto-route to a backend whose limits fit the request's input (modalities, dimensions, duration, ...).",
+            "title": "Model"
           },
           "parameters": {
             "$ref": "#/components/schemas/VideoParameters"
@@ -1700,7 +1776,6 @@
           }
         },
         "required": [
-          "model",
           "input"
         ],
         "title": "VideoRequest",
@@ -2841,6 +2916,382 @@
           }
         ],
         "summary": "List Models",
+        "tags": [
+          "meta",
+          "meta"
+        ]
+      }
+    },
+    "/v1/models/limits": {
+      "get": {
+        "description": "List usable models with their documented input/output limits.\n\nUse this to pick a model and craft a prompt that fits: each entry's\n``limits`` carries the input modalities accepted, the max prompt length,\nthe max output count, supported sizes/durations, and per-role support\nflags (image-to-image, first/last frame, reference audio, lyrics, ...).\nThe same catalogue drives auto-routing when a request omits ``model``.",
+        "operationId": "listModelLimits",
+        "parameters": [
+          {
+            "description": "Filter models by output modality.",
+            "in": "query",
+            "name": "modality",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "image",
+                    "video",
+                    "music"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter models by output modality.",
+              "title": "Modality"
+            }
+          },
+          {
+            "description": "Bearer token: \"Bearer <api-key>\".",
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Bearer token: \"Bearer <api-key>\".",
+              "examples": [
+                "Bearer sk-gateway-demo"
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "description": "Client-supplied request id (echoed back).",
+            "in": "header",
+            "name": "X-Request-Id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Client-supplied request id (echoed back).",
+              "examples": [
+                "req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"
+              ],
+              "title": "X-Request-Id"
+            }
+          },
+          {
+            "description": "Previously returned ETag; unchanged resources return 304.",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Previously returned ETag; unchanged resources return 304.",
+              "title": "If-None-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "data": [
+                    {
+                      "id": "gateway-image-pro",
+                      "limits": {
+                        "input_modalities": [
+                          "text",
+                          "image"
+                        ],
+                        "max_output_count": 10,
+                        "max_prompt_chars": 32000,
+                        "modality": "image",
+                        "notes": "Output always base64; supports edits endpoint with masks.",
+                        "source_urls": [
+                          "https://platform.openai.com/docs/guides/image-generation"
+                        ],
+                        "supported_sizes": [
+                          "1024x1024",
+                          "1024x1536",
+                          "1536x1024",
+                          "auto"
+                        ],
+                        "supports_image_to_image": true
+                      },
+                      "modality": "image",
+                      "object": "model"
+                    },
+                    {
+                      "id": "gateway-video-pro",
+                      "limits": {
+                        "aspect_ratios": [
+                          "16:9",
+                          "9:16"
+                        ],
+                        "input_modalities": [
+                          "text",
+                          "image"
+                        ],
+                        "max_duration_seconds": 12,
+                        "min_duration_seconds": 2,
+                        "modality": "video",
+                        "supports_first_frame": true,
+                        "supports_last_frame": true
+                      },
+                      "modality": "video",
+                      "object": "model"
+                    }
+                  ],
+                  "object": "list"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ModelLimitsListResponse"
+                }
+              }
+            },
+            "description": "Models available to the authenticated client with their input/output limits.",
+            "headers": {
+              "ETag": {
+                "description": "Version identifier for conditional retrieval.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The model catalogue has not changed."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/v1/models/limits",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/models/limits",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/v1/models/limits",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to use any generation service"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/models/limits",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/models/limits",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/v1/models/limits",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service returned an error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/models/limits",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/v1/models/limits",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Model Limits",
         "tags": [
           "meta",
           "meta"

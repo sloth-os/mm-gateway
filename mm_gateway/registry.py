@@ -24,12 +24,15 @@ from mm_gateway.config import BackendConfig, KeyConfig, Settings
 from mm_gateway.core.base import ImageProvider, MusicProvider, Provider, VideoProvider
 from mm_gateway.core.exceptions import (
     ForbiddenError,
+    GatewayError,
     ModelNotFoundError,
     ProviderNotConfiguredError,
     ProviderNotFoundError,
     ValidationError,
 )
+from mm_gateway.models.limits import limits_for
 from mm_gateway.observability.logging import get_logger
+import mm_gateway.router as router
 
 log = get_logger("registry")
 
@@ -209,21 +212,73 @@ class Registry:
             })
         return public
 
+    def list_model_limits(self, key: KeyConfig | None = None) -> list[dict[str, Any]]:
+        """Return the catalogue with each model's documented input/output limits.
+
+        Each entry is the public model object plus a ``limits`` member holding
+        the neutral limits (input modalities, max prompt length, max output
+        count, supported sizes/durations, per-role support flags, ...). An
+        alias resolves to its underlying model's limits so a client crafting a
+        prompt for ``gateway-image-pro`` sees ``gpt-image-1``'s real limits.
+        Models with no documented entry get a permissive ``limits`` object.
+        """
+        entries: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for model in self.list_models(key):
+            identity = (model["id"], model["modality"])
+            if identity in seen:
+                continue
+            seen.add(identity)
+            modality = model["modality"]
+            # An alias pins a backend *type*; its limits are the underlying
+            # model's. A raw underlying id is looked up directly.
+            underlying = model["id"]
+            if underlying in self._aliases:
+                _btype, underlying = self._aliases[underlying]
+            limits = limits_for(underlying, modality).to_public_dict()
+            entries.append({
+                "id": model["id"],
+                "object": "model",
+                "modality": modality,
+                "limits": limits,
+            })
+        return entries
+
+    # Model id values that mean "the gateway should pick a backend+model for me".
+    # A request that omits ``model`` (None) or sets it to ``auto`` triggers
+    # auto-routing via :mod:`mm_gateway.router` + the limits catalogue.
+    AUTO_MODEL: frozenset[str] = frozenset({"", "auto"})
+
     def resolve(
         self,
-        model: str,
+        model: str | None,
         key: KeyConfig | None = None,
         *,
         modality: str = "image",
         tag: str | None = None,
         backend_name: str | None = None,
+        request: Any = None,
     ) -> tuple[Provider, str, str]:
         """Return ``(provider, real_model, backend_name)`` for a request.
 
         ``key`` scopes which backends are usable (raises ``ForbiddenError`` if
         none). Within the usable set, ``backend_name`` > ``tag`` > the key's
         per-modality defaults > first usable backend that serves the model.
+
+        When ``model`` is ``None`` or ``"auto"`` (auto-routing), ``request``
+        must carry the unified request so the router can score each candidate
+        model's limits against the request's input profile. The explicit
+        ``backend_name``/``tag`` overrides still apply as preferences.
         """
+        if model is None or model.lower() in self.AUTO_MODEL:
+            if request is None:
+                raise ValidationError(
+                    "Auto-routing requires the request payload; pass the unified "
+                    "request to resolve()."
+                )
+            return self.resolve_auto(request, key, modality=modality, tag=tag,
+                                    backend_name=backend_name)
+
         usable = self.usable_backends(key) if key else list(self._backends)
         if key and not usable:
             raise ForbiddenError(f"API key '{key.id}' is not allowed to use any backend.")
@@ -295,6 +350,104 @@ class Registry:
             chosen = candidates[0]
 
         return self._backends[chosen], real_model, chosen
+
+    def resolve_auto(
+        self,
+        request: Any,
+        key: KeyConfig | None = None,
+        *,
+        modality: str = "image",
+        tag: str | None = None,
+        backend_name: str | None = None,
+    ) -> tuple[Provider, str, str]:
+        """Pick a backend+model whose documented limits fit the request.
+
+        Enumerates every model the usable backends serve for ``modality``,
+        scores each against the request's input profile (modality, roles,
+        prompt length, output count, dimensions/duration/fps) using the limits
+        catalogue, and prefers — among the fitting candidates — the key's
+        per-modality default backend, then its default tag, then the candidate
+        that satisfies the most optional controls, then a stable config order.
+        Raises ``ModelNotFoundError`` when no configured model can serve the
+        request (every candidate failed a hard limit or modality check).
+        """
+        usable = self.usable_backends(key) if key else list(self._backends)
+        if key and not usable:
+            raise ForbiddenError(f"API key '{key.id}' is not allowed to use any backend.")
+        # An explicit backend pin scopes auto-routing to that backend only.
+        if backend_name and backend_name in usable:
+            usable = [backend_name]
+
+        profile = router.profile_for(request)
+        default_backend = self._key_default_backend(key, modality)
+        default_tag = self._key_default_tag(key, modality)
+
+        # (sort_key, name, model). The sort key encodes the preference order:
+        # key default backend > key default tag > most optional controls > the
+        # stable backend/model index. (All ascending except optional_hits.)
+        scored: list[tuple[tuple[int, int, int, int, int], str, str]] = []
+        for b_index, name in enumerate(usable):
+            prov = self._backends[name]
+            if not self._serves_modality(prov, modality):
+                continue
+            cfg_tags = self._configs[name].tags if name in self._configs else []
+            # A routing-profile tag override scopes candidates to tagged backends.
+            if tag and tag not in cfg_tags:
+                continue
+            default_backend_rank = 0 if name == default_backend else 1
+            default_tag_rank = 0 if (default_tag and default_tag in cfg_tags) else 1
+            for m_index, model in enumerate(self._modality_models(prov, modality)):
+                limits = limits_for(model, modality)
+                s = router.score(profile, limits, backend_index=b_index,
+                                 model_index=m_index)
+                if not s.fits:
+                    continue
+                sort_key = (default_backend_rank, default_tag_rank,
+                            -s.optional_hits, b_index, m_index)
+                scored.append((sort_key, name, model))
+
+        if not scored:
+            # Auto-route failure is a 422 validation error (the request's input
+            # is incompatible with every configured model), not a 404: no
+            # specific model id was requested. The explicit-model "no backend
+            # serves this id" path above keeps raising ModelNotFoundError (404).
+            raise GatewayError(
+                "No configured model can serve this auto-routed request; relax "
+                "the input (fewer images, smaller dimensions, shorter duration) "
+                "or set an explicit model.",
+                code="validation_error",
+                status_code=422,
+            )
+        scored.sort(key=lambda item: item[0])
+        _sort_key, chosen_name, chosen_model = scored[0]
+        return self._backends[chosen_name], chosen_model, chosen_name
+
+    # -- helpers ------------------------------------------------------------ #
+
+    def _serves_modality(self, prov: Provider, modality: str) -> bool:
+        if modality == "image":
+            return prov.supports_image
+        if modality == "video":
+            return prov.supports_video
+        return prov.supports_music
+
+    def _key_default_backend(self, key: KeyConfig | None, modality: str) -> str | None:
+        if not key:
+            return None
+        if modality == "image":
+            return key.default_image_backend
+        if modality == "video":
+            return key.default_video_backend
+        return key.default_music_backend
+
+    def _key_default_tag(self, key: KeyConfig | None, modality: str) -> str | None:
+        if not key:
+            return None
+        if modality == "image":
+            return key.default_image_tag
+        if modality == "video":
+            return key.default_video_tag
+        return key.default_music_tag
 
     def get(self, name: str) -> Provider:
         prov = self._backends.get(name)

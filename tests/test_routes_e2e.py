@@ -47,6 +47,34 @@ def test_models_can_be_filtered_by_modality(client):
     assert unchanged.content == b""
 
 
+def test_model_limits_endpoint_returns_limits(client):
+    response = client.get("/v1/models/limits")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["object"] == "list"
+    assert body["data"]
+    # Every entry carries a neutral limits object with at least its modality.
+    for model in body["data"]:
+        assert set(model) == {"id", "object", "modality", "limits"}
+        assert model["limits"]["modality"] == model["modality"]
+    # The same conditional-retrieval contract as /v1/models.
+    assert response.headers["cache-control"] == "private, max-age=60"
+    unchanged = client.get(
+        "/v1/models/limits",
+        headers={"if-none-match": response.headers["etag"]},
+    )
+    assert unchanged.status_code == 304
+    assert unchanged.content == b""
+
+
+def test_model_limits_can_be_filtered_by_modality(client):
+    response = client.get("/v1/models/limits", params={"modality": "music"})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data
+    assert {model["modality"] for model in data} == {"music"}
+
+
 def test_metrics_exposes_prometheus(client):
     client.post("/v1/images", json={"model": "fake-image-1", "input": _text("x")})
     response = client.get("/metrics")
@@ -93,6 +121,72 @@ def test_image_create_returns_task_resource_and_rest_headers(client, fake_provid
     assert request.width == 1024
     assert request.height == 1024
     assert request.response_format == "b64_json"
+
+
+def test_image_auto_routes_when_model_is_omitted(client, fake_provider):
+    # No "model" field -> the gateway auto-routes to a fitting backend. The
+    # response echoes the resolved model id (not "auto" / None).
+    response = client.post("/v1/images", json={"input": _text("auto-routed cat")})
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["model"] == "fake-image-1"
+    assert fake_provider.image_calls[-1].model == "fake-image-1"
+
+
+def test_image_auto_routes_when_model_is_auto(client, fake_provider):
+    response = client.post(
+        "/v1/images", json={"model": "auto", "input": _text("auto string")}
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["model"] == "fake-image-1"
+
+
+def test_idempotent_replay_across_omitted_and_auto_model(client, fake_provider):
+    # Omitting `model` and sending "auto" are documented as equivalent, so the
+    # same Idempotency-Key must replay across the two spellings (not 409).
+    headers = {"idempotency-key": "auto-equiv-1"}
+    first = client.post("/v1/images", json={"input": _text("a cat")}, headers=headers)
+    replay = client.post(
+        "/v1/images",
+        json={"model": "auto", "input": _text("a cat")},
+        headers=headers,
+    )
+    assert first.status_code == replay.status_code == 202
+    assert first.json() == replay.json()
+    assert replay.headers["idempotency-replayed"] == "true"
+    assert len(fake_provider.image_calls) == 1
+
+
+def test_auto_route_no_fit_returns_422_validation_error():
+    # When no configured model can serve an auto-routed request, the gateway
+    # returns 422 validation_error — not 404 model_not_found — because no
+    # specific model id was requested; the request's input is incompatible.
+    from fastapi.testclient import TestClient
+
+    from mm_gateway.config import BackendConfig, KeyConfig, Settings
+    from mm_gateway.server.app import create_app
+    from tests.conftest import FakeProvider
+
+    settings = Settings(
+        backends=[BackendConfig(name="fake", type="fake", api_key="test")],
+        keys=[KeyConfig(id="test", key="")],
+    )
+    app = create_app(settings)
+    provider = FakeProvider(settings.backends[0])
+    provider.image_models = ["dall-e-3"]  # text-only -> rejects image input
+    app.state.registry._backends["fake"] = provider
+    app.state.registry._configs["fake"] = settings.backends[0]
+
+    response = TestClient(app).post("/v1/images", json={
+        "model": "auto",
+        "input": [
+            {"type": "text", "text": "edit this"},
+            {"type": "image", "uri": "https://example.test/a.png"},
+        ],
+    })
+    assert response.status_code == 422, response.text
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "validation_error"
 
 
 def test_create_is_idempotent(client, fake_provider):
@@ -346,7 +440,9 @@ def test_music_poll_returns_audio_lyrics_and_usage(client):
 
 
 def test_validation_uses_problem_details(client):
-    response = client.post("/v1/images", json={"input": _text("no model")})
+    # The envelope is strict: an unknown top-level field yields 422. (``model``
+    # is optional now — omitting it triggers auto-routing, not validation.)
+    response = client.post("/v1/images", json={"input": _text("strict envelope"), "bogus": 1})
     assert response.status_code == 422
     assert response.headers["content-type"].startswith("application/problem+json")
     problem = response.json()

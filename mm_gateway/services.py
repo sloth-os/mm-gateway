@@ -53,7 +53,8 @@ class ImageService:
         backend_name: str | None = None,
     ) -> UnifiedImageTask:
         provider_obj, real_model, backend = self.registry.resolve(
-            request.model, key, modality="image", tag=tag, backend_name=backend_name
+            request.model, key, modality="image", tag=tag, backend_name=backend_name,
+            request=request,
         )
         if not isinstance(provider_obj, ImageProvider):
             raise GatewayError(
@@ -133,7 +134,8 @@ class VideoService:
         backend_name: str | None = None,
     ) -> UnifiedVideoTask:
         provider_obj, real_model, backend = self.registry.resolve(
-            request.model, key, modality="video", tag=tag, backend_name=backend_name
+            request.model, key, modality="video", tag=tag, backend_name=backend_name,
+            request=request,
         )
         if not isinstance(provider_obj, VideoProvider):
             raise GatewayError(
@@ -214,7 +216,8 @@ class MusicService:
         backend_name: str | None = None,
     ) -> UnifiedMusicTask:
         provider_obj, real_model, backend = self.registry.resolve(
-            request.model, key, modality="music", tag=tag, backend_name=backend_name
+            request.model, key, modality="music", tag=tag, backend_name=backend_name,
+            request=request,
         )
         if not isinstance(provider_obj, MusicProvider):
             raise GatewayError(

@@ -76,7 +76,7 @@ def from_image_request(body: ImageRequest) -> UnifiedImageRequest:
     parameters["output_format"] = parameters.pop("file_format", None)
     parameters["output_compression"] = parameters.pop("compression", None)
     return UnifiedImageRequest(
-        model=body.model,
+        model=body.model or "auto",
         content=content,
         **{key: value for key, value in parameters.items() if value is not None},
     )
@@ -104,7 +104,7 @@ def from_video_request(body: VideoRequest) -> UnifiedVideoRequest:
     parameters["return_last_frame"] = parameters.pop("include_last_frame", None)
     parameters["output_format"] = parameters.pop("file_format", None)
     return UnifiedVideoRequest(
-        model=body.model,
+        model=body.model or "auto",
         content=content,
         **{key: value for key, value in parameters.items() if value is not None},
     )
@@ -130,7 +130,7 @@ def from_music_request(body: MusicRequest) -> UnifiedMusicRequest:
     parameters["is_instrumental"] = parameters.pop("instrumental", None)
     parameters["n"] = parameters.pop("output_count", None)
     return UnifiedMusicRequest(
-        model=body.model,
+        model=body.model or "auto",
         content=content,
         lyrics="\n".join(lyrics_parts) or None,
         title=title,

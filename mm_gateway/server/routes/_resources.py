@@ -95,6 +95,14 @@ def new_record(
 def request_fingerprint(body: BaseModel) -> str:
     """Hash the normalized public request for idempotency conflict detection."""
     payload = body.model_dump(mode="json", by_alias=True, exclude_none=True)
+    # "auto" and an omitted model are documented as equivalent auto-route
+    # spellings; exclude_none=True already drops the omitted case, so also
+    # drop the explicit "auto" so both collapse to the same (model-less) hash
+    # and a retry that re-spells the same logical request replays instead of
+    # returning 409. Routing, translation, and stamped_model are unaffected.
+    model = payload.get("model")
+    if isinstance(model, str) and model.strip().lower() == "auto":
+        payload.pop("model", None)
     encoded = json.dumps(
         payload,
         sort_keys=True,
@@ -102,6 +110,18 @@ def request_fingerprint(body: BaseModel) -> str:
         ensure_ascii=True,
     ).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def stamped_model(requested: str | None, resolved: str) -> str:
+    """The model id to stamp on a task record.
+
+    A client that omits ``model`` or sends ``auto`` gets the auto-router's
+    resolved id back (so they can see which model served the request); a client
+    that named a model (or alias) gets that id echoed unchanged.
+    """
+    if requested and requested.lower() != "auto":
+        return requested
+    return resolved
 
 
 async def find_idempotent_record(
@@ -232,4 +252,5 @@ __all__ = [
     "render_resource",
     "replay_resource",
     "request_fingerprint",
+    "stamped_model",
 ]

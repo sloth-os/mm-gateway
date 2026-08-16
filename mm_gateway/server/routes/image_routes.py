@@ -21,6 +21,7 @@ from mm_gateway.server.routes._resources import (
     render_resource,
     replay_resource,
     request_fingerprint,
+    stamped_model,
 )
 from mm_gateway.translators.rest import from_image_request, to_image_response
 
@@ -81,7 +82,7 @@ async def create_image(
         record = new_record(
             "img",
             task,
-            model=body.model,
+            model=stamped_model(body.model, task.model),
             modality="image",
             metadata=body.metadata,
             owner_key_id=key.id,

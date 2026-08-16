@@ -275,6 +275,40 @@ _SUCCESS_EXAMPLES: dict[str, dict] = {
             {"id": "gateway-music-lyria", "object": "model", "modality": "music"},
         ],
     },
+    "ModelLimitsListResponse": {
+        "object": "list",
+        "data": [
+            {
+                "id": "gateway-image-pro",
+                "object": "model",
+                "modality": "image",
+                "limits": {
+                    "modality": "image",
+                    "input_modalities": ["text", "image"],
+                    "supports_image_to_image": True,
+                    "max_prompt_chars": 32000,
+                    "max_output_count": 10,
+                    "supported_sizes": ["1024x1024", "1024x1536", "1536x1024", "auto"],
+                    "notes": "Output always base64; supports edits endpoint with masks.",
+                    "source_urls": ["https://platform.openai.com/docs/guides/image-generation"],
+                },
+            },
+            {
+                "id": "gateway-video-pro",
+                "object": "model",
+                "modality": "video",
+                "limits": {
+                    "modality": "video",
+                    "input_modalities": ["text", "image"],
+                    "supports_first_frame": True,
+                    "supports_last_frame": True,
+                    "min_duration_seconds": 2,
+                    "max_duration_seconds": 12,
+                    "aspect_ratios": ["16:9", "9:16"],
+                },
+            },
+        ],
+    },
 }
 
 _RESOURCE_EXAMPLES: dict[tuple[str, str, str], dict] = {

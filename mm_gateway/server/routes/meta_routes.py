@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse
 
 from mm_gateway.config import KeyConfig
 from mm_gateway.observability.metrics import render_prometheus
-from mm_gateway.schemas.api import HealthResponse, ModelListResponse
+from mm_gateway.schemas.api import HealthResponse, ModelLimitsListResponse, ModelListResponse
 from mm_gateway.server.auth import get_api_key
 from mm_gateway.server.routes._resources import (
     IfNoneMatchHeader,
@@ -77,6 +77,70 @@ async def list_models(
 ) -> dict:
     registry = request.app.state.registry
     models = registry.list_public_models(key)
+    if modality is not None:
+        models = [model for model in models if model.get("modality") == modality]
+    return render_conditional_json(
+        {"object": "list", "data": models},
+        request,
+        cache_control="private, max-age=60",
+    )
+
+
+@router.get(
+    "/v1/models/limits",
+    tags=["meta"],
+    operation_id="listModelLimits",
+    response_model=ModelLimitsListResponse,
+    responses={
+        200: {
+            "description": "Models available to the authenticated client with their input/output limits.",
+            "headers": {
+                "ETag": {
+                    "description": "Version identifier for conditional retrieval.",
+                    "schema": {"type": "string"},
+                }
+            },
+        },
+        304: {"description": "The model catalogue has not changed."},
+        401: {"description": "Missing or unknown API key"},
+        403: {"description": "Key not allowed to use any generation service"},
+    },
+)
+async def list_model_limits(
+    request: Request,
+    key: Annotated[KeyConfig, Depends(get_api_key)],
+    modality: Annotated[
+        Literal["image", "video", "music"] | None,
+        Query(description="Filter models by output modality."),
+    ] = None,
+    authorization: Annotated[
+        str | None,
+        Header(
+            alias="Authorization",
+            description='Bearer token: "Bearer <api-key>".',
+            examples=["Bearer sk-gateway-demo"],
+        ),
+    ] = None,
+    x_request_id: Annotated[
+        str | None,
+        Header(
+            alias="X-Request-Id",
+            description="Client-supplied request id (echoed back).",
+            examples=["req-01HZX4J3K7NQ8X2V9Y6R5W4T3P"],
+        ),
+    ] = None,
+    if_none_match: IfNoneMatchHeader = None,
+) -> dict:
+    """List usable models with their documented input/output limits.
+
+    Use this to pick a model and craft a prompt that fits: each entry's
+    ``limits`` carries the input modalities accepted, the max prompt length,
+    the max output count, supported sizes/durations, and per-role support
+    flags (image-to-image, first/last frame, reference audio, lyrics, ...).
+    The same catalogue drives auto-routing when a request omits ``model``.
+    """
+    registry = request.app.state.registry
+    models = registry.list_model_limits(key)
     if modality is not None:
         models = [model for model in models if model.get("modality") == modality]
     return render_conditional_json(

@@ -72,7 +72,9 @@ as internal tasks and still follow the same public lifecycle.
 }
 ```
 
-- `model` selects an id from `GET /v1/models`.
+- `model` is optional. Omit it (or set `auto`) and the gateway auto-routes to a
+  usable backend whose documented limits fit the request's input; otherwise it
+  selects an id from `GET /v1/models`.
 - `input` is a non-empty ordered typed-parts array containing semantic content
   consumed by the model.
 - `parameters` controls generation and output using neutral names.
@@ -250,6 +252,16 @@ filtered by modality. Backend instance names, provider types, and underlying
 alias targets are not returned. The authenticated key still scopes which
 models are usable. The catalogue is privately cacheable for 60 seconds and
 supports `ETag` / `If-None-Match` revalidation.
+
+`GET /v1/models/limits` returns the same model list, each augmented with a
+`limits` object: the neutral input/output caps the auto-router reasons about —
+accepted input modalities, max prompt length, max output count, supported
+sizes/durations, and per-role support flags (image-to-image, first-frame,
+lyrics, …). A client consults it to craft a prompt that a specific model will
+accept; the auto-router consults it to pick a backend that fits the request.
+Unknown model ids fall back to a permissive entry with no documented
+constraint, so a brand-new provider model is still routable before its row is
+curated.
 
 ## MCP parity
 

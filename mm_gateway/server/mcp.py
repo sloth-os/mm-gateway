@@ -7,8 +7,9 @@ When ``Settings.mcp_enabled`` is true, ``mount_mcp(app, settings)`` mounts a
 buffering its body into a single ``Response``. The session manager's lifespan
 is tied to the app lifespan so the MCP server starts/stops with the gateway.
 
-The MCP server registers seven tools that mirror the provider-neutral HTTP
-resources: model listing plus create/get pairs for images, videos, and music.
+The MCP server registers eight tools that mirror the provider-neutral HTTP
+resources: model listing (with and without limits) plus create/get pairs for
+images, videos, and music.
 Create tools accept the same typed ``input`` and ``parameters`` values as REST,
 always return immediately, and expose gateway-owned task ids.
 
@@ -55,6 +56,7 @@ from mm_gateway.server.routes._resources import (
     remember_create_response,
     replay_resource,
     request_fingerprint,
+    stamped_model,
 )
 from mm_gateway.translators.rest import (
     from_image_request,
@@ -189,16 +191,41 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
 
     @mcp.tool()
     @_tool
+    async def list_model_limits(
+        ctx: Context,
+        modality: Literal["image", "video", "music"] | None = None,
+    ) -> str:
+        """List usable models with their documented input/output limits.
+
+        Each entry's ``limits`` carries the neutral limits the auto-router
+        uses and that a client can consult when crafting a prompt for a
+        specific model (input modalities, max prompt length, max output
+        count, supported sizes/durations, per-role support flags).
+        """
+        import json
+
+        key = _key(ctx)
+        models = registry.list_model_limits(key)
+        if modality is not None:
+            models = [model for model in models if model["modality"] == modality]
+        return json.dumps({"object": "list", "data": models})
+
+    @mcp.tool()
+    @_tool
     async def create_image(
         ctx: Context,
-        model: str,
         input: ImageInputList,
         parameters: ImageParameters | None = None,
+        model: str | None = None,
         routing: RoutingDirective | None = None,
         metadata: dict[str, Any] | None = None,
         idempotency_key: IdempotencyKey = None,
     ) -> str:
-        """Create an asynchronous image task from text and image inputs."""
+        """Create an asynchronous image task from text and image inputs.
+
+        Omit ``model`` (or set ``auto``) to let the gateway auto-route to a
+        backend whose limits fit the request's input.
+        """
 
         key = _key(ctx)
         body = ImageRequest(
@@ -234,7 +261,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
             record = new_record(
                 "img",
                 task,
-                model=model,
+                model=stamped_model(model, task.model),
                 modality="image",
                 metadata=body.metadata,
                 owner_key_id=key.id,
@@ -269,14 +296,17 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
     @_tool
     async def create_video(
         ctx: Context,
-        model: str,
         input: VideoInputList,
         parameters: VideoParameters | None = None,
+        model: str | None = None,
         routing: RoutingDirective | None = None,
         metadata: dict[str, Any] | None = None,
         idempotency_key: IdempotencyKey = None,
     ) -> str:
-        """Create an asynchronous video task from multimodal inputs."""
+        """Create an asynchronous video task from multimodal inputs.
+
+        Omit ``model`` (or set ``auto``) to let the gateway auto-route.
+        """
 
         key = _key(ctx)
         body = VideoRequest(
@@ -312,7 +342,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
             record = new_record(
                 "vid",
                 task,
-                model=model,
+                model=stamped_model(model, task.model),
                 modality="video",
                 metadata=body.metadata,
                 owner_key_id=key.id,
@@ -347,9 +377,9 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
     @_tool
     async def create_music(
         ctx: Context,
-        model: str,
         input: MusicInputList,
         parameters: MusicParameters | None = None,
+        model: str | None = None,
         routing: RoutingDirective | None = None,
         metadata: dict[str, Any] | None = None,
         idempotency_key: IdempotencyKey = None,
@@ -390,7 +420,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
             record = new_record(
                 "mus",
                 task,
-                model=model,
+                model=stamped_model(model, task.model),
                 modality="music",
                 metadata=body.metadata,
                 owner_key_id=key.id,

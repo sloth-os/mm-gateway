@@ -18,7 +18,8 @@ each backend adapter translates those concepts to its native SDK or REST shape.
 | `GET` | `/v1/videos/{video_id}` | Retrieve a video task |
 | `POST` | `/v1/music` | Create a music task |
 | `GET` | `/v1/music/{music_id}` | Retrieve a music task |
-| `GET` | `/v1/models?modality=image|video|music` | List usable models |
+| `GET` | `/v1/models?modality=image\|video\|music` | List usable models |
+| `GET` | `/v1/models/limits?modality=image\|video\|music` | List usable models with documented input/output limits |
 | `GET` | `/health` | Liveness check |
 | `GET` | `/metrics` | Prometheus metrics |
 
@@ -49,7 +50,12 @@ Every create body uses this strict envelope:
 }
 ```
 
-- `model` is an id returned by `GET /v1/models`.
+- `model` is optional. Omit it (or set `"auto"`) and the gateway auto-routes to
+  a usable backend whose documented limits fit the request's input — the text
+  prompt length, input modalities (e.g. image-to-image), requested output count,
+  size, and duration. When set, it is an id returned by `GET /v1/models`. If no
+  configured backend's limits accommodate the request, the call fails with a
+  `422` validation error before any provider is contacted.
 - `input` is always a non-empty ordered list of typed parts. There is no string
   shorthand.
 - `parameters` contains only provider-neutral generation controls.
@@ -58,7 +64,13 @@ Every create body uses this strict envelope:
 - `metadata` is client-owned JSON returned unchanged with the task.
 
 `GET /v1/models` is scoped to the authenticated key, privately cacheable for 60
-seconds, and supports `ETag` / `If-None-Match` revalidation.
+seconds, and supports `ETag` / `If-None-Match` revalidation. `GET
+/v1/models/limits` returns the same model list, each augmented with a `limits`
+object — the neutral input/output caps the auto-router reasons about and that a
+client can consult when crafting a prompt for a specific model (accepted input
+modalities, max prompt length, max output count, supported sizes/durations, and
+per-role support flags such as image-to-image, first-frame, or lyrics). Unknown
+models fall back to a permissive entry with no documented constraint.
 
 Unknown envelope and parameter fields return a normalized `422` error. This is
 intentional: adding a backend does not silently add its private wire options to
@@ -218,9 +230,10 @@ use the same underlying generation service. Health and metrics are open.
 
 ## MCP
 
-Set `mcp.enabled: true` to expose the same contract through seven MCP tools:
-`list_models`, `create_image`, `get_image`, `create_video`, `get_video`,
-`create_music`, and `get_music`.
+Set `mcp.enabled: true` to expose the same contract through eight MCP tools:
+`list_models`, `list_model_limits`, `create_image`, `get_image`, `create_video`,
+`get_video`, `create_music`, and `get_music`. `model` is optional on the create
+tools; omit it (or pass `auto`) to auto-route to a fitting backend.
 
 Create tools take `model`, typed `input`, a modality-specific `parameters`
 object, optional `routing`, optional `metadata`, and an optional

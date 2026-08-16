@@ -9,6 +9,7 @@ EXPECTED_OPERATIONS = {
     ("/health", "get"): "getHealth",
     ("/metrics", "get"): "getMetrics",
     ("/v1/models", "get"): "listModels",
+    ("/v1/models/limits", "get"): "listModelLimits",
     ("/v1/images", "post"): "createImage",
     ("/v1/images/{image_id}", "get"): "getImage",
     ("/v1/videos", "post"): "createVideo",
