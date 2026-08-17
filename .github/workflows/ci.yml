@@ -200,12 +200,22 @@ jobs:
     name: Build & publish Docker image
     needs: lint-and-test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The arm64 slice builds under QEMU emulation, which is markedly slower than
+    # native amd64 — especially the first time, before the gha cache is warm and
+    # any sdist-only provider deps compile from source. 60 min gives that cold
+    # build headroom; warm builds finish far sooner.
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      # QEMU registers the foreign-arch binfmt handlers so an amd64 runner can
+      # cross-build the linux/arm64 slice of the multi-platform manifest. Must
+      # come before setup-buildx so buildx can pick the emulator up.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -271,6 +281,13 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          # On push/tag/dispatch: build a multi-arch manifest (amd64 native +
+          # arm64 under QEMU) and push it to GHCR (and Docker Hub if wired).
+          # On pull_request: build only the native amd64 slice and load it into
+          # the local daemon (no push) — the fastest path that still proves the
+          # Dockerfile builds. `load` is incompatible with multi-platform, so a
+          # PR can only ever do a single arch here.
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -279,26 +296,18 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             PYTHON_VERSION=3.12
-          outputs: |
-            type=docker,dest=image.tar
 
-      - name: Upload image artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: mm-gateway-image
-          path: image.tar
-          retention-days: 7
-
-  # Load the *just-built* image and run a real provider call against it. Skips
+  # Run a real provider call against the *just-pushed* image. Skips
   # (exit 0) when no provider modality is fully configured (all three of an
   # *_IMAGE_* / *_VIDEO_* / *_MUSIC_* API_KEY + BASE_URL + MODEL set) AND the
   # manual run-e2e flag is off — so the workflow is green before secrets exist
   # and only spends real provider calls once one is fully wired.
   e2e:
     name: E2E (real provider)
-    # Depend on both jobs so build's artifact is available AND lint-and-test's
-    # secrets_present output is in the `needs` context for the gate below.
+    # Depend on lint-and-test for the secrets_present gate; pull the built image
+    # straight from the registry (the build job no longer exports a tar artifact
+    # now that it builds a multi-arch manifest, which can't be loaded as a single
+    # docker tar).
     needs: [lint-and-test, build]
     runs-on: ubuntu-latest
     # Same `ci` environment as lint-and-test — the provider *_IMAGE_* /
@@ -307,6 +316,11 @@ jobs:
     # them when the environment is declared here.
     environment: ci
     timeout-minutes: 15
+    # `packages: read` lets the GITHUB_TOKEN pull the multi-arch image the build
+    # job pushed to GHCR; `contents: read` is for the checkout above.
+    permissions:
+      contents: read
+      packages: read
     if: |
       github.event_name != 'pull_request' && (
         needs.lint-and-test.outputs.secrets_present == '1' ||
@@ -315,14 +329,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download image artifact
-        uses: actions/download-artifact@v4
+      # The build job pushes to GHCR; pull that image on the native amd64 runner
+      # (the manifest's amd64 slice). Using `--platform` guards against the rare
+      # case where the runner arch wouldn't match the manifest's default.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          name: mm-gateway-image
-          path: .
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Load image
-        run: docker load --input image.tar
+      - name: Pull image
+        run: docker pull --platform linux/amd64 ghcr.io/${{ github.repository }}:sha-${GITHUB_SHA::7}
 
       - name: Start gateway
         # Pass provider keys + base URLs + pinned models through to the container
