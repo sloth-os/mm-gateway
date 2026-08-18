@@ -206,10 +206,10 @@ jobs:
   build:
     name: Build (${{ matrix.arch }})
     needs: lint-and-test
-    # On a PR we only need a fast "does the Dockerfile still build" check — that
-    # runs the amd64 leg natively and loads it locally (no push). The arm64 leg
-    # is skipped on PRs to avoid spending a runner on a non-publishing event.
-    if: ${{ (github.event_name == 'pull_request' && matrix.arch == 'amd64') || github.event_name != 'pull_request' }}
+    # Both arches build on every event — including PRs. The legs run in parallel
+    # on free native runners, so a PR costs no extra wall-clock (its duration is
+    # the slower leg, ~2-3 min) and catches arm64 regressions early. `manifest`
+    # and `e2e` below are gated off PR, so a PR never publishes.
     strategy:
       fail-fast: false
       matrix:
