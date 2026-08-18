@@ -196,31 +196,42 @@ jobs:
           echo "secrets_present=$set" >> "$GITHUB_OUTPUT"
           echo "secrets_present=$set"
 
+  # Build each architecture natively (amd64 on an amd64 runner, arm64 on an
+  # arm64 runner) instead of cross-building arm64 under QEMU emulation. QEMU had
+  # to compile the C-extension provider deps from source for arm64 — a single
+  # `pip install .` step that took ~10 min under emulation vs ~2 min native.
+  # Each leg pushes a *single-arch* image tagged `sha-<arch>-<short>`; the
+  # `manifest` job below assembles them into one multi-arch manifest list and
+  # publishes the canonical tags (latest / branch / semver / sha-<short>).
   build:
-    name: Build & publish Docker image
+    name: Build (${{ matrix.arch }})
     needs: lint-and-test
-    runs-on: ubuntu-latest
-    # The arm64 slice builds under QEMU emulation, which is markedly slower than
-    # native amd64 — especially the first time, before the gha cache is warm and
-    # any sdist-only provider deps compile from source. 60 min gives that cold
-    # build headroom; warm builds finish far sooner.
-    timeout-minutes: 60
+    # On a PR we only need a fast "does the Dockerfile still build" check — that
+    # runs the amd64 leg natively and loads it locally (no push). The arm64 leg
+    # is skipped on PRs to avoid spending a runner on a non-publishing event.
+    if: ${{ (github.event_name == 'pull_request' && matrix.arch == 'amd64') || github.event_name != 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
 
-      # QEMU registers the foreign-arch binfmt handlers so an amd64 runner can
-      # cross-build the linux/arm64 slice of the multi-platform manifest. Must
-      # come before setup-buildx so buildx can pick the emulator up.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Docker meta
+      - name: Docker meta (per-arch slice)
         id: meta
         uses: docker/metadata-action@v5
         env:
@@ -233,14 +244,13 @@ jobs:
           images: |
             ghcr.io/${{ github.repository }}
             ${{ env.DOCKERHUB_IMAGE }}
-          # Latest on the default branch; a semver tag on release.
+          # Push a single per-arch tag only; the manifest job owns the canonical
+          # (latest/branch/semver/sha-) tags. `latest=false` stops metadata-action
+          # from also tagging this slice `latest`, which would race the manifest
+          # job and could overwrite a multi-arch `latest` with a single-arch one.
+          flavor: latest=false
           tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-,format=short
+            type=sha,prefix=sha-${{ matrix.arch }}-,format=short
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
@@ -275,27 +285,111 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build & push image
+      - name: Build & push arch slice
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          # On push/tag/dispatch: build a multi-arch manifest (amd64 native +
-          # arm64 under QEMU) and push it to GHCR (and Docker Hub if wired).
-          # On pull_request: build only the native amd64 slice and load it into
-          # the local daemon (no push) — the fastest path that still proves the
-          # Dockerfile builds. `load` is incompatible with multi-platform, so a
-          # PR can only ever do a single arch here.
-          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
+          # Single platform per leg — built natively on the matching runner.
+          platforms: ${{ matrix.platform }}
           push: ${{ github.event_name != 'pull_request' }}
           load: ${{ github.event_name == 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Skip provenance/attestation on the per-arch slices so the manifest
+          # job can merge them cleanly with `imagetools create` (attestation
+          # manifests would otherwise complicate the source image refs).
+          provenance: false
+          sbom: false
+          # Per-arch cache scope: amd64 and arm64 layers are not interchangeable,
+          # and scoping avoids any cross-leg cache write race inside one gha scope.
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
           build-args: |
             PYTHON_VERSION=3.12
+
+  # Assemble the per-arch slices (sha-amd64-<short>, sha-arm64-<short>) pushed by
+  # the matrix above into a single multi-arch manifest list, published under the
+  # canonical tags the e2e job and consumers pull. No image is rebuilt here —
+  # `imagetools create` just merges the existing arch manifests by reference.
+  manifest:
+    name: Assemble multi-arch manifest
+    needs: build
+    if: ${{ github.event_name != 'pull_request' && success() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta (canonical tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        env:
+          DOCKERHUB_IMAGE: ${{ secrets.DOCKERHUB_USERNAME && format('{0}/{1}', secrets.DOCKERHUB_USERNAME, github.event.repository.name) || '' }}
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+            ${{ env.DOCKERHUB_IMAGE }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-,format=short
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect Docker Hub credentials
+        id: dockerhub
+        env:
+          USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -n "$USERNAME" ] && [ -n "$TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to Docker Hub
+        if: steps.dockerhub.outputs.configured == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Assemble multi-arch manifest list
+        # `imagetools create` merges the per-arch images into one manifest list
+        # under each canonical tag. Iterates the metadata-action tag list so every
+        # target (GHCR + Docker Hub, latest/branch/semver/sha) gets a manifest.
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          REPO: ${{ github.repository }}
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          short="${SHORT_SHA::7}"
+          for tag in $TAGS; do
+            echo "::group::Assembling $tag"
+            docker buildx imagetools create \
+              -t "$tag" \
+              "ghcr.io/${REPO}:sha-amd64-${short}" \
+              "ghcr.io/${REPO}:sha-arm64-${short}"
+            echo "::endgroup::"
+          done
 
   # Run a real provider call against the *just-pushed* image. Skips
   # (exit 0) when no provider modality is fully configured (all three of an
@@ -304,11 +398,11 @@ jobs:
   # and only spends real provider calls once one is fully wired.
   e2e:
     name: E2E (real provider)
-    # Depend on lint-and-test for the secrets_present gate; pull the built image
-    # straight from the registry (the build job no longer exports a tar artifact
-    # now that it builds a multi-arch manifest, which can't be loaded as a single
-    # docker tar).
-    needs: [lint-and-test, build]
+    # Depend on lint-and-test for the secrets_present gate and on `manifest` so
+    # the canonical multi-arch tags the e2e pulls are already published. (The
+    # `build` job only pushes per-arch `sha-<arch>-<short>` slices; the canonical
+    # `sha-<short>` tag — what e2e pulls — is minted by the manifest job.)
+    needs: [lint-and-test, manifest]
     runs-on: ubuntu-latest
     # Same `ci` environment as lint-and-test — the provider *_IMAGE_* /
     # *_VIDEO_* / *_MUSIC_* API_KEY secrets and *_BASE_URL / *_MODEL variables
