@@ -21,6 +21,13 @@ has all three set the script **exits 0** (skips), so the workflow is green
 before secrets are configured and only spends real provider calls once a
 modality is fully wired.
 
+Vertex is the lone exception to the API-key triple: it authenticates with
+Application Default Credentials (a service-account JSON key in
+``VERTEX_CREDENTIALS_JSON``), so its image/video "triple" is
+``VERTEX_CREDENTIALS_JSON`` + ``VERTEX_LOCATION`` + ``VERTEX_IMAGE_MODEL`` /
+``VERTEX_VIDEO_MODEL`` — credentials and region stand in for the API key and
+base URL (the regional endpoint is derived from the location).
+
 Behaviour
 ---------
 * Collects every (backend, modality) whose ``*_IMAGE_*`` / ``*_VIDEO_*`` /
@@ -87,6 +94,15 @@ PROVIDERS: list[tuple[str, str, str, str, str, str, str, str, str, str, str, str
     ("google", "GOOGLE_IMAGE_API_KEY", "GOOGLE_IMAGE_BASE_URL", "GOOGLE_IMAGE_MODEL", "gateway-image-imagen",
      "GOOGLE_VIDEO_API_KEY", "GOOGLE_VIDEO_BASE_URL", "GOOGLE_VIDEO_MODEL", "gateway-video-veo",
      "GOOGLE_MUSIC_API_KEY", "GOOGLE_MUSIC_BASE_URL", "GOOGLE_MUSIC_MODEL", "gateway-music-lyria"),
+    # Vertex AI is the one ADC backend: it has no per-modality API key triple.
+    # Instead a candidate is "fully configured" when the SA-JSON credentials
+    # (VERTEX_CREDENTIALS_JSON, the CI secret), the region (VERTEX_LOCATION),
+    # and the pinned model (VERTEX_IMAGE_MODEL / VERTEX_VIDEO_MODEL) are all set
+    # — the same three-non-empty-fields gate the triple machinery checks, just
+    # with credentials+region standing in for the API key+base URL.
+    ("vertex", "VERTEX_CREDENTIALS_JSON", "VERTEX_LOCATION", "VERTEX_IMAGE_MODEL", "gateway-image-vertex",
+     "VERTEX_CREDENTIALS_JSON", "VERTEX_LOCATION", "VERTEX_VIDEO_MODEL", "gateway-video-vertex",
+     "", "", "", ""),
     ("xai", "XAI_IMAGE_API_KEY", "XAI_IMAGE_BASE_URL", "XAI_IMAGE_MODEL", "gateway-image-grok",
      "XAI_VIDEO_API_KEY", "XAI_VIDEO_BASE_URL", "XAI_VIDEO_MODEL", "gateway-video-grok",
      "", "", "", ""),

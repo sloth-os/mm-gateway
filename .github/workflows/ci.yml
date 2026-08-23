@@ -108,6 +108,11 @@ jobs:
           GOOGLE_VIDEO_API_KEY: ${{ secrets.GOOGLE_VIDEO_API_KEY }}
           GOOGLE_VIDEO_BASE_URL: ${{ vars.GOOGLE_VIDEO_BASE_URL }}
           GOOGLE_VIDEO_MODEL: ${{ vars.GOOGLE_VIDEO_MODEL }}
+          VERTEX_CREDENTIALS_JSON: ${{ secrets.VERTEX_CREDENTIALS_JSON }}
+          VERTEX_PROJECT: ${{ vars.VERTEX_PROJECT }}
+          VERTEX_LOCATION: ${{ vars.VERTEX_LOCATION }}
+          VERTEX_IMAGE_MODEL: ${{ vars.VERTEX_IMAGE_MODEL }}
+          VERTEX_VIDEO_MODEL: ${{ vars.VERTEX_VIDEO_MODEL }}
           XAI_IMAGE_API_KEY: ${{ secrets.XAI_IMAGE_API_KEY }}
           XAI_IMAGE_BASE_URL: ${{ vars.XAI_IMAGE_BASE_URL }}
           XAI_IMAGE_MODEL: ${{ vars.XAI_IMAGE_MODEL }}
@@ -163,7 +168,11 @@ jobs:
           set=0
           # A provider modality is "fully configured" iff all three of its
           # *_IMAGE_* / *_VIDEO_* / *_MUSIC_* triple are set. The e2e runs iff at
-          # least one modality of one provider is fully configured.
+          # least one modality of one provider is fully configured. Vertex is
+          # the ADC exception: its triple is credentials+region+model (no API
+          # key, no base URL — the regional endpoint is derived from the
+          # location), so VERTEX_CREDENTIALS_JSON stands in for the API key and
+          # VERTEX_LOCATION for the base URL in the triple below.
           for triple in \
             "${OPENAI_IMAGE_API_KEY}:${OPENAI_IMAGE_BASE_URL}:${OPENAI_IMAGE_MODEL}" \
             "${OPENAI_VIDEO_API_KEY}:${OPENAI_VIDEO_BASE_URL}:${OPENAI_VIDEO_MODEL}" \
@@ -171,6 +180,8 @@ jobs:
             "${ARK_VIDEO_API_KEY}:${ARK_VIDEO_BASE_URL}:${ARK_VIDEO_MODEL}" \
             "${GOOGLE_IMAGE_API_KEY}:${GOOGLE_IMAGE_BASE_URL}:${GOOGLE_IMAGE_MODEL}" \
             "${GOOGLE_VIDEO_API_KEY}:${GOOGLE_VIDEO_BASE_URL}:${GOOGLE_VIDEO_MODEL}" \
+            "${VERTEX_CREDENTIALS_JSON}:${VERTEX_LOCATION}:${VERTEX_IMAGE_MODEL}" \
+            "${VERTEX_CREDENTIALS_JSON}:${VERTEX_LOCATION}:${VERTEX_VIDEO_MODEL}" \
             "${XAI_IMAGE_API_KEY}:${XAI_IMAGE_BASE_URL}:${XAI_IMAGE_MODEL}" \
             "${XAI_VIDEO_API_KEY}:${XAI_VIDEO_BASE_URL}:${XAI_VIDEO_MODEL}" \
             "${FLUX_IMAGE_API_KEY}:${FLUX_IMAGE_BASE_URL}:${FLUX_IMAGE_MODEL}" \
@@ -467,6 +478,11 @@ jobs:
           GOOGLE_VIDEO_API_KEY: ${{ secrets.GOOGLE_VIDEO_API_KEY }}
           GOOGLE_VIDEO_BASE_URL: ${{ vars.GOOGLE_VIDEO_BASE_URL }}
           GOOGLE_VIDEO_MODEL: ${{ vars.GOOGLE_VIDEO_MODEL }}
+          VERTEX_CREDENTIALS_JSON: ${{ secrets.VERTEX_CREDENTIALS_JSON }}
+          VERTEX_PROJECT: ${{ vars.VERTEX_PROJECT }}
+          VERTEX_LOCATION: ${{ vars.VERTEX_LOCATION }}
+          VERTEX_IMAGE_MODEL: ${{ vars.VERTEX_IMAGE_MODEL }}
+          VERTEX_VIDEO_MODEL: ${{ vars.VERTEX_VIDEO_MODEL }}
           XAI_IMAGE_API_KEY: ${{ secrets.XAI_IMAGE_API_KEY }}
           XAI_IMAGE_BASE_URL: ${{ vars.XAI_IMAGE_BASE_URL }}
           XAI_IMAGE_MODEL: ${{ vars.XAI_IMAGE_MODEL }}
@@ -528,6 +544,8 @@ jobs:
             -e ARK_VIDEO_API_KEY -e ARK_VIDEO_BASE_URL -e ARK_VIDEO_MODEL \
             -e GOOGLE_IMAGE_API_KEY -e GOOGLE_IMAGE_BASE_URL -e GOOGLE_IMAGE_MODEL \
             -e GOOGLE_VIDEO_API_KEY -e GOOGLE_VIDEO_BASE_URL -e GOOGLE_VIDEO_MODEL \
+            -e VERTEX_CREDENTIALS_JSON -e VERTEX_PROJECT -e VERTEX_LOCATION \
+            -e VERTEX_IMAGE_MODEL -e VERTEX_VIDEO_MODEL \
             -e XAI_IMAGE_API_KEY -e XAI_IMAGE_BASE_URL -e XAI_IMAGE_MODEL \
             -e XAI_VIDEO_API_KEY -e XAI_VIDEO_BASE_URL -e XAI_VIDEO_MODEL \
             -e FLUX_IMAGE_API_KEY -e FLUX_IMAGE_BASE_URL -e FLUX_IMAGE_MODEL \
@@ -577,6 +595,11 @@ jobs:
           GOOGLE_VIDEO_API_KEY: ${{ secrets.GOOGLE_VIDEO_API_KEY }}
           GOOGLE_VIDEO_BASE_URL: ${{ vars.GOOGLE_VIDEO_BASE_URL }}
           GOOGLE_VIDEO_MODEL: ${{ vars.GOOGLE_VIDEO_MODEL }}
+          VERTEX_CREDENTIALS_JSON: ${{ secrets.VERTEX_CREDENTIALS_JSON }}
+          VERTEX_PROJECT: ${{ vars.VERTEX_PROJECT }}
+          VERTEX_LOCATION: ${{ vars.VERTEX_LOCATION }}
+          VERTEX_IMAGE_MODEL: ${{ vars.VERTEX_IMAGE_MODEL }}
+          VERTEX_VIDEO_MODEL: ${{ vars.VERTEX_VIDEO_MODEL }}
           XAI_IMAGE_API_KEY: ${{ secrets.XAI_IMAGE_API_KEY }}
           XAI_IMAGE_BASE_URL: ${{ vars.XAI_IMAGE_BASE_URL }}
           XAI_IMAGE_MODEL: ${{ vars.XAI_IMAGE_MODEL }}

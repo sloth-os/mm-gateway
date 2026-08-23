@@ -1,0 +1,241 @@
+"""Tests for the Vertex AI provider (Imagen image + Veo video, ADC-only).
+
+Vertex is the Gemini Enterprise Agent Platform surface: it serves the same
+Imagen/Veo models as the AI Studio (google) adapter and reuses
+``GenaiImageVideoMixin`` verbatim — only ``genai.Client`` construction differs.
+The client is built with ``vertexai=True`` and ADC ``credentials=`` (never an
+``api_key``). We capture constructor args by monkeypatching ``genai.Client``
+and the three ``google.auth`` loaders — no network, no real key.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import pytest
+
+from mm_gateway.config import BackendConfig
+from mm_gateway.core.exceptions import ProviderNotConfiguredError
+from mm_gateway.providers import vertex as vertex_mod
+from mm_gateway.providers.vertex import VertexProvider
+
+
+def _sa_json(project_id: str = "proj-123") -> str:
+    """A minimally well-formed SA key dict (the private key is never used —
+    construction stops at the ``genai.Client`` the test monkeypatches)."""
+    return json.dumps({
+        "type": "service_account",
+        "project_id": project_id,
+        "private_key": "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+        "private_key_id": "k1",
+        "client_email": f"sa@{project_id}.iam.gserviceaccount.com",
+        "client_id": "c1",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    })
+
+
+def _backend(*, credentials_json: str | None = None, credentials_file: str | None = None,
+             project: str | None = None, location: str | None = "us-central1",
+             extra: dict[str, Any] | None = None) -> BackendConfig:
+    ex: dict[str, Any] = {}
+    if credentials_json is not None:
+        ex["credentials_json"] = credentials_json
+    if credentials_file is not None:
+        ex["credentials_file"] = credentials_file
+    if project is not None:
+        ex["project"] = project
+    if location is not None:
+        ex["location"] = location
+    if extra:
+        ex.update(extra)
+    # api_key is deliberately None — Vertex is ADC-only.
+    return BackendConfig(name="vertex", type="vertex", api_key=None, extra=ex)
+
+
+def _http_options_base(kwargs: dict[str, Any]) -> str | None:
+    """Pull the base_url out of an HttpOptions instance (or None)."""
+    opts = kwargs.get("http_options")
+    if opts is None:
+        return None
+    return getattr(opts, "base_url", None)
+
+
+def _stub_auth(monkeypatch: pytest.MonkeyPatch, *, project_id: str = "proj-123") -> list[dict[str, Any]]:
+    """Replace the three google.auth loaders with stubs that return a sentinel.
+
+    Returns the list each call appended its (scopes,) arg list into, so a test
+    can assert the cloud-platform scope was requested.
+    """
+    calls: list[dict[str, Any]] = []
+    _creds = object()  # sentinel — its identity proves it reached the client
+
+    def _from_dict(info, scopes=None):
+        calls.append({"via": "dict", "scopes": scopes})
+        return _creds, project_id
+
+    def _from_file(path, scopes=None):
+        calls.append({"via": "file", "scopes": scopes, "path": path})
+        return _creds, project_id
+
+    def _default(scopes=None):
+        calls.append({"via": "default", "scopes": scopes})
+        return _creds, project_id
+
+    monkeypatch.setattr(vertex_mod.google.auth, "load_credentials_from_dict", _from_dict)
+    monkeypatch.setattr(vertex_mod.google.auth, "load_credentials_from_file", _from_file)
+    monkeypatch.setattr(vertex_mod.google.auth, "default", _default)
+    return calls
+
+
+def _capture_client(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Monkeypatch genai.Client to capture its kwargs; returns the capture list."""
+    captured: list[dict[str, Any]] = []
+
+    class CapturingClient:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+
+    monkeypatch.setattr(vertex_mod, "genai", type("G", (), {"Client": CapturingClient}))
+    return captured
+
+
+# -- construction -------------------------------------------------------- #
+
+
+def test_requires_location() -> None:
+    """ADC yields credentials but no region — a location is mandatory."""
+    with pytest.raises(ProviderNotConfiguredError):
+        VertexProvider(_backend(location=None, credentials_json=_sa_json()))
+
+
+def test_requires_credentials_when_no_key_no_adc(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no SA key and ambient ADC unavailable, construction fails."""
+    from google.auth.exceptions import DefaultCredentialsError
+
+    monkeypatch.setattr(vertex_mod.google.auth, "default",
+                        lambda scopes=None: (_ for _ in ()).throw(DefaultCredentialsError("no adc")))
+    with pytest.raises(ProviderNotConfiguredError):
+        VertexProvider(_backend(location="us-central1"))
+
+
+def test_credentials_json_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A raw SA-JSON in extra["credentials_json"] is loaded via load_credentials_from_dict."""
+    calls = _stub_auth(monkeypatch)
+    captured = _capture_client(monkeypatch)
+
+    VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x", location="us-central1"))
+
+    # Credentials resolve ONCE (in __init__ via the static resolver); both
+    # clients reuse that single credential, so the loader is called once.
+    assert [c["via"] for c in calls] == ["dict"]
+    # The cloud-platform scope was requested.
+    assert calls[0]["scopes"] == ["https://www.googleapis.com/auth/cloud-platform"]
+    # Two clients built (image + video), both in vertexai mode, no api_key.
+    assert len(captured) == 2
+    assert all(c["vertexai"] is True for c in captured)
+    assert all("api_key" not in c for c in captured)
+    # project + location threaded through.
+    assert all(c["project"] == "proj-x" for c in captured)
+    assert all(c["location"] == "us-central1" for c in captured)
+    # The sentinel credentials object reached the client.
+    assert all(c["credentials"] is not None for c in captured)
+
+
+def test_credentials_file_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A key path in extra["credentials_file"] is loaded via load_credentials_from_file."""
+    calls = _stub_auth(monkeypatch)
+    captured = _capture_client(monkeypatch)
+
+    VertexProvider(_backend(credentials_file="/etc/vertex/sa.json", project="proj-x"))
+
+    assert [c["via"] for c in calls] == ["file"]
+    assert calls[0]["path"] == "/etc/vertex/sa.json"
+    assert all(c["vertexai"] is True for c in captured)
+    assert all("api_key" not in c for c in captured)
+
+
+def test_ambient_adc_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With neither key set, ambient ADC (google.auth.default) is used."""
+    calls = _stub_auth(monkeypatch)
+    captured = _capture_client(monkeypatch)
+
+    VertexProvider(_backend(project="proj-x", location="europe-west1"))
+
+    assert [c["via"] for c in calls] == ["default"]
+    assert all(c["location"] == "europe-west1" for c in captured)
+
+
+def test_project_falls_back_to_sa_key_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No explicit VERTEX_PROJECT → the SA key's own project_id is used."""
+    _stub_auth(monkeypatch, project_id="sa-project-999")
+    captured = _capture_client(monkeypatch)
+
+    # No `project` in extra.
+    VertexProvider(_backend(credentials_json=_sa_json(project_id="sa-project-999")))
+
+    assert all(c["project"] == "sa-project-999" for c in captured)
+
+
+def test_two_distinct_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Image and video get separate client instances (an operator can pin them apart)."""
+    _stub_auth(monkeypatch)
+    _capture_client(monkeypatch)
+
+    p = VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x"))
+    assert p._client is not p._client_video
+
+
+def test_no_base_url_means_none_host_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no operator base pin, http_options.base_url is None (the SDK derives the
+    regional host from the location). http_options is still passed so the logging
+    httpx client is injected regardless."""
+    _stub_auth(monkeypatch)
+    captured = _capture_client(monkeypatch)
+
+    VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x"))
+    assert all("http_options" in c for c in captured)
+    assert all(_http_options_base(c) is None for c in captured)
+
+
+def test_image_and_video_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An operator-pinned image base lands on ``backend.base_url`` (so the image
+    client), and a differing video pin lands on ``extra["video_base_url"]`` (the
+    video client). Mirrors the google adapter's split."""
+    _stub_auth(monkeypatch)
+    captured = _capture_client(monkeypatch)
+
+    p = VertexProvider(_backend(
+        credentials_json=_sa_json(), project="proj-x",
+        # Image base via base_url, video base via the extra the provider reads.
+        location="us-central1",
+        extra={"video_base_url": "https://video.test"},
+    ))
+    # image_base = backend.base_url (None here); video_base = the extra pin.
+    bases = [_http_options_base(c) for c in captured]
+    assert bases == [None, "https://video.test"]
+    assert p._client is not p._client_video
+
+
+# -- modality surface --------------------------------------------------- #
+
+
+def test_no_music_support(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lyria is not available on Vertex — the backend is image+video only."""
+    _stub_auth(monkeypatch)
+    _capture_client(monkeypatch)
+
+    p = VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x"))
+    assert p.supports_image is True
+    assert p.supports_video is True
+    assert p.supports_music is False
+    assert p.image_models == [
+        "imagen-4.0-generate-001",
+        "imagen-3.0-generate-001",
+        "gemini-2.5-flash-image",
+    ]
+    assert p.video_models == [
+        "veo-2.0-generate-001",
+        "veo-3.0-generate-001",
+        "veo-3.1-generate-preview",
+    ]

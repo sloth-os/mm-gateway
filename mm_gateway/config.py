@@ -49,6 +49,13 @@ class BackendConfig:
 
     @property
     def configured(self) -> bool:
+        # Most backends are usable when they have an API key. Vertex is the
+        # exception: it authenticates with a service-account JSON key
+        # (credentials_json / credentials_file) or ambient ADC, never an API
+        # key — so it is configured once a region (location) is pinned (the
+        # adapter resolves credentials at build time).
+        if self.type == "vertex":
+            return bool(self.extra.get("location"))
         return bool(self.api_key)
 
 
@@ -268,6 +275,18 @@ class Settings:
              ("GOOGLE_IMAGE_MODEL", "GOOGLE_VIDEO_MODEL"),
              ("GOOGLE_API_KEY", "GOOGLE_BASE_URL", "GOOGLE_MODEL"),
              ("GOOGLE_MUSIC_API_KEY", "GOOGLE_MUSIC_BASE_URL", "GOOGLE_MUSIC_MODEL")),
+            # Vertex AI (Gemini Enterprise Agent Platform) — same Imagen/Veo
+            # models as the AI Studio surface, reached via the google-genai SDK
+            # in vertexai mode. Auth is **Application Default Credentials only**
+            # (a service-account JSON key), never an API key: the per-modality
+            # key/base_url pairs and the legacy un-split triple are unused, so
+            # they're placeholders. The dedicated vertex branch below reads
+            # VERTEX_CREDENTIALS_JSON / VERTEX_CREDENTIALS_FILE / VERTEX_PROJECT
+            # / VERTEX_LOCATION and registers iff a region is pinned. Lyria is
+            # not on Vertex, so there is no music triple.
+            ("vertex", _NO_PAIR, _NO_PAIR,
+             ("VERTEX_IMAGE_MODEL", "VERTEX_VIDEO_MODEL"),
+             _NO_TRIPLE, _NO_TRIPLE),
             ("xai", ("XAI_IMAGE_API_KEY", "XAI_VIDEO_API_KEY"),
              ("XAI_IMAGE_BASE_URL", "XAI_VIDEO_BASE_URL"),
              ("XAI_IMAGE_MODEL", "XAI_VIDEO_MODEL"),
@@ -320,15 +339,56 @@ class Settings:
             img_key = _env(img_key_env) or _env(legacy_key)
             vid_key = _env(vid_key_env) or _env(legacy_key)
             mus_key = _env(mus_key_env) or _env(legacy_key)
+            # Vertex AI authenticates with Application Default Credentials (a
+            # service-account JSON key), NOT an API key. The key content comes
+            # from VERTEX_CREDENTIALS_JSON (raw JSON, e.g. a CI secret) or
+            # VERTEX_CREDENTIALS_FILE (a path, e.g. a YAML deployment); absent
+            # both, the SDK falls back to ambient ADC (GOOGLE_APPLICATION_
+            # CREDENTIALS / metadata server). A region (VERTEX_LOCATION) is
+            # always required. No other backend type has an ADC path, so for
+            # them a key is still required.
+            if type_ == "vertex":
+                project = _env("VERTEX_PROJECT")
+                location = _env("VERTEX_LOCATION")
+                cred_json = _env("VERTEX_CREDENTIALS_JSON")
+                cred_file = _env("VERTEX_CREDENTIALS_FILE")
+                # Registered iff a region is pinned (ADC itself yields no region).
+                if not location:
+                    continue
+                extra: dict[str, Any] = {}
+                if cred_json:
+                    extra["credentials_json"] = cred_json
+                if cred_file:
+                    extra["credentials_file"] = cred_file
+                if project:
+                    extra["project"] = project
+                extra["location"] = location
+                img_model = _env(img_model_env)
+                vid_model = _env(vid_model_env)
+                if img_model:
+                    extra["image_model"] = img_model
+                if vid_model:
+                    extra["video_model"] = vid_model
+                # Operator-pinned regional hosts. The provider reads the image
+                # base from ``backend.base_url`` and the video base from
+                # ``extra["video_base_url"]`` (falling back to the image base),
+                # mirroring the google adapter. So ``base_url`` gets the image
+                # pin (if any) and ``video_base_url`` is recorded only when the
+                # video pin differs from it.
+                img_base = _env("VERTEX_IMAGE_BASE_URL") or _env("VERTEX_BASE_URL")
+                vid_base = _env("VERTEX_VIDEO_BASE_URL")
+                base_url = img_base
+                if vid_base and vid_base != img_base:
+                    extra["video_base_url"] = vid_base
+                backends.append(BackendConfig(
+                    name=type_, type=type_, api_key=None,
+                    base_url=base_url, tags=[], extra=extra,
+                ))
+                continue
             # A backend is registered iff at least one modality carries a key.
             api_key = img_key or vid_key or mus_key
             if not api_key:
                 continue
-            # When the modalities point at different endpoints, prefer the
-            # image one (image is the primary gateway surface); a provider that
-            # genuinely needs separate endpoints should use a YAML config with
-            # multiple backends of the same type. The split base_urls are still
-            # recorded in extra so an adapter can consult them.
             base_url = _env(img_url_env) or _env(legacy_url) or _env(vid_url_env) or _env(mus_url_env)
             extra: dict[str, Any] = {}
             img_model = _env(img_model_env) or _env(legacy_model)

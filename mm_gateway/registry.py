@@ -40,6 +40,7 @@ log = get_logger("registry")
 _PROVIDER_CLASSES: dict[str, str] = {
     "openai": "OpenAIProvider",
     "google": "GoogleProvider",
+    "vertex": "VertexProvider",
     "xai": "XAIProvider",
     "volcengine": "VolcengineProvider",
     "flux": "FluxProvider",
@@ -60,12 +61,16 @@ _MODEL_ALIASES: dict[str, tuple[str, str]] = {
     "gateway-image-fast": ("openai", "gpt-image-1-mini"),
     "gateway-image-flux": ("flux", "flux-2-pro-text-to-image"),
     "gateway-image-imagen": ("google", "imagen-4.0-generate-001"),
+    # Vertex AI serves the same Imagen/Veo ids as the AI Studio surface; distinct
+    # aliases let a client target the Enterprise platform host explicitly.
+    "gateway-image-vertex": ("vertex", "imagen-4.0-generate-001"),
     "gateway-image-grok": ("xai", "grok-imagine-image"),
     "gateway-image-seedream": ("volcengine", "doubao-seedream-3-0-t2i-250415"),
     "gateway-image-wanx": ("dashscope", "wanx2.1-t2i-turbo"),
     "gateway-image-sd": ("stability", "stable-image-core"),
     "gateway-video-pro": ("volcengine", "doubao-seedance-1-0-pro-250528"),
     "gateway-video-veo": ("google", "veo-2.0-generate-001"),
+    "gateway-video-vertex": ("vertex", "veo-2.0-generate-001"),
     "gateway-video-sora": ("openai", "sora-2"),
     "gateway-video-grok": ("xai", "grok-imagine-video"),
     "gateway-video-wan": ("dashscope", "wanx2.1-t2v-turbo"),

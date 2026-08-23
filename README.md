@@ -289,9 +289,9 @@ workers or replicas must use a shared durable task store so gateway task IDs,
 ownership checks, and idempotency keys remain valid across instances. A custom
 store can be injected with `create_app(settings, task_store=...)`.
 
-Supported adapter types are `openai`, `google`, `xai`, `volcengine`, `flux`,
-`openrouter`, `dashscope`, `stability`, `elevenlabs`, `minimax`, `udioapi`,
-`mureka`, and `acestep`. See
+Supported adapter types are `openai`, `google`, `vertex`, `xai`, `volcengine`,
+`flux`, `openrouter`, `dashscope`, `stability`, `elevenlabs`, `minimax`,
+`udioapi`, `mureka`, and `acestep`. See
 [`docs/providers/reference.md`](docs/providers/reference.md) for backend wire
 details and [`examples/mm-gateway.yaml`](examples/mm-gateway.yaml) for a larger
 configuration.
@@ -299,7 +299,12 @@ configuration.
 If no YAML file exists, environment-based backend configuration is also
 available. The split variables are `<PROVIDER>_IMAGE_*`,
 `<PROVIDER>_VIDEO_*`, and `<PROVIDER>_MUSIC_*`, each with `API_KEY`, `BASE_URL`,
-and `MODEL` variants.
+and `MODEL` variants. `vertex` is the exception: it authenticates with
+Application Default Credentials (a service-account JSON key), so it uses
+`VERTEX_CREDENTIALS_JSON` (raw key content), `VERTEX_CREDENTIALS_FILE` (key
+path), `VERTEX_PROJECT`, and `VERTEX_LOCATION` (region, required) instead of an
+`API_KEY`/`BASE_URL` pair. Lyria is not available on Vertex, so there is no
+music variant.
 
 ## Development
 
