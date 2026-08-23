@@ -1,8 +1,9 @@
 """Gemini Lyria 3-compatible music translator.
 
 The Lyria 3 REST shape (``POST /v1beta/interactions``) is the **Interactions**
-surface — ``{model, input, config}`` — the same envelope Imagen and Lyria's
-``predictInteractions`` speak::
+surface — ``{model, input, config}``, where ``config`` is this gateway's
+abstraction over every backend music knob (Google's literal wire shape uses
+top-level ``response_format`` / ``generation_config`` instead)::
 
     { "model": "lyria-3-pro-preview",
       "input": "a string prompt" | [ {type:"text", text} | {type:"image", mime_type, data} ... ],

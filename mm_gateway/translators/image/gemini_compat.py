@@ -2,7 +2,7 @@
 
 The Gemini image REST shape (``POST /v1/images``) is the **Interactions**
 surface — ``{model, input, config}`` — the same envelope Imagen
-(``GenerateImagesConfig``) and Lyria (``predictInteractions``) speak:
+(``GenerateImagesConfig``) and Lyria (``generation_config``) speak:
 
     { "model": "imagen-4.0-generate-001",
       "input": "a string prompt" | [ {type:"text", text}

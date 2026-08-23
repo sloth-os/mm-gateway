@@ -2,12 +2,11 @@
 
 Image and video go through the ``google-genai`` SDK (``client.aio.models`` and
 ``client.aio.operations``). Music is served by the **Lyria 3** Interactions
-API, which the SDK does not yet expose ergonomically; this adapter speaks that
-one REST surface directly over httpx against the same
-``generativelanguage.googleapis.com`` host the SDK uses, with the API key as a
-``?key=`` query parameter. Lyria is synchronous — a single ``predictInteractions``
-call returns the audio inline — so, like ElevenLabs/MiniMax, we wrap it as a
-synthetic in-memory task for the gateway's uniform poll surface.
+API (``POST /v1beta/interactions``), spoken directly over httpx against the
+same ``generativelanguage.googleapis.com`` host the SDK uses, authenticated
+with the ``x-goog-api-key`` header. Lyria is synchronous — a single
+Interactions call returns the audio inline — so, like ElevenLabs/MiniMax, we
+wrap it as a synthetic in-memory task for the gateway's uniform poll surface.
 """
 
 from __future__ import annotations
@@ -252,10 +251,19 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
         request: UnifiedMusicRequest = rec["request"]
         try:
             body = self._lyria_body(request)
-            url = (f"{self._music_base}/v1beta/models/{rec['model']}:predictInteractions"
-                   f"?key={self._api_key}")
+            # Lyria 3 Interactions API: POST /v1beta/interactions — the model
+            # travels in the request body, not the path, and there is no
+            # :predictInteractions method (that path 404s). Authenticated with
+            # the x-goog-api-key header the google-genai SDK uses (rather than
+            # the ?key= query form, which the gateway's curl logger would not
+            # mask outside CI).
+            url = f"{self._music_base}/v1beta/interactions"
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            }
             async with httpx.AsyncClient(timeout=240.0, event_hooks=backend_event_hooks()) as c:
-                resp = await c.post(url, json=body, headers={"Content-Type": "application/json"})
+                resp = await c.post(url, json=body, headers=headers)
         except httpx.HTTPError as exc:
             rec["status"] = "failed"; rec["error"] = str(exc)
             raise ProviderRequestError(
@@ -273,17 +281,18 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
             rec["status"] = "failed"
             rec["error"] = "no audio in lyria response"
             raise TaskFailedError("google lyria returned no audio", provider="google")
+        media_type = _lyria_media_type(request.audio_format)
         rec["status"] = "succeeded"
         rec["completed_at"] = int(time.time())
         rec["audio_b64"] = audio_b64
-        rec["audio_media_type"] = "audio/wav"
+        rec["audio_media_type"] = media_type
         if lyrics:
             rec["lyrics"] = lyrics
         if request.duration is not None:
             rec["usage"] = MusicUsage(duration=int(request.duration))
         return UnifiedMusicTask(
             task_id=task_id, provider=self.name, model=rec["model"], status="succeeded",
-            audio_b64=audio_b64, audio_media_type="audio/wav", lyrics=rec.get("lyrics"),
+            audio_b64=audio_b64, audio_media_type=media_type, lyrics=rec.get("lyrics"),
             created_at=rec["created_at"], completed_at=rec["completed_at"],
             usage=rec.get("usage"),
         )
@@ -335,20 +344,68 @@ class GoogleProvider(SyncImageTaskMixin, ImageProvider, VideoProvider, MusicProv
         if not parts:
             parts.append({"type": "text", "text": request.lyrics or ""})
         body: dict[str, Any] = {"model": request.model, "input": parts}
-        config: dict[str, Any] = {"response_modalities": ["AUDIO"]}
-        if request.audio_format:
-            config["response_format"] = {"type": request.audio_format}
+        # The Interactions request takes these as top-level fields (not nested in
+        # a ``config`` key). ``response_format`` is the AudioResponseFormat
+        # envelope: a ``"type": "audio"`` discriminator plus a ``mime_type``
+        # drawn from the SDK's output enum (audio/wav, audio/mp3, ...). Omit it
+        # entirely when no format is pinned: Lyria's default output is MP3.
+        mime = _lyria_request_mime(request.audio_format)
+        if mime:
+            body["response_format"] = {"type": "audio", "mime_type": mime}
+        # ``generation_config`` carries the generation knobs the SDK recognises
+        # (``seed``). Other provider-specific knobs ride through best-effort
+        # inside ``generation_config`` — unknown fields are ignored upstream.
+        generation_config: dict[str, Any] = {}
         if request.negative_prompt:
-            config["negative_prompt"] = request.negative_prompt
+            generation_config["negative_prompt"] = request.negative_prompt
         if request.seed is not None:
-            config["seed"] = request.seed
+            generation_config["seed"] = request.seed
         if request.guidance_scale is not None:
-            config["guidance_scale"] = request.guidance_scale
+            generation_config["guidance_scale"] = request.guidance_scale
         if request.n is not None:
-            config["number_of_outputs"] = request.n
-        config.update(request.extra.get("lyria_config") or {})
-        body["config"] = config
+            generation_config["number_of_outputs"] = request.n
+        generation_config.update(request.extra.get("lyria_config") or {})
+        if generation_config:
+            body["generation_config"] = generation_config
         return body
+
+
+def _lyria_request_mime(audio_format: str | None) -> str | None:
+    """SDK-enum value for the Interactions ``response_format.mime_type``.
+
+    The output enum (``AudioResponseFormatMimeType``) is
+    ``audio/mp3``/``audio/wav``/``audio/ogg_opus``/``audio/l16``/``audio/alaw``/
+    ``audio/mulaw`` — note ``audio/mp3``, NOT ``audio/mpeg`` (that lives in the
+    broader *input* audio-parts enum and is not accepted for the output format).
+    Returns ``None`` to omit ``response_format`` entirely: Lyria emits MP3 by
+    default when no envelope is sent, so a bare MP3 request need not pin it.
+    """
+    if not audio_format:
+        return None
+    if audio_format == "mp3":
+        return "audio/mp3"
+    if audio_format == "wav":
+        return "audio/wav"
+    if audio_format == "ogg_opus":
+        return "audio/ogg_opus"
+    return f"audio/{audio_format}"
+
+
+def _lyria_media_type(audio_format: str | None) -> str:
+    """Client-facing MIME of the inline audio the Lyria call returns.
+
+    Matches the gateway convention every other music provider uses (minimax /
+    elevenlabs / udioapi / mureka all map mp3 -> ``audio/mpeg``, and
+    ``rest.py``'s music default is ``audio/mpeg``). The default is MP3 because
+    Lyria emits MP3 unless ``response_format`` requests WAV.
+    """
+    if not audio_format or audio_format == "mp3":
+        return "audio/mpeg"
+    if audio_format == "wav":
+        return "audio/wav"
+    if audio_format == "ogg_opus":
+        return "audio/ogg"
+    return f"audio/{audio_format}"
 
 
 def _extract_lyria_output(data: dict[str, Any]) -> tuple[str | None, str | None]:

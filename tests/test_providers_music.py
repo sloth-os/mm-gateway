@@ -683,3 +683,118 @@ def test_lyria_translates_inline_reference_media() -> None:
         "data": "AAAA",
         "role": "reference_audio",
     } in parts
+
+
+def test_lyria_body_uses_interactions_shape_not_predict_path() -> None:
+    """The Interactions surface takes top-level response_format /
+    generation_config — no `config` wrapper, no response_modalities."""
+    from mm_gateway.providers.google import GoogleProvider
+
+    p = GoogleProvider(_backend("google"))
+    request = UnifiedMusicRequest(
+        model="lyria-3-pro-preview",
+        content=[text_part("a happy song")],
+        seed=7, negative_prompt="vocals", guidance_scale=2.0, n=3,
+        audio_format="mp3",
+    )
+    body = p._lyria_body(request)
+    # model and input are the only required top-level fields; the path the
+    # adapter posts to is /v1beta/interactions, so model is NOT in the URL.
+    assert body["model"] == "lyria-3-pro-preview"
+    assert body["input"] == [{"type": "text", "text": "a happy song"}]
+    assert "config" not in body
+    assert "response_modalities" not in body
+    # response_format.mime_type uses the SDK output enum: audio/mp3 (NOT
+    # audio/mpeg, which only the input-parts enum accepts).
+    assert body["response_format"] == {"type": "audio", "mime_type": "audio/mp3"}
+    gc = body["generation_config"]
+    assert gc["seed"] == 7
+    assert gc["negative_prompt"] == "vocals"
+    assert gc["guidance_scale"] == 2.0
+    assert gc["number_of_outputs"] == 3
+
+
+def test_lyria_request_mime_uses_sdk_output_enum_and_omits_default() -> None:
+    """response_format.mime_type is the SDK output enum (audio/mp3 not
+    audio/mpeg); no audio_format => omit response_format (Lyria default MP3)."""
+    from mm_gateway.providers.google import _lyria_request_mime
+
+    assert _lyria_request_mime(None) is None
+    assert _lyria_request_mime("") is None
+    assert _lyria_request_mime("mp3") == "audio/mp3"
+    assert _lyria_request_mime("wav") == "audio/wav"
+    assert _lyria_request_mime("ogg_opus") == "audio/ogg_opus"
+
+
+def test_lyria_body_omits_response_format_when_no_audio_format() -> None:
+    from mm_gateway.providers.google import GoogleProvider
+
+    p = GoogleProvider(_backend("google"))
+    body = p._lyria_body(UnifiedMusicRequest(
+        model="lyria-3-pro-preview", content=[text_part("a happy song")]))
+    # No audio_format => no response_format sent; Lyria's default MP3 applies.
+    assert "response_format" not in body
+    assert "generation_config" not in body  # no knobs set either
+
+
+def test_lyria_media_type_defaults_to_mp3_and_maps_formats() -> None:
+    from mm_gateway.providers.google import _lyria_media_type
+
+    # Default + mp3 -> audio/mpeg (the IANA/gateway-standard MIME for MP3),
+    # NOT audio/wav (Lyria's default output is MP3, not WAV).
+    assert _lyria_media_type(None) == "audio/mpeg"
+    assert _lyria_media_type("") == "audio/mpeg"
+    assert _lyria_media_type("mp3") == "audio/mpeg"
+    assert _lyria_media_type("wav") == "audio/wav"
+    assert _lyria_media_type("ogg_opus") == "audio/ogg"
+
+
+def test_lyria_poll_hits_interactions_endpoint_with_api_key_header() -> None:
+    """End-to-end of the Lyria synthetic-task poll: the first poll performs the
+    blocking upstream POST. Assert the URL path and auth header the adapter now
+    uses (no :predictInteractions, no ?key=)."""
+    from mm_gateway.providers.google import GoogleProvider
+
+    p = GoogleProvider(_backend("google", api_key="SECRET"))
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={
+            "steps": [{"type": "model_output", "content": [
+                {"type": "audio", "data": "UklGRiQAAABXQVZFZmV"},
+            ]}],
+        })
+
+    # Swap the per-poll httpx.AsyncClient for a MockTransport one so the
+    # event-hook-wrapped client in get_music_task is exercised in-process.
+    import mm_gateway.providers.google as gmod
+    real_async_client = httpx.AsyncClient
+
+    class _MockClient(httpx.AsyncClient):
+        def __init__(self, *a, **kw):
+            kw.pop("timeout", None)
+            kw["transport"] = httpx.MockTransport(handler)
+            kw["base_url"] = "https://generativelanguage.googleapis.com"
+            super().__init__(*a, **kw)
+
+    gmod.httpx.AsyncClient = _MockClient  # type: ignore[attr-defined]
+    try:
+        create = asyncio.run(p.create_music_task(
+            UnifiedMusicRequest(model="lyria-3-pro-preview", content=[text_part("x")])
+        ))
+        task = asyncio.run(p.get_music_task(create.task_id))
+    finally:
+        gmod.httpx.AsyncClient = real_async_client  # type: ignore[attr-defined]
+
+    assert len(seen) == 1
+    req = seen[0]
+    # /v1beta/interactions — NOT /v1beta/models/...:predictInteractions?key=
+    assert req.url.path == "/v1beta/interactions"
+    assert "key=" not in str(req.url)
+    assert req.headers["x-goog-api-key"] == "SECRET"
+    assert task.status == "succeeded"
+    assert task.audio_b64 == "UklGRiQAAABXQVZFZmV"
+    # No audio_format => Lyria default MP3 => reported as audio/mpeg.
+    assert task.audio_media_type == "audio/mpeg"
