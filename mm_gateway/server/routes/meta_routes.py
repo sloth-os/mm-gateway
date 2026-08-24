@@ -9,6 +9,7 @@ from fastapi.responses import PlainTextResponse
 
 from mm_gateway.config import KeyConfig
 from mm_gateway.observability.metrics import render_prometheus
+from mm_gateway.observability.selection import STORE as SELECTION_STORE
 from mm_gateway.schemas.api import HealthResponse, ModelLimitsListResponse, ModelListResponse
 from mm_gateway.server.auth import get_api_key
 from mm_gateway.server.routes._resources import (
@@ -158,4 +159,8 @@ async def list_model_limits(
     responses={200: {"description": "Prometheus exposition"}},
 )
 async def metrics() -> str:
-    return render_prometheus()
+    # Request counters/histograms first, then the per-backend selection health
+    # (success rate, latency EWMA, rate-limit cooldown, attempts) that drives
+    # auto-routing — the two share the same Prometheus exposition.
+    parts = [render_prometheus(), SELECTION_STORE.render_prometheus()]
+    return "\n".join(p for p in parts if p)

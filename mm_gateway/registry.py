@@ -32,6 +32,7 @@ from mm_gateway.core.exceptions import (
 )
 from mm_gateway.models.limits import limits_for
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.observability.selection import STORE as SELECTION_STORE
 import mm_gateway.router as router
 
 log = get_logger("registry")
@@ -96,10 +97,15 @@ _MODEL_ALIASES: dict[str, tuple[str, str]] = {
 class Registry:
     def __init__(self, settings: Settings):
         self.settings = settings
-        # backend name -> Provider instance
+        # backend name -> Provider instance (the *default* account's instance;
+        # kept for backward compatibility with ``providers``/``backends``).
         self._backends: dict[str, Provider] = {}
         # backend name -> BackendConfig
         self._configs: dict[str, BackendConfig] = {}
+        # (backend name, account id) -> Provider instance (one per credential).
+        self._accounts: dict[tuple[str, str], Provider] = {}
+        # backend name -> ordered account ids (at least one: "default").
+        self._backend_accounts: dict[str, list[str]] = {}
         self._aliases = dict(_MODEL_ALIASES)
         self._build()
 
@@ -111,39 +117,73 @@ class Registry:
             if cls_name is None:
                 log.warning("unknown_backend_type", backend=cfg.name, type=cfg.type)
                 continue
-            try:
-                module = importlib.import_module(f"mm_gateway.providers.{cfg.type}")
-                cls = getattr(module, cls_name)
-                provider = cls(cfg)
-                # Honor an operator-pinned image model (BackendConfig.extra[
-                # "image_model"], set by the legacy env-var layout's *_MODEL).
-                # Append it to this instance's served list so resolve() and
-                # /v1/models accept it even if it isn't in the provider's
-                # hardcoded catalogue (e.g. a freshly released model id). The
-                # instance attribute shadows the ClassVar, so other backends of
-                # the same type are unaffected.
-                extra_model = cfg.extra.get("image_model")
-                if extra_model and provider.supports_image and extra_model not in provider.image_models:
-                    provider.image_models = [*provider.image_models, extra_model]
-                # Same treatment for a video model pinned via the legacy env
-                # layout's *_VIDEO_MODEL (extra["video_model"]).
-                extra_video = cfg.extra.get("video_model")
-                if extra_video and provider.supports_video and extra_video not in provider.video_models:
-                    provider.video_models = [*provider.video_models, extra_video]
-                # Same treatment for a music model pinned via the legacy env
-                # layout's *_MUSIC_MODEL (extra["music_model"]).
-                extra_music = cfg.extra.get("music_model")
-                if extra_music and provider.supports_music and extra_music not in provider.music_models:
-                    provider.music_models = [*provider.music_models, extra_music]
-                self._backends[cfg.name] = provider
-                self._configs[cfg.name] = cfg
-                log.info("backend_registered", backend=cfg.name, type=cfg.type,
-                         tags=cfg.tags, image=provider.supports_image,
-                         video=provider.supports_video, music=provider.supports_music)
-            except ProviderNotConfiguredError as exc:
-                log.info("backend_skipped", backend=cfg.name, reason=exc.message)
-            except Exception as exc:  # noqa: BLE001
-                log.error("backend_init_failed", backend=cfg.name, error=str(exc))
+            module = importlib.import_module(f"mm_gateway.providers.{cfg.type}")
+            cls = getattr(module, cls_name)
+            accounts = cfg.accounts()
+            account_ids: list[str] = []
+            for account_id, api_key, base_url, extra in accounts:
+                per_cfg = self._per_account_config(cfg, account_id, api_key,
+                                                   base_url, extra)
+                try:
+                    provider = cls(per_cfg)
+                except ProviderNotConfiguredError as exc:
+                    log.info("backend_account_skipped", backend=cfg.name,
+                             account=account_id, reason=exc.message)
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    log.error("backend_account_init_failed", backend=cfg.name,
+                              account=account_id, error=str(exc))
+                    continue
+                self._apply_pinned_models(provider, per_cfg)
+                self._accounts[(cfg.name, account_id)] = provider
+                account_ids.append(account_id)
+            if not account_ids:
+                # Every account failed to construct → the backend is unusable.
+                log.info("backend_skipped", backend=cfg.name, reason="no account built")
+                continue
+            self._configs[cfg.name] = cfg
+            self._backend_accounts[cfg.name] = account_ids
+            # The default account (first one) backs the legacy single-instance
+            # accessors and explicit (non-auto) resolution.
+            default = self._accounts[(cfg.name, account_ids[0])]
+            self._backends[cfg.name] = default
+            log.info("backend_registered", backend=cfg.name, type=cfg.type,
+                     tags=cfg.tags, accounts=account_ids, image=default.supports_image,
+                     video=default.supports_video, music=default.supports_music)
+
+    def _per_account_config(self, cfg: BackendConfig, account_id: str,
+                            api_key: str | None, base_url: str | None,
+                            extra: dict[str, Any]) -> BackendConfig:
+        """Build a per-account BackendConfig so the provider sees the right creds.
+
+        A provider constructor reads ``backend.api_key`` / ``backend.base_url`` /
+        ``backend.extra``; for a multi-account backend each account carries its
+        own key (and optional base_url). The account id is stashed on ``extra``
+        so adapters/selection can attribute outcomes to the right account.
+        """
+        merged = dict(extra)
+        merged.setdefault("__account_id", account_id)
+        return BackendConfig(
+            name=cfg.name, type=cfg.type, api_key=api_key or cfg.api_key,
+            base_url=base_url or cfg.base_url, tags=list(cfg.tags), extra=merged,
+        )
+
+    def _apply_pinned_models(self, provider: Provider, cfg: BackendConfig) -> None:
+        # Honor an operator-pinned image model (BackendConfig.extra[
+        # "image_model"], set by the legacy env-var layout's *_MODEL). Append it
+        # to this instance's served list so resolve() and /v1/models accept it
+        # even if it isn't in the provider's hardcoded catalogue (e.g. a freshly
+        # released model id). The instance attribute shadows the ClassVar, so
+        # other backends of the same type are unaffected.
+        extra_model = cfg.extra.get("image_model")
+        if extra_model and provider.supports_image and extra_model not in provider.image_models:
+            provider.image_models = [*provider.image_models, extra_model]
+        extra_video = cfg.extra.get("video_model")
+        if extra_video and provider.supports_video and extra_video not in provider.video_models:
+            provider.video_models = [*provider.video_models, extra_video]
+        extra_music = cfg.extra.get("music_model")
+        if extra_music and provider.supports_music and extra_music not in provider.music_models:
+            provider.music_models = [*provider.music_models, extra_music]
 
     @property
     def providers(self) -> dict[str, Provider]:
@@ -425,8 +465,122 @@ class Registry:
                 status_code=422,
             )
         scored.sort(key=lambda item: item[0])
-        _sort_key, chosen_name, chosen_model = scored[0]
-        return self._backends[chosen_name], chosen_model, chosen_name
+        candidates = self._rank_auto_candidates(scored, modality)
+        if not candidates:
+            # Auto-route failure is a 422 validation error (the request's input
+            # is incompatible with every configured model), not a 404: no
+            # specific model id was requested. The explicit-model "no backend
+            # serves this id" path above keeps raising ModelNotFoundError (404).
+            raise GatewayError(
+                "No configured model can serve this auto-routed request; relax "
+                "the input (fewer images, smaller dimensions, shorter duration) "
+                "or set an explicit model.",
+                code="validation_error",
+                status_code=422,
+            )
+        prov, account_id, model, name = candidates[0]
+        # Stash the account on the provider instance so the service's
+        # outcome-recording (latency / rate-limit) attributes to the right
+        # credential. Set defensively — some test fakes may not allow setattr.
+        try:
+            prov.account_id = account_id  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            pass
+        return prov, model, name
+
+    def enumerate_auto_candidates(
+        self,
+        request: Any,
+        key: KeyConfig | None = None,
+        *,
+        modality: str = "image",
+        tag: str | None = None,
+        backend_name: str | None = None,
+    ) -> list[tuple[Provider, str, str, str]]:
+        """Return ``(provider, account_id, model, backend_name)`` ranked best-first.
+
+        Same fit/limits logic as :meth:`resolve_auto`, but every fitting candidate
+        is returned in health-ranked order rather than just the top one. The
+        ranking blends the router's static preference (key defaults > most
+        optional controls > stable order) with the selection store's live health
+        score (success rate + latency + rate-limit cooldown): a candidate in a
+        rate-limit cooldown sinks to the bottom, a healthy fast one rises. Each
+        backend's accounts are interleaved so a multi-account backend contributes
+        one candidate per credential — the retry layer then tries the next
+        account (same backend) or the next backend in turn.
+
+        Used by the services' retry-across-backends loop in auto mode. Raises
+        the same 422 :class:`GatewayError` as :meth:`resolve_auto` when nothing
+        fits.
+        """
+        usable = self.usable_backends(key) if key else list(self._backends)
+        if key and not usable:
+            raise ForbiddenError(f"API key '{key.id}' is not allowed to use any backend.")
+        if backend_name and backend_name in usable:
+            usable = [backend_name]
+
+        profile = router.profile_for(request)
+        default_backend = self._key_default_backend(key, modality)
+        default_tag = self._key_default_tag(key, modality)
+
+        scored: list[tuple[tuple[int, int, int, int, int], str, str]] = []
+        for b_index, name in enumerate(usable):
+            prov = self._backends[name]
+            if not self._serves_modality(prov, modality):
+                continue
+            cfg_tags = self._configs[name].tags if name in self._configs else []
+            if tag and tag not in cfg_tags:
+                continue
+            default_backend_rank = 0 if name == default_backend else 1
+            default_tag_rank = 0 if (default_tag and default_tag in cfg_tags) else 1
+            for m_index, model in enumerate(self._modality_models(prov, modality)):
+                limits = limits_for(model, modality)
+                s = router.score(profile, limits, backend_index=b_index,
+                                 model_index=m_index)
+                if not s.fits:
+                    continue
+                sort_key = (default_backend_rank, default_tag_rank,
+                            -s.optional_hits, b_index, m_index)
+                scored.append((sort_key, name, model))
+        scored.sort(key=lambda item: item[0])
+        return self._rank_auto_candidates(scored, modality)
+
+    def _rank_auto_candidates(
+        self, scored: list[tuple[tuple, str, str]], modality: str,
+    ) -> list[tuple[Provider, str, str, str]]:
+        """Expand a static-ranked list into per-account, health-ranked candidates.
+
+        ``scored`` is the router's static ordering (key defaults → optional
+        hits → stable index). For each ``(backend, model)`` entry we emit one
+        candidate per account (credential) the backend carries, attribute it a
+        live health score from the selection store, and reorder so healthy,
+        fast, non-rate-limited candidates come first while keeping the static
+        preference as a tie-breaker. A candidate in a rate-limit cooldown sinks
+        to the very bottom (the retry layer still tries it last rather than
+        dropping it, in case the cooldown is stale). Returns ``[]`` when no
+        candidate fits.
+        """
+        if not scored:
+            return []
+        expanded: list[tuple[tuple, Provider, str, str, str]] = []
+        for rank, name, model in scored:
+            account_ids = self._backend_accounts.get(name, ["default"])
+            for account_id in account_ids:
+                prov = self._accounts.get((name, account_id)) or self._backends.get(name)
+                if prov is None:
+                    continue
+                health = SELECTION_STORE.score(backend=name, account=account_id,
+                                               model=model, modality=modality)
+                rate_limited = SELECTION_STORE.is_rate_limited(
+                    backend=name, account=account_id, model=model, modality=modality,
+                )
+                # Sort key: (rate_limited_flag desc→so healthy first, then
+                # health desc, then the static rank asc). ``rate_limited`` is
+                # 0/1 so healthy (0) sorts before rate-limited (1).
+                health_key = (1 if rate_limited else 0, -health, rank, name, account_id)
+                expanded.append((health_key, prov, account_id, model, name))
+        expanded.sort(key=lambda item: (item[0][0], item[0][1], item[0][2]))
+        return [(p, aid, m, n) for (_, p, aid, m, n) in expanded]
 
     # -- helpers ------------------------------------------------------------ #
 

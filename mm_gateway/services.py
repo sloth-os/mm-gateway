@@ -22,8 +22,17 @@ from mm_gateway.registry import Registry
 from mm_gateway.schemas.image import UnifiedImageRequest, UnifiedImageTask
 from mm_gateway.schemas.music import UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
+from mm_gateway.services_selection import retry_across_backends
 
 log = get_logger("service")
+
+# Model id values (None or "auto") that trigger auto-routing + retry-across.
+_AUTO = {None, "", "auto"}
+
+
+def _is_auto(model: str | None) -> bool:
+    """True when the caller left model selection to the gateway (auto-routing)."""
+    return model is None or model.lower() in _AUTO
 
 
 class ImageService:
@@ -52,8 +61,55 @@ class ImageService:
         tag: str | None = None,
         backend_name: str | None = None,
     ) -> UnifiedImageTask:
+        want_sync = wait if wait is not None else self.sync_default
+        model = request.model
+        if _is_auto(model):
+            # Auto mode: the registry ranks every fitting (backend, account,
+            # model) candidate by limits *and* live health; we try them
+            # best-first, retrying the next on a retryable failure so one flaky
+            # backend (or one exhausted key) doesn't surface to the client.
+            candidates = self.registry.enumerate_auto_candidates(
+                request, key, modality="image", tag=tag, backend_name=backend_name,
+            )
+            if not candidates:
+                # enumerate raises a 422 when nothing fits; reaching here means
+                # the candidates were dropped after ranking (e.g. all in
+                # cooldown) — still surface a validation error, not a 500.
+                raise GatewayError(
+                    "No configured model can serve this auto-routed request.",
+                    code="validation_error", status_code=422,
+                )
+            routed_root = request
+
+            async def attempt(prov, account_id, real_model, backend):
+                if not isinstance(prov, ImageProvider):
+                    raise GatewayError(
+                        f"Backend '{backend}' does not support image generation.",
+                        code="unsupported_feature", status_code=400,
+                    )
+                routed = routed_root.model_copy(
+                    update={"model": real_model, "provider": backend}
+                )
+                with timed(backend, "image"):
+                    try:
+                        task = await prov.create_image_task(routed, sync=want_sync)
+                    except GatewayError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        raise GatewayError(f"image create failed: {exc}", provider=backend,
+                                           code="provider_error", status_code=502) from exc
+                task.provider = backend
+                # Sync-wait on the per-account provider that owns the task, so
+                # polling uses the correct credential.
+                if want_sync:
+                    task = await self._await_or_timeout(prov, task)
+                return task
+
+            return await retry_across_backends(
+                candidates=candidates, attempt=attempt, modality="image", key=key,
+            )
         provider_obj, real_model, backend = self.registry.resolve(
-            request.model, key, modality="image", tag=tag, backend_name=backend_name,
+            model, key, modality="image", tag=tag, backend_name=backend_name,
             request=request,
         )
         if not isinstance(provider_obj, ImageProvider):
@@ -62,12 +118,6 @@ class ImageService:
                 code="unsupported_feature", status_code=400,
             )
         routed = request.model_copy(update={"model": real_model, "provider": backend})
-        # Resolve the front-end's sync/async intent once here: ``wait`` wins when
-        # explicit, else the ``image_sync_default`` setting. Passed down to the
-        # provider so a sync-aware adapter (DashScope) can pick its synchronous
-        # inline upstream API instead of a native async task when the caller
-        # asked to block.
-        want_sync = wait if wait is not None else self.sync_default
         with timed(backend, "image"):
             try:
                 task = await provider_obj.create_image_task(routed, sync=want_sync)
@@ -133,6 +183,48 @@ class VideoService:
         tag: str | None = None,
         backend_name: str | None = None,
     ) -> UnifiedVideoTask:
+        want_sync = wait if wait is not None else self.sync_default
+        if _is_auto(request.model):
+            # Auto mode: rank every fitting (backend, account, model) candidate
+            # by limits *and* live health, then try them best-first, retrying on
+            # a retryable failure so one flaky backend / exhausted key is hidden.
+            candidates = self.registry.enumerate_auto_candidates(
+                request, key, modality="video", tag=tag, backend_name=backend_name,
+            )
+            if not candidates:
+                raise GatewayError(
+                    "No configured model can serve this auto-routed request.",
+                    code="validation_error", status_code=422,
+                )
+            routed_root = request
+
+            async def attempt(prov, account_id, real_model, backend):
+                if not isinstance(prov, VideoProvider):
+                    raise GatewayError(
+                        f"Backend '{backend}' does not support video generation.",
+                        code="unsupported_feature", status_code=400,
+                    )
+                routed = routed_root.model_copy(
+                    update={"model": real_model, "provider": backend}
+                )
+                with timed(backend, "video"):
+                    try:
+                        task = await prov.create_video_task(routed)
+                    except GatewayError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        raise GatewayError(f"video create failed: {exc}", provider=backend,
+                                           code="provider_error", status_code=502) from exc
+                task.provider = backend
+                # Sync-wait here, on the per-account provider that actually owns
+                # the task, so polling uses the correct credential.
+                if want_sync:
+                    task = await self._await_or_timeout(prov, task)
+                return task
+
+            return await retry_across_backends(
+                candidates=candidates, attempt=attempt, modality="video", key=key,
+            )
         provider_obj, real_model, backend = self.registry.resolve(
             request.model, key, modality="video", tag=tag, backend_name=backend_name,
             request=request,
@@ -153,7 +245,7 @@ class VideoService:
                                    code="provider_error", status_code=502) from exc
         # Stamp the owning backend so the poll route can route correctly.
         task.provider = backend
-        if (wait if wait is not None else self.sync_default):
+        if want_sync:
             task = await self._await_or_timeout(provider_obj, task)
         return task
 
@@ -215,6 +307,48 @@ class MusicService:
         tag: str | None = None,
         backend_name: str | None = None,
     ) -> UnifiedMusicTask:
+        want_sync = wait if wait is not None else self.sync_default
+        if _is_auto(request.model):
+            # Auto mode: rank every fitting (backend, account, model) candidate
+            # by limits *and* live health, then try them best-first, retrying on
+            # a retryable failure so one flaky backend / exhausted key is hidden.
+            candidates = self.registry.enumerate_auto_candidates(
+                request, key, modality="music", tag=tag, backend_name=backend_name,
+            )
+            if not candidates:
+                raise GatewayError(
+                    "No configured model can serve this auto-routed request.",
+                    code="validation_error", status_code=422,
+                )
+            routed_root = request
+
+            async def attempt(prov, account_id, real_model, backend):
+                if not isinstance(prov, MusicProvider):
+                    raise GatewayError(
+                        f"Backend '{backend}' does not support music generation.",
+                        code="unsupported_feature", status_code=400,
+                    )
+                routed = routed_root.model_copy(
+                    update={"model": real_model, "provider": backend}
+                )
+                with timed(backend, "music"):
+                    try:
+                        task = await prov.create_music_task(routed)
+                    except GatewayError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        raise GatewayError(f"music create failed: {exc}", provider=backend,
+                                           code="provider_error", status_code=502) from exc
+                task.provider = backend
+                # Sync-wait on the per-account provider that owns the task, so
+                # polling uses the correct credential.
+                if want_sync:
+                    task = await self._await_or_timeout(prov, task)
+                return task
+
+            return await retry_across_backends(
+                candidates=candidates, attempt=attempt, modality="music", key=key,
+            )
         provider_obj, real_model, backend = self.registry.resolve(
             request.model, key, modality="music", tag=tag, backend_name=backend_name,
             request=request,
@@ -235,7 +369,7 @@ class MusicService:
                                    code="provider_error", status_code=502) from exc
         # Stamp the owning backend so the poll route can route correctly.
         task.provider = backend
-        if (wait if wait is not None else self.sync_default):
+        if want_sync:
             task = await self._await_or_timeout(provider_obj, task)
         return task
 

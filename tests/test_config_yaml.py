@@ -255,6 +255,35 @@ def test_backend_configured_flag():
     assert BackendConfig(name="b", type="openai", api_key="").configured is False
 
 
+def test_from_file_parses_credentials_list(tmp_path):
+    # The credentials list is the primary way one backend fronts several keys.
+    path = tmp_path / "c.yaml"
+    path.write_text(
+        "backends:\n"
+        "  - name: oai\n"
+        "    type: openai\n"
+        "    extra: {shared: 1}\n"
+        "    credentials:\n"
+        "      - id: prod\n"
+        "        api_key: kp\n"
+        "        base_url: https://prod.example\n"
+        "        extra: {region: us}\n"
+        "      - api_key: ks\n"
+        "keys:\n"
+        "  - {id: t, key: \"\"}\n",
+        encoding="utf-8",
+    )
+    s = Settings.from_file(path)
+    accounts = s.backends[0].accounts()
+    assert [a[0] for a in accounts] == ["prod", "account-1"]
+    assert accounts[0][1] == "kp"
+    assert accounts[0][2] == "https://prod.example"
+    # Account-extra merges over backend-extra.
+    assert accounts[0][3] == {"shared": 1, "region": "us"}
+    assert accounts[1][3] == {"shared": 1}
+    assert s.backends[0].configured is True
+
+
 # --------------------------------------------------------------------------- #
 # Config file discovery + from_env
 # --------------------------------------------------------------------------- #

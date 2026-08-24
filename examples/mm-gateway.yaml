@@ -44,6 +44,15 @@ backends:
     type: openai
     api_key: ${OPENAI_API_KEY}
     tags: [prod, image-primary]
+    # One backend can front a *pool* of upstream keys: list them under
+    # `credentials` and auto-mode rotates among them (retrying the next key on
+    # a rate-limit) and ranks them by live health. The single `api_key` above
+    # stays as the default account; the list is optional.
+    credentials:
+      - id: primary
+        api_key: ${OPENAI_API_KEY}
+      - id: overflow
+        api_key: ${OPENAI_API_KEY_OVERFLOW:}
   - name: openrouter-fallback
     type: openrouter
     api_key: ${OPENROUTER_API_KEY:}

@@ -38,6 +38,15 @@ class BackendConfig:
     task records for poll routing). ``type`` selects the provider adapter
     class (e.g. ``volcengine``, ``openai``). ``tags`` are free-form routing
     labels a key can allow/deny.
+
+    Multiple accounts/keys on one backend: a backend may carry a ``credentials``
+    list (each entry a mapping with ``api_key``/``base_url``/``extra``) in
+    addition to — or instead of — the single ``api_key``/``base_url``/``extra``
+    triple. When ``credentials`` is set the registry builds one provider instance
+    per credential and the auto-router/selection layer rotates among them (and
+    retries the next account on a rate-limit), so one backend name fronts a
+    pool of upstream keys. A backend with no ``credentials`` behaves exactly as
+    before — a single (default) account.
     """
 
     name: str
@@ -46,6 +55,12 @@ class BackendConfig:
     base_url: str | None = None
     tags: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
+    # Per-account credentials. Each entry is a mapping with optional
+    # ``api_key``/``base_url``/``extra`` keys; an entry may be a bare string
+    # (treated as an ``api_key`` with inherited base_url/extra). When non-empty
+    # the single ``api_key``/``base_url``/``extra`` fields are ignored for
+    # account enumeration (but still gate ``configured`` below).
+    credentials: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def configured(self) -> bool:
@@ -59,7 +74,36 @@ class BackendConfig:
         if self.type == "vertex":
             return any(self.extra.get(k) for k in
                        ("credentials_json", "credentials_file", "project", "location"))
+        if self.credentials:
+            return any(_cred_api_key(c) for c in self.credentials)
         return bool(self.api_key)
+
+    def accounts(self) -> list[tuple[str, str | None, str | None, dict[str, Any]]]:
+        """Enumerate ``(account_id, api_key, base_url, extra)`` per credential.
+
+        ``extra`` is the merged account-over-base dict (account-extra shadows the
+        backend-level extra), so a per-account credential can override an
+        endpoint or model pin while inheriting the rest. ``base_url`` is the
+        account's own override (``None`` means inherit the backend-level one —
+        the registry resolves it when building the per-account BackendConfig).
+        ``account_id`` is ``id``/``name``/``account`` from the credential entry,
+        or a synthetic ``account-<i>`` when omitted. A backend with no
+        ``credentials`` yields one ``default`` account built from its single
+        api_key/base_url/extra.
+        """
+        if not self.credentials:
+            return [("default", self.api_key, None, dict(self.extra))]
+        out: list[tuple[str, str | None, str | None, dict[str, Any]]] = []
+        for i, cred in enumerate(self.credentials):
+            account_id = _cred_id(cred, i)
+            api_key = _cred_api_key(cred)
+            base_url = _cred_base_url(cred)
+            merged = dict(self.extra)
+            cextra = cred.get("extra") if isinstance(cred, dict) else None
+            if cextra:
+                merged.update(cextra)
+            out.append((account_id, api_key, base_url, merged))
+        return out
 
 
 @dataclass(frozen=True)
@@ -190,6 +234,7 @@ class Settings:
                 base_url=b.get("base_url"),
                 tags=list(b.get("tags") or []),
                 extra=dict(b.get("extra") or {}),
+                credentials=list(b.get("credentials") or []),
             )
             for b in (raw.get("backends") or [])
         ]
@@ -405,9 +450,23 @@ class Settings:
                 ))
                 continue
             # A backend is registered iff at least one modality carries a key.
+            # The plural *_API_KEYS variants also count: an operator may set only
+            # the multi-account list (no singular key), so the plural blob is the
+            # configured gate in that case and the first listed key becomes the
+            # default account.
             api_key = img_key or vid_key or mus_key
+            creds = _credential_list(
+                _env_plural(img_key_env)
+                or _env_plural(vid_key_env)
+                or _env_plural(mus_key_env)
+                or _env_plural(legacy_key)
+            )
             if not api_key:
-                continue
+                if creds:
+                    # Only the plural list is set — the first key is the default.
+                    api_key = _cred_api_key(creds[0]) or None
+                else:
+                    continue
             base_url = _env(img_url_env) or _env(legacy_url) or _env(vid_url_env) or _env(mus_url_env)
             extra: dict[str, Any] = {}
             img_model = _env(img_model_env) or _env(legacy_model)
@@ -423,9 +482,13 @@ class Settings:
                 extra["video_base_url"] = _env(vid_url_env)
             if _env(mus_url_env) and _env(mus_url_env) != base_url:
                 extra["music_base_url"] = _env(mus_url_env)
+            # creds (the multi-account list) was resolved above as part of the
+            # configured gate; pass it through so the registry builds one
+            # provider per credential.
             backends.append(BackendConfig(
                 name=type_, type=type_, api_key=api_key,
                 base_url=base_url, tags=[], extra=extra,
+                credentials=creds,
             ))
         # An implicit key authorises all configured backends. If the operator
         # sets GATEWAY_API_KEY, that becomes the required token; otherwise the
@@ -446,6 +509,57 @@ def _find_config_file() -> str | None:
         if Path(candidate).exists():
             return candidate
     return None
+
+
+# -- credential-entry helpers (multi-account backends) ---------------------- #
+
+
+def _cred_id(cred: Any, index: int) -> str:
+    """A credential entry's account id (``id``/``name`` or ``account-<i>``)."""
+    if isinstance(cred, dict):
+        for k in ("id", "name", "account"):
+            v = cred.get(k)
+            if v:
+                return str(v)
+    return f"account-{index}"
+
+
+def _cred_api_key(cred: Any) -> str | None:
+    """Extract an API key from a credential entry (dict or bare string)."""
+    if isinstance(cred, str):
+        return cred or None
+    if isinstance(cred, dict):
+        v = cred.get("api_key") or cred.get("key")
+        return v or None
+    return None
+
+
+def _cred_base_url(cred: Any) -> str | None:
+    """Extract a base_url override from a credential entry."""
+    if isinstance(cred, dict):
+        return cred.get("base_url")
+    return None
+
+
+def _env_plural(name: str | None) -> str | None:
+    """Read the plural ``<NAME>S`` env var (multi-account key list)."""
+    if not name:
+        return None
+    return _env(f"{name}S")
+
+
+def _credential_list(raw: str | None) -> list[dict[str, Any]]:
+    """Parse a comma/newline-separated multi-account key blob into credentials.
+
+    Whitespace-only entries are dropped; the remaining tokens each become a
+    bare ``{"api_key": token}`` credential entry (account ids auto-assigned by
+    :meth:`BackendConfig.accounts`). Returns ``[]`` (single-account default)
+    when the blob is empty — preserving the legacy single-key behaviour.
+    """
+    if not raw:
+        return []
+    keys = [t.strip() for t in raw.replace("\n", ",").split(",") if t.strip()]
+    return [{"api_key": k} for k in keys]
 
 
 _INTERP = re.compile(r"\$\{([A-Z0-9_]+)(?::([^}]*))?\}")
