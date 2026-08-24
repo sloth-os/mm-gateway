@@ -197,15 +197,14 @@ jobs:
           ls -la site
 
       - name: Configure Pages
-        # ``enablement: true`` makes configure-pages auto-enable the Pages site
-        # (Source = "GitHub Actions") when it isn't yet, using this job's
-        # ``pages: write`` permission. Without it the step 404s ("Get Pages site
-        # failed... Not Found") on a repo where Pages was never turned on —
-        # which is what was failing the run. Idempotent: once enabled, it's a
-        # no-op read of the existing site config.
+        # Pages is enabled once on the repo (Settings → Pages, Source =
+        # "GitHub Actions"); configure-pages then just reads that config to set
+        # this step's base_url/base_path outputs. If Pages isn't enabled the
+        # default GITHUB_TOKEN still can't create it (GitHub returns "Resource
+        # not accessible by integration"), so enablement=true would just trade
+        # one error for another — leave it disabled and enable Pages on the repo
+        # instead. The site URL is published at https://sloth-os.github.io/mm-gateway/.
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
