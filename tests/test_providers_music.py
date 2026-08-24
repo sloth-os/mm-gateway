@@ -639,34 +639,33 @@ def test_acestep_native_cover_and_repaint_fields_from_extra() -> None:
 
 
 def test_lyria_extract_audio_and_lyrics_from_steps() -> None:
-    from mm_gateway.providers.google import _extract_lyria_output
+    from mm_gateway.providers._lyria import extract_lyria_output
     data = {"steps": [{"type": "model_output", "content": [
         {"type": "audio", "data": "UklGRiQAAABXQVZFZmV"},
         {"type": "text", "text": "la la la"},
     ]}]}
-    audio, lyrics = _extract_lyria_output(data)
+    audio, lyrics = extract_lyria_output(data)
     assert audio == "UklGRiQAAABXQVZFZmV"
     assert lyrics == "la la la"
 
 
 def test_lyria_extract_falls_back_to_top_level_fields() -> None:
-    from mm_gateway.providers.google import _extract_lyria_output
-    audio, lyrics = _extract_lyria_output({"output_audio": "AAA", "output_text": "do re mi"})
+    from mm_gateway.providers._lyria import extract_lyria_output
+    audio, lyrics = extract_lyria_output({"output_audio": "AAA", "output_text": "do re mi"})
     assert audio == "AAA"
     assert lyrics == "do re mi"
 
 
 def test_lyria_extract_returns_none_when_empty() -> None:
-    from mm_gateway.providers.google import _extract_lyria_output
-    audio, lyrics = _extract_lyria_output({})
+    from mm_gateway.providers._lyria import extract_lyria_output
+    audio, lyrics = extract_lyria_output({})
     assert audio is None and lyrics is None
 
 
 def test_lyria_translates_inline_reference_media() -> None:
-    from mm_gateway.providers.google import GoogleProvider
+    from mm_gateway.providers._lyria import lyria_body
     from mm_gateway.schemas.music import image_part
 
-    p = GoogleProvider(_backend("google"))
     request = UnifiedMusicRequest(
         model="lyria-3",
         content=[
@@ -675,7 +674,7 @@ def test_lyria_translates_inline_reference_media() -> None:
             audio_part("data:audio/wav;base64,AAAA"),
         ],
     )
-    parts = p._lyria_body(request)["input"]
+    parts = lyria_body(request)["input"]
     assert {"type": "image", "mime_type": "image/png", "data": "BBBB"} in parts
     assert {
         "type": "audio",
@@ -688,16 +687,15 @@ def test_lyria_translates_inline_reference_media() -> None:
 def test_lyria_body_uses_interactions_shape_not_predict_path() -> None:
     """The Interactions surface takes top-level response_format /
     generation_config — no `config` wrapper, no response_modalities."""
-    from mm_gateway.providers.google import GoogleProvider
+    from mm_gateway.providers._lyria import lyria_body
 
-    p = GoogleProvider(_backend("google"))
     request = UnifiedMusicRequest(
         model="lyria-3-pro-preview",
         content=[text_part("a happy song")],
         seed=7, negative_prompt="vocals", guidance_scale=2.0, n=3,
         audio_format="mp3",
     )
-    body = p._lyria_body(request)
+    body = lyria_body(request)
     # model and input are the only required top-level fields; the path the
     # adapter posts to is /v1beta/interactions, so model is NOT in the URL.
     assert body["model"] == "lyria-3-pro-preview"
@@ -717,20 +715,19 @@ def test_lyria_body_uses_interactions_shape_not_predict_path() -> None:
 def test_lyria_request_mime_uses_sdk_output_enum_and_omits_default() -> None:
     """response_format.mime_type is the SDK output enum (audio/mp3 not
     audio/mpeg); no audio_format => omit response_format (Lyria default MP3)."""
-    from mm_gateway.providers.google import _lyria_request_mime
+    from mm_gateway.providers._lyria import lyria_request_mime
 
-    assert _lyria_request_mime(None) is None
-    assert _lyria_request_mime("") is None
-    assert _lyria_request_mime("mp3") == "audio/mp3"
-    assert _lyria_request_mime("wav") == "audio/wav"
-    assert _lyria_request_mime("ogg_opus") == "audio/ogg_opus"
+    assert lyria_request_mime(None) is None
+    assert lyria_request_mime("") is None
+    assert lyria_request_mime("mp3") == "audio/mp3"
+    assert lyria_request_mime("wav") == "audio/wav"
+    assert lyria_request_mime("ogg_opus") == "audio/ogg_opus"
 
 
 def test_lyria_body_omits_response_format_when_no_audio_format() -> None:
-    from mm_gateway.providers.google import GoogleProvider
+    from mm_gateway.providers._lyria import lyria_body
 
-    p = GoogleProvider(_backend("google"))
-    body = p._lyria_body(UnifiedMusicRequest(
+    body = lyria_body(UnifiedMusicRequest(
         model="lyria-3-pro-preview", content=[text_part("a happy song")]))
     # No audio_format => no response_format sent; Lyria's default MP3 applies.
     assert "response_format" not in body
@@ -738,15 +735,15 @@ def test_lyria_body_omits_response_format_when_no_audio_format() -> None:
 
 
 def test_lyria_media_type_defaults_to_mp3_and_maps_formats() -> None:
-    from mm_gateway.providers.google import _lyria_media_type
+    from mm_gateway.providers._lyria import lyria_media_type
 
     # Default + mp3 -> audio/mpeg (the IANA/gateway-standard MIME for MP3),
     # NOT audio/wav (Lyria's default output is MP3, not WAV).
-    assert _lyria_media_type(None) == "audio/mpeg"
-    assert _lyria_media_type("") == "audio/mpeg"
-    assert _lyria_media_type("mp3") == "audio/mpeg"
-    assert _lyria_media_type("wav") == "audio/wav"
-    assert _lyria_media_type("ogg_opus") == "audio/ogg"
+    assert lyria_media_type(None) == "audio/mpeg"
+    assert lyria_media_type("") == "audio/mpeg"
+    assert lyria_media_type("mp3") == "audio/mpeg"
+    assert lyria_media_type("wav") == "audio/wav"
+    assert lyria_media_type("ogg_opus") == "audio/ogg"
 
 
 def test_lyria_poll_hits_interactions_endpoint_with_api_key_header() -> None:

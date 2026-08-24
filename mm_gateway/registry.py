@@ -84,6 +84,7 @@ _MODEL_ALIASES: dict[str, tuple[str, str]] = {
     # Music aliases (Gemini Lyria 3 is the front-end shape; each backend serves a
     # stable id under a friendlier name).
     "gateway-music-lyria": ("google", "lyria-3"),
+    "gateway-music-vertex": ("vertex", "lyria-3"),
     "gateway-music-elevenlabs": ("elevenlabs", "music_v2"),
     "gateway-music-minimax": ("minimax", "music-3.0"),
     "gateway-music-udio": ("udioapi", "chirp-v5"),

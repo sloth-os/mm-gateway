@@ -1,12 +1,14 @@
 """Google Vertex AI provider — the Gemini Enterprise Agent Platform surface.
 
 Vertex AI exposes the **same** generative models as the AI Studio (Gemini
-Developer) surface — Imagen (image) and Veo (video) — and is reached through the
-**same** ``google-genai`` SDK, just with the client built in Vertex mode. The
-SDK's own docstring calls Vertex the "Gemini Enterprise Agent Platform". So this
-adapter reuses the AI Studio adapter's Imagen/Veo request/response logic
-(:class:`~mm_gateway.providers._genai_media.GenaiImageVideoMixin`) verbatim; only
-the ``genai.Client`` construction differs.
+Developer) surface — Imagen (image), Veo (video) and Lyria (music) — and is
+reached through the **same** ``google-genai`` SDK, just with the client built
+in Vertex mode. The SDK's own docstring calls Vertex the "Gemini Enterprise
+Agent Platform". So this adapter reuses the AI Studio adapter's Imagen/Veo
+logic (:class:`~mm_gateway.providers._genai_media.GenaiImageVideoMixin`) and
+the shared Lyria request/response helpers
+(:mod:`~mm_gateway.providers._lyria`) verbatim; only the ``genai.Client``
+construction differs.
 
 Authentication is **Application Default Credentials via a service-account JSON
 key** (no API key). Two ways to supply the key, resolved in this order:
@@ -25,20 +27,31 @@ key** (no API key). Two ways to supply the key, resolved in this order:
 In every case the resulting ``Credentials`` are passed straight to
 ``genai.Client(credentials=...)``. The **project** comes from the explicit
 ``VERTEX_PROJECT`` (or the SA key's own ``project_id`` when one is loaded);
-``VERTEX_LOCATION`` pins the region (e.g. ``us-central1``), which selects the
-``https://{location}-aiplatform.googleapis.com`` endpoint. A region is required —
-ADC yields credentials but not a region, so the operator must set one.
+``VERTEX_LOCATION`` optionally pins the region (e.g. ``us-central1``), which
+selects the ``https://{location}-aiplatform.googleapis.com`` endpoint.
 
-**Music (Lyria) is not available on Vertex** — the SDK raises
-``NotImplementedError`` for live-music in Vertex mode, and the Interactions
-REST surface the AI Studio adapter uses lives only on
-``generativelanguage.googleapis.com``. So this backend implements
-``ImageProvider`` + ``VideoProvider`` only.
+A location is **not required**: when none is pinned, the client defaults to
+``"global"`` (the ``https://aiplatform.googleapis.com`` endpoint with no region
+prefix). The global endpoint is the one Lyria 3 requires on Vertex — Lyria 3
+only serves from the global location (regional requests return an internal
+error) — so defaulting to ``global`` makes the music modality work out of the
+box, and the image/video models that also accept the global endpoint continue
+to work there. Operators who prefer a region can still pin it.
+
+**Music (Lyria)** on Vertex goes through the SDK's Interactions surface
+(``client.aio.interactions.create()`` — REST ``POST /v1beta/interactions``),
+the same wire shape the AI Studio adapter uses, authenticated with the ADC
+bearer token rather than an ``x-goog-api-key``. Lyria is synchronous — a
+single Interactions call returns the audio inline — so, like the AI Studio
+adapter, we wrap it as a synthetic in-memory task for the gateway's uniform
+poll surface.
 """
 
 from __future__ import annotations
 
 import json
+import time
+import uuid
 from typing import Any, ClassVar
 
 import google.auth
@@ -47,23 +60,42 @@ from google import genai
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai import types
 
-from mm_gateway.core.base import ImageProvider, VideoProvider
-from mm_gateway.core.exceptions import ProviderNotConfiguredError
+from mm_gateway.core.base import ImageProvider, MusicProvider, VideoProvider
+from mm_gateway.core.exceptions import (
+    ProviderNotConfiguredError,
+    ProviderRequestError,
+    TaskFailedError,
+)
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._genai_media import GenaiImageVideoMixin
+from mm_gateway.providers._lyria import (
+    extract_lyria_output,
+    lyria_body,
+    lyria_media_type,
+)
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
+from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 
 log = get_logger("provider.vertex")
 
 # Scopes Vertex requests when it resolves ADC itself; matched by SA keys too.
 _VERTEX_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
+# Lyria 3 on Vertex is served only from the global location — regional requests
+# return an internal error (see google-genai issue #2533: "Lyria 3 only supports
+# global"). So when an operator pins no region, default the client there.
+_DEFAULT_LOCATION = "global"
 
-class VertexProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, VideoProvider):
+# In-memory store for the synchronous Lyria "tasks". Single-process only.
+_MUSIC_TASKS: dict[str, dict[str, Any]] = {}
+
+
+class VertexProvider(
+    SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, VideoProvider, MusicProvider
+):
     name = "vertex"
-    # Vertex serves the same model ids as AI Studio (Imagen/Veo). Lyria is
-    # absent on Vertex, so there is no music list here.
+    # Vertex serves the same model ids as AI Studio (Imagen/Veo/Lyria).
     image_models: ClassVar[list[str]] = [
         "imagen-4.0-generate-001",
         "imagen-3.0-generate-001",
@@ -74,6 +106,7 @@ class VertexProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
         "veo-3.0-generate-001",
         "veo-3.1-generate-preview",
     ]
+    music_models: ClassVar[list[str]] = ["lyria-3"]
 
     def __init__(self, backend):
         super().__init__(backend)
@@ -84,16 +117,17 @@ class VertexProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
                 "Vertex requires a service-account JSON key (credentials_json or "
                 "credentials_file) or application default credentials.",
             )
-        if not location:
-            raise ProviderNotConfiguredError(
-                "vertex",
-                "Vertex requires a region (VERTEX_LOCATION) — ADC yields credentials "
-                "but not a region.",
-            )
+        # A region is optional: the global endpoint (location="global") is the
+        # one Lyria 3 requires, and the image/video models accept it too.
+        location = location or _DEFAULT_LOCATION
         image_base = backend.base_url or None
         video_base = backend.extra.get("video_base_url") or image_base
+        music_base = backend.extra.get("music_base_url") or image_base
         self._client = self._build_vertex_client(credentials, project, location, image_base)
         self._client_video = self._build_vertex_client(credentials, project, location, video_base)
+        # Lyria (Interactions) gets its own client so an operator can pin a
+        # music-specific base_url; it defaults to the same global client.
+        self._client_music = self._build_vertex_client(credentials, project, location, music_base)
 
     @staticmethod
     def _resolve_credentials(backend) -> tuple[Any, str | None, str | None]:
@@ -102,7 +136,7 @@ class VertexProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
         Returns ``(credentials, project, location)``. ``credentials`` is None
         when no SA key and no ambient ADC are available. ``project`` is the
         explicit VERTEX_PROJECT or the SA key's project_id; ``location`` is
-        VERTEX_LOCATION.
+        VERTEX_LOCATION (may be None — the client then defaults to "global").
         """
         project = backend.extra.get("project") or None
         location = backend.extra.get("location") or None
@@ -145,3 +179,74 @@ class VertexProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
         else:
             kwargs["http_options"] = types.HttpOptions(**http_kwargs)
         return genai.Client(**kwargs)
+
+    # -- Lyria music ------------------------------------------------------- #
+
+    async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
+        prompt = request.generation_prompt()
+        if not prompt and not request.lyrics:
+            raise ProviderRequestError(
+                "vertex lyria music requires a prompt (text part)", provider="vertex",
+                status_code=400,
+            )
+        task_id = f"lyria-{uuid.uuid4().hex}"
+        _MUSIC_TASKS[task_id] = {
+            "model": request.model or "lyria-3",
+            "request": request,
+            "status": "pending",
+            "created_at": int(time.time()),
+        }
+        return UnifiedMusicTask(
+            task_id=task_id, provider=self.name, model=request.model, status="pending",
+            created_at=_MUSIC_TASKS[task_id]["created_at"],
+        )
+
+    async def get_music_task(self, task_id: str) -> UnifiedMusicTask:
+        rec = _MUSIC_TASKS.get(task_id)
+        if rec is None:
+            raise ProviderRequestError(
+                f"vertex music task {task_id} not found", provider="vertex", status_code=404,
+            )
+        if rec["status"] in ("succeeded", "failed"):
+            return UnifiedMusicTask(
+                task_id=task_id, provider=self.name, model=rec["model"], status=rec["status"],
+                audio_b64=rec.get("audio_b64"), audio_media_type=rec.get("audio_media_type"),
+                lyrics=rec.get("lyrics"), error=rec.get("error"),
+                created_at=rec["created_at"], completed_at=rec.get("completed_at"),
+                usage=rec.get("usage"),
+            )
+        # Run the blocking Lyria call now.
+        rec["status"] = "running"
+        request: UnifiedMusicRequest = rec["request"]
+        body = lyria_body(request)
+        try:
+            # Vertex serves Lyria through the SDK's Interactions surface
+            # (client.aio.interactions.create → POST /v1beta/interactions),
+            # authenticated with the ADC bearer token the SDK injects. The body
+            # shape is the same one the AI Studio adapter sends.
+            interaction = await self._client_music.aio.interactions.create(**body)
+        except Exception as exc:
+            rec["status"] = "failed"; rec["error"] = str(exc)
+            raise ProviderRequestError(
+                f"vertex music request failed: {exc}", provider="vertex", status_code=502
+            ) from exc
+        audio_b64, lyrics = extract_lyria_output(interaction)
+        if not audio_b64:
+            rec["status"] = "failed"
+            rec["error"] = "no audio in lyria response"
+            raise TaskFailedError("vertex lyria returned no audio", provider="vertex")
+        media_type = lyria_media_type(request.audio_format)
+        rec["status"] = "succeeded"
+        rec["completed_at"] = int(time.time())
+        rec["audio_b64"] = audio_b64
+        rec["audio_media_type"] = media_type
+        if lyrics:
+            rec["lyrics"] = lyrics
+        if request.duration is not None:
+            rec["usage"] = MusicUsage(duration=int(request.duration))
+        return UnifiedMusicTask(
+            task_id=task_id, provider=self.name, model=rec["model"], status="succeeded",
+            audio_b64=audio_b64, audio_media_type=media_type, lyrics=rec.get("lyrics"),
+            created_at=rec["created_at"], completed_at=rec["completed_at"],
+            usage=rec.get("usage"),
+        )

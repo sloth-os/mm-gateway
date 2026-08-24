@@ -51,14 +51,15 @@ names are not accepted by the public REST or MCP parameter schemas; see
   - Response: `steps[].content[]` (or `model_output[].content[]`) blocks — `{type:"audio", data}` (base64) and `{type:"text", text}` (lyrics); top-level `output_audio`/`audio` and `output_text`/`text` fallbacks. `audio_media_type` derived from the requested format (`audio/wav` / `audio/mpeg` / `audio/{format}`), defaulting to `audio/wav`. `usage = MusicUsage(duration=int(request.duration))` when duration set.
   - Errors: `httpx.HTTPError` or HTTP ≥400 → `ProviderRequestError(502)`; no audio → `TaskFailedError`; unknown task id → 404.
 
-## vertex — `google-genai` v2.16.0 (Vertex mode)
+## vertex — `google-genai` v2.19.0 (Vertex mode)
 
 Vertex AI is the Gemini Enterprise Agent Platform surface: it exposes the
-**same** Imagen/Veo models as the AI Studio (google) adapter above, reached
-through the **same** `google-genai` SDK, only the client is built with
+**same** Imagen/Veo/Lyria models as the AI Studio (google) adapter above,
+reached through the **same** `google-genai` SDK, only the client is built with
 `vertexai=True`. So this adapter reuses the google adapter's Imagen/Veo
-request/response logic (`GenaiImageVideoMixin`) verbatim; only
-`genai.Client` construction differs.
+request/response logic (`GenaiImageVideoMixin`) and the shared Lyria helpers
+(`mm_gateway.providers._lyria`) verbatim; only `genai.Client` construction
+differs.
 
 - **Auth: Application Default Credentials only (no API key).** A
   service-account JSON key is resolved in this order:
@@ -73,20 +74,27 @@ request/response logic (`GenaiImageVideoMixin`) verbatim; only
     GCE/GKE/Workload Identity (or sets `GOOGLE_APPLICATION_CREDENTIALS`) works
     with no explicit key.
   - The resolved `Credentials` are passed straight to
-    `genai.Client(credentials=...)`. **`api_key` is never set.** A bogus or
-    missing key raises `ProviderNotConfiguredError("vertex")`.
+    `genai.Client(credentials=...)`. **`api_key` is never set.** No key and no
+    ambient ADC raises `ProviderNotConfiguredError("vertex")`.
 - **Client**: `from google import genai; genai.Client(vertexai=True,
   credentials=, project=, location=, http_options=types.HttpOptions(...))`.
-  Two instances — image (Imagen/generate_content) on `base_url` (an operator
-  `VERTEX_*_BASE_URL` pin, usually unset) and video (Veo) on
-  `backend.extra["video_base_url"]` when it differs. With neither pinned the
-  SDK derives the regional endpoint `https://{location}-aiplatform.googleapis.com`
-  from the location.
+  Three instances — image (Imagen/generate_content) on `base_url` (an operator
+  `VERTEX_*_BASE_URL` pin, usually unset), video (Veo) on
+  `backend.extra["video_base_url"]` when it differs, and music (Lyria
+  Interactions) on `backend.extra["music_base_url"]` when it differs. With
+  none pinned the SDK derives the regional endpoint
+  `https://{location}-aiplatform.googleapis.com` from the location.
   - `project` = `VERTEX_PROJECT` (env, in `extra["project"]`) or the SA key's
     own `project_id`.
-  - `location` = `VERTEX_LOCATION` (env, in `extra["location"]`) — **required**;
-    ADC yields credentials but not a region, so the operator must pin one (e.g.
-    `us-central1`).
+  - `location` = `VERTEX_LOCATION` (env, in `extra["location"]`) —
+    **optional**. When unset the provider defaults to `"global"`, which
+    selects the `https://aiplatform.googleapis.com` endpoint (no region
+    prefix). The global endpoint is the one **Lyria 3 requires** on Vertex —
+    Lyria 3 only serves from the global location (regional requests return an
+    internal error, see google-genai issue #2533), so defaulting to `global`
+    makes the music modality work out of the box; the image/video models accept
+    the global endpoint too. An operator who prefers a region (e.g.
+    `us-central1`) can still pin it.
   - The injected `httpxAsyncClient` carries the backend-logging event hooks
     (curl format + masked sensitive headers), matching the google adapter.
 - **Image (Imagen)** & **Video (Veo)**: identical to the google adapter
@@ -96,11 +104,19 @@ request/response logic (`GenaiImageVideoMixin`) verbatim; only
     `gemini-2.5-flash-image`.
   - Video models: `veo-2.0-generate-001`, `veo-3.0-generate-001`,
     `veo-3.1-generate-preview`.
-- **No music.** Lyria is not available on Vertex (the SDK raises
-  `NotImplementedError` for live-music in Vertex mode, and the Interactions
-  REST surface the google adapter uses lives only on
-  `generativelanguage.googleapis.com`). So this backend implements
-  `ImageProvider` + `VideoProvider` only — `supports_music` is False.
+- **Music (Lyria 3)**: the SDK's Interactions surface
+  (`client.aio.interactions.create(...)` → REST `POST /v1beta/interactions`),
+  the same wire shape the google adapter uses, authenticated with the ADC
+  bearer token the SDK injects (not `x-goog-api-key`). Synchronous — a single
+  call returns the audio inline — so, like the google adapter, it is wrapped
+  as a synthetic in-memory task (id `lyria-{uuid4.hex}`) that moves
+  `pending -> running -> succeeded` on the first poll. The body is built by
+  `lyria_body()` and the output extracted by `extract_lyria_output()` (both
+  accept either the raw JSON dict or the pydantic `Interaction` model).
+  - Models: `lyria-3`. Alias `gateway-music-vertex`.
+  - Default audio output is MP3; `audio_format` `mp3`/`wav`/`ogg_opus` map to
+    `audio/mpeg`/`audio/wav`/`audio/ogg` (the gateway convention every other
+    music provider follows).
 
 ## xai-sdk — `xai_sdk` v1.17.0 (gRPC)
 

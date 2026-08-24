@@ -23,10 +23,13 @@ modality is fully wired.
 
 Vertex is the lone exception to the API-key triple: it authenticates with
 Application Default Credentials (a service-account JSON key in
-``VERTEX_CREDENTIALS_JSON``), so its image/video "triple" is
-``VERTEX_CREDENTIALS_JSON`` + ``VERTEX_LOCATION`` + ``VERTEX_IMAGE_MODEL`` /
-``VERTEX_VIDEO_MODEL`` — credentials and region stand in for the API key and
-base URL (the regional endpoint is derived from the location).
+``VERTEX_CREDENTIALS_JSON``), so its image/video/music "triple" is
+``VERTEX_CREDENTIALS_JSON`` (reused for the key and base-url slots — Vertex
+derives its endpoint from the location) + ``VERTEX_IMAGE_MODEL`` /
+``VERTEX_VIDEO_MODEL`` / ``VERTEX_MUSIC_MODEL`` — credentials and the pinned
+model stand in for the API key and base URL, and the regional endpoint is
+derived from the location (defaulting to the global endpoint, which Lyria 3
+requires, so a region is optional).
 
 Behaviour
 ---------
@@ -96,13 +99,18 @@ PROVIDERS: list[tuple[str, str, str, str, str, str, str, str, str, str, str, str
      "GOOGLE_MUSIC_API_KEY", "GOOGLE_MUSIC_BASE_URL", "GOOGLE_MUSIC_MODEL", "gateway-music-lyria"),
     # Vertex AI is the one ADC backend: it has no per-modality API key triple.
     # Instead a candidate is "fully configured" when the SA-JSON credentials
-    # (VERTEX_CREDENTIALS_JSON, the CI secret), the region (VERTEX_LOCATION),
-    # and the pinned model (VERTEX_IMAGE_MODEL / VERTEX_VIDEO_MODEL) are all set
-    # — the same three-non-empty-fields gate the triple machinery checks, just
-    # with credentials+region standing in for the API key+base URL.
-    ("vertex", "VERTEX_CREDENTIALS_JSON", "VERTEX_LOCATION", "VERTEX_IMAGE_MODEL", "gateway-image-vertex",
-     "VERTEX_CREDENTIALS_JSON", "VERTEX_LOCATION", "VERTEX_VIDEO_MODEL", "gateway-video-vertex",
-     "", "", "", ""),
+    # (VERTEX_CREDENTIALS_JSON, the CI secret) and the pinned model
+    # (VERTEX_IMAGE_MODEL / VERTEX_VIDEO_MODEL / VERTEX_MUSIC_MODEL) are set.
+    # The base_url slot reuses VERTEX_CREDENTIALS_JSON too: Vertex derives its
+    # endpoint from the location (defaulting to the global endpoint), so it
+    # must not gate on a region — and the triple machinery needs three non-empty
+    # fields. A region is optional: set VERTEX_LOCATION only to pin one; unset,
+    # the gateway defaults to "global" (the endpoint Lyria 3 requires). Music
+    # reuses the same credentials env (an Interactions call authenticated by the
+    # ADC bearer token) under the gateway-music-vertex alias.
+    ("vertex", "VERTEX_CREDENTIALS_JSON", "VERTEX_CREDENTIALS_JSON", "VERTEX_IMAGE_MODEL", "gateway-image-vertex",
+     "VERTEX_CREDENTIALS_JSON", "VERTEX_CREDENTIALS_JSON", "VERTEX_VIDEO_MODEL", "gateway-video-vertex",
+     "VERTEX_CREDENTIALS_JSON", "VERTEX_CREDENTIALS_JSON", "VERTEX_MUSIC_MODEL", "gateway-music-vertex"),
     ("xai", "XAI_IMAGE_API_KEY", "XAI_IMAGE_BASE_URL", "XAI_IMAGE_MODEL", "gateway-image-grok",
      "XAI_VIDEO_API_KEY", "XAI_VIDEO_BASE_URL", "XAI_VIDEO_MODEL", "gateway-video-grok",
      "", "", "", ""),

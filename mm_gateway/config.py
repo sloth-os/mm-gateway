@@ -52,10 +52,13 @@ class BackendConfig:
         # Most backends are usable when they have an API key. Vertex is the
         # exception: it authenticates with a service-account JSON key
         # (credentials_json / credentials_file) or ambient ADC, never an API
-        # key — so it is configured once a region (location) is pinned (the
-        # adapter resolves credentials at build time).
+        # key — so it is configured once any Vertex signal is present
+        # (credentials, project, or an explicit location). Credentials resolve
+        # at build time, and location defaults to the global endpoint when
+        # unset, so neither is individually required.
         if self.type == "vertex":
-            return bool(self.extra.get("location"))
+            return any(self.extra.get(k) for k in
+                       ("credentials_json", "credentials_file", "project", "location"))
         return bool(self.api_key)
 
 
@@ -275,18 +278,22 @@ class Settings:
              ("GOOGLE_IMAGE_MODEL", "GOOGLE_VIDEO_MODEL"),
              ("GOOGLE_API_KEY", "GOOGLE_BASE_URL", "GOOGLE_MODEL"),
              ("GOOGLE_MUSIC_API_KEY", "GOOGLE_MUSIC_BASE_URL", "GOOGLE_MUSIC_MODEL")),
-            # Vertex AI (Gemini Enterprise Agent Platform) — same Imagen/Veo
-            # models as the AI Studio surface, reached via the google-genai SDK
-            # in vertexai mode. Auth is **Application Default Credentials only**
-            # (a service-account JSON key), never an API key: the per-modality
-            # key/base_url pairs and the legacy un-split triple are unused, so
-            # they're placeholders. The dedicated vertex branch below reads
-            # VERTEX_CREDENTIALS_JSON / VERTEX_CREDENTIALS_FILE / VERTEX_PROJECT
-            # / VERTEX_LOCATION and registers iff a region is pinned. Lyria is
-            # not on Vertex, so there is no music triple.
+            # Vertex AI (Gemini Enterprise Agent Platform) — same Imagen/Veo/
+            # Lyria models as the AI Studio surface, reached via the
+            # google-genai SDK in vertexai mode. Auth is **Application Default
+            # Credentials only** (a service-account JSON key), never an API
+            # key: the per-modality key/base_url pairs and the legacy un-split
+            # triple are unused, so they're placeholders. The dedicated vertex
+            # branch below reads VERTEX_CREDENTIALS_JSON /
+            # VERTEX_CREDENTIALS_FILE / VERTEX_PROJECT / VERTEX_LOCATION and
+            # registers when any of them is set — a region is optional
+            # (defaults to the global endpoint). The music triple carries the
+            # VERTEX_MUSIC_MODEL / VERTEX_MUSIC_BASE_URL pins (its key env is a
+            # placeholder — Vertex never uses an API key).
             ("vertex", _NO_PAIR, _NO_PAIR,
              ("VERTEX_IMAGE_MODEL", "VERTEX_VIDEO_MODEL"),
-             _NO_TRIPLE, _NO_TRIPLE),
+             _NO_TRIPLE,
+             ("VERTEX_MUSIC_API_KEY", "VERTEX_MUSIC_BASE_URL", "VERTEX_MUSIC_MODEL")),
             ("xai", ("XAI_IMAGE_API_KEY", "XAI_VIDEO_API_KEY"),
              ("XAI_IMAGE_BASE_URL", "XAI_VIDEO_BASE_URL"),
              ("XAI_IMAGE_MODEL", "XAI_VIDEO_MODEL"),
@@ -345,15 +352,20 @@ class Settings:
             # VERTEX_CREDENTIALS_FILE (a path, e.g. a YAML deployment); absent
             # both, the SDK falls back to ambient ADC (GOOGLE_APPLICATION_
             # CREDENTIALS / metadata server). A region (VERTEX_LOCATION) is
-            # always required. No other backend type has an ADC path, so for
-            # them a key is still required.
+            # optional — unset, the provider defaults to the "global" endpoint
+            # (the one Lyria 3 requires). No other backend type has an ADC path,
+            # so for them a key is still required.
             if type_ == "vertex":
                 project = _env("VERTEX_PROJECT")
                 location = _env("VERTEX_LOCATION")
                 cred_json = _env("VERTEX_CREDENTIALS_JSON")
                 cred_file = _env("VERTEX_CREDENTIALS_FILE")
-                # Registered iff a region is pinned (ADC itself yields no region).
-                if not location:
+                # Registered when any Vertex signal is set. Credentials resolve
+                # at build time (the adapter raises ProviderNotConfiguredError if
+                # none of the key sources nor ambient ADC are available), so an
+                # operator who only sets VERTEX_PROJECT still gets a build
+                # attempt that may succeed via ambient ADC.
+                if not (cred_json or cred_file or project or location):
                     continue
                 extra: dict[str, Any] = {}
                 if cred_json:
@@ -362,24 +374,31 @@ class Settings:
                     extra["credentials_file"] = cred_file
                 if project:
                     extra["project"] = project
-                extra["location"] = location
+                if location:
+                    extra["location"] = location
                 img_model = _env(img_model_env)
                 vid_model = _env(vid_model_env)
+                mus_model = _env(mus_model_env)
                 if img_model:
                     extra["image_model"] = img_model
                 if vid_model:
                     extra["video_model"] = vid_model
+                if mus_model:
+                    extra["music_model"] = mus_model
                 # Operator-pinned regional hosts. The provider reads the image
-                # base from ``backend.base_url`` and the video base from
-                # ``extra["video_base_url"]`` (falling back to the image base),
-                # mirroring the google adapter. So ``base_url`` gets the image
-                # pin (if any) and ``video_base_url`` is recorded only when the
-                # video pin differs from it.
+                # base from ``backend.base_url`` and the video/music bases from
+                # ``extra["video_base_url"]`` / ``extra["music_base_url"]``
+                # (each falling back to the image base), mirroring the google
+                # adapter. So ``base_url`` gets the image pin (if any) and the
+                # video/music pins are recorded only when they differ from it.
                 img_base = _env("VERTEX_IMAGE_BASE_URL") or _env("VERTEX_BASE_URL")
                 vid_base = _env("VERTEX_VIDEO_BASE_URL")
+                mus_base = _env("VERTEX_MUSIC_BASE_URL")
                 base_url = img_base
                 if vid_base and vid_base != img_base:
                     extra["video_base_url"] = vid_base
+                if mus_base and mus_base != img_base:
+                    extra["music_base_url"] = mus_base
                 backends.append(BackendConfig(
                     name=type_, type=type_, api_key=None,
                     base_url=base_url, tags=[], extra=extra,

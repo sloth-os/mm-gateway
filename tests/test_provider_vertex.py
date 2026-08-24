@@ -1,15 +1,17 @@
-"""Tests for the Vertex AI provider (Imagen image + Veo video, ADC-only).
+"""Tests for the Vertex AI provider (Imagen image + Veo video + Lyria music, ADC-only).
 
 Vertex is the Gemini Enterprise Agent Platform surface: it serves the same
-Imagen/Veo models as the AI Studio (google) adapter and reuses
-``GenaiImageVideoMixin`` verbatim — only ``genai.Client`` construction differs.
-The client is built with ``vertexai=True`` and ADC ``credentials=`` (never an
-``api_key``). We capture constructor args by monkeypatching ``genai.Client``
-and the three ``google.auth`` loaders — no network, no real key.
+Imagen/Veo/Lyria models as the AI Studio (google) adapter and reuses
+``GenaiImageVideoMixin`` + the shared ``_lyria`` helpers verbatim — only
+``genai.Client`` construction differs. The client is built with
+``vertexai=True`` and ADC ``credentials=`` (never an ``api_key``). We capture
+constructor args by monkeypatching ``genai.Client`` and the three
+``google.auth`` loaders — no network, no real key.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -19,6 +21,7 @@ from mm_gateway.config import BackendConfig
 from mm_gateway.core.exceptions import ProviderNotConfiguredError
 from mm_gateway.providers import vertex as vertex_mod
 from mm_gateway.providers.vertex import VertexProvider
+from mm_gateway.schemas.music import UnifiedMusicRequest, text_part
 
 
 def _sa_json(project_id: str = "proj-123") -> str:
@@ -37,6 +40,7 @@ def _sa_json(project_id: str = "proj-123") -> str:
 
 def _backend(*, credentials_json: str | None = None, credentials_file: str | None = None,
              project: str | None = None, location: str | None = "us-central1",
+             base_url: str | None = None,
              extra: dict[str, Any] | None = None) -> BackendConfig:
     ex: dict[str, Any] = {}
     if credentials_json is not None:
@@ -50,7 +54,8 @@ def _backend(*, credentials_json: str | None = None, credentials_file: str | Non
     if extra:
         ex.update(extra)
     # api_key is deliberately None — Vertex is ADC-only.
-    return BackendConfig(name="vertex", type="vertex", api_key=None, extra=ex)
+    return BackendConfig(name="vertex", type="vertex", api_key=None,
+                         base_url=base_url, extra=ex)
 
 
 def _http_options_base(kwargs: dict[str, Any]) -> str | None:
@@ -103,10 +108,17 @@ def _capture_client(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 # -- construction -------------------------------------------------------- #
 
 
-def test_requires_location() -> None:
-    """ADC yields credentials but no region — a location is mandatory."""
-    with pytest.raises(ProviderNotConfiguredError):
-        VertexProvider(_backend(location=None, credentials_json=_sa_json()))
+def test_location_defaults_to_global(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A region is optional — unset, the client defaults to the ``global``
+    endpoint (the one Lyria 3 requires on Vertex)."""
+    _stub_auth(monkeypatch)
+    captured = _capture_client(monkeypatch)
+
+    VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x", location=None))
+    # No VERTEX_LOCATION pinned → every client (image, video, music) lands on
+    # the global endpoint rather than erroring.
+    assert all(c["location"] == "global" for c in captured)
+    assert len(captured) == 3  # image + video + music clients
 
 
 def test_requires_credentials_when_no_key_no_adc(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -126,13 +138,13 @@ def test_credentials_json_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
     VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x", location="us-central1"))
 
-    # Credentials resolve ONCE (in __init__ via the static resolver); both
-    # clients reuse that single credential, so the loader is called once.
+    # Credentials resolve ONCE (in __init__ via the static resolver); the
+    # three clients reuse that single credential, so the loader is called once.
     assert [c["via"] for c in calls] == ["dict"]
     # The cloud-platform scope was requested.
     assert calls[0]["scopes"] == ["https://www.googleapis.com/auth/cloud-platform"]
-    # Two clients built (image + video), both in vertexai mode, no api_key.
-    assert len(captured) == 2
+    # Three clients built (image + video + music), all in vertexai mode, no api_key.
+    assert len(captured) == 3
     assert all(c["vertexai"] is True for c in captured)
     assert all("api_key" not in c for c in captured)
     # project + location threaded through.
@@ -178,12 +190,14 @@ def test_project_falls_back_to_sa_key_id(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_two_distinct_clients(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Image and video get separate client instances (an operator can pin them apart)."""
+    """Image, video and music get separate client instances (an operator can pin them apart)."""
     _stub_auth(monkeypatch)
     _capture_client(monkeypatch)
 
     p = VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x"))
     assert p._client is not p._client_video
+    assert p._client is not p._client_music
+    assert p._client_video is not p._client_music
 
 
 def test_no_base_url_means_none_host_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,37 +212,57 @@ def test_no_base_url_means_none_host_override(monkeypatch: pytest.MonkeyPatch) -
     assert all(_http_options_base(c) is None for c in captured)
 
 
-def test_image_and_video_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An operator-pinned image base lands on ``backend.base_url`` (so the image
-    client), and a differing video pin lands on ``extra["video_base_url"]`` (the
-    video client). Mirrors the google adapter's split."""
+def test_image_video_music_base_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An operator-pinned image base lands on ``backend.base_url`` (the image
+    client), a differing video pin on ``extra["video_base_url"]`` (the video
+    client), and a differing music pin on ``extra["music_base_url"]`` (the
+    music client). Mirrors the google adapter's split."""
     _stub_auth(monkeypatch)
     captured = _capture_client(monkeypatch)
 
     p = VertexProvider(_backend(
         credentials_json=_sa_json(), project="proj-x",
-        # Image base via base_url, video base via the extra the provider reads.
+        # Image base via base_url, video + music bases via the extras the
+        # provider reads.
         location="us-central1",
-        extra={"video_base_url": "https://video.test"},
+        extra={"video_base_url": "https://video.test",
+               "music_base_url": "https://music.test"},
     ))
-    # image_base = backend.base_url (None here); video_base = the extra pin.
+    # image_base = backend.base_url (None here); video_base + music_base = the pins.
     bases = [_http_options_base(c) for c in captured]
-    assert bases == [None, "https://video.test"]
+    assert bases == [None, "https://video.test", "https://music.test"]
     assert p._client is not p._client_video
+    assert p._client_video is not p._client_music
+
+
+def test_music_client_falls_back_to_image_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no music-specific base pinned, the music client shares the image base
+    (like google's ``_music_base`` = image base)."""
+    _stub_auth(monkeypatch)
+    captured = _capture_client(monkeypatch)
+
+    VertexProvider(_backend(
+        credentials_json=_sa_json(), project="proj-x", location="us-central1",
+        base_url="https://image.test",
+    ))
+    bases = [_http_options_base(c) for c in captured]
+    # image + video + music all fall back to backend.base_url when no per-modality
+    # pins are set.
+    assert bases == ["https://image.test", "https://image.test", "https://image.test"]
 
 
 # -- modality surface --------------------------------------------------- #
 
 
-def test_no_music_support(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Lyria is not available on Vertex — the backend is image+video only."""
+def test_supports_image_video_and_music(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lyria is served on Vertex via the Interactions API — image+video+music."""
     _stub_auth(monkeypatch)
     _capture_client(monkeypatch)
 
     p = VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x"))
     assert p.supports_image is True
     assert p.supports_video is True
-    assert p.supports_music is False
+    assert p.supports_music is True
     assert p.image_models == [
         "imagen-4.0-generate-001",
         "imagen-3.0-generate-001",
@@ -239,3 +273,83 @@ def test_no_music_support(monkeypatch: pytest.MonkeyPatch) -> None:
         "veo-3.0-generate-001",
         "veo-3.1-generate-preview",
     ]
+    assert p.music_models == ["lyria-3"]
+
+
+# -- Lyria music (Interactions) ---------------------------------------- #
+
+
+def _stub_interactions(monkeypatch: pytest.MonkeyPatch, audio_b64: str = "UklGRiQAAABXQVZFZmV",
+                       lyrics: str | None = "la la la") -> tuple[list[dict[str, Any]], Any]:
+    """Replace ``VertexProvider``'s ``_client_music`` with one whose
+    ``aio.interactions.create`` returns a dict-shaped Interaction.
+
+    Returns ``(calls, client)`` where ``calls`` is the list of kwargs each
+    ``interactions.create`` call received, so a test can assert the body shape
+    the adapter built (the same shape ``lyria_body`` produces for the google
+    adapter).
+    """
+    calls: list[dict[str, Any]] = []
+
+    class _Interaction:
+        def model_dump(self, exclude_none: bool = False):
+            return {
+                "steps": [{"content": [
+                    {"type": "audio", "data": audio_b64},
+                    *([{"type": "text", "text": lyrics}] if lyrics else []),
+                ]}],
+            }
+
+    class _MusicClient:
+        class aio:
+            class interactions:
+                @staticmethod
+                async def create(**kwargs):
+                    calls.append(kwargs)
+                    return _Interaction()
+
+    return calls, _MusicClient()
+
+
+def test_vertex_music_poll_calls_interactions_create(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first poll performs the blocking ``interactions.create`` call and
+    extracts the inline audio — the same wire shape the google adapter uses,
+    only authenticated with the ADC bearer the SDK injects (not x-goog-api-key)."""
+    _stub_auth(monkeypatch)
+    _capture_client(monkeypatch)
+    p = VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x"))
+
+    calls, music_client = _stub_interactions(monkeypatch)
+    p._client_music = music_client
+
+    create = asyncio.run(p.create_music_task(
+        UnifiedMusicRequest(model="lyria-3", content=[text_part("a happy song")])
+    ))
+    task = asyncio.run(p.get_music_task(create.task_id))
+
+    assert len(calls) == 1
+    body = calls[0]
+    # Same Interactions body the google adapter builds (lyria_body).
+    assert body["model"] == "lyria-3"
+    assert body["input"] == [{"type": "text", "text": "a happy song"}]
+    assert task.status == "succeeded"
+    assert task.audio_b64 == "UklGRiQAAABXQVZFZmV"
+    assert task.audio_media_type == "audio/mpeg"  # default MP3
+
+
+def test_vertex_music_fails_when_no_audio(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No audio block in the Interaction output → the task fails (TaskFailedError)."""
+    from mm_gateway.core.exceptions import TaskFailedError
+
+    _stub_auth(monkeypatch)
+    _capture_client(monkeypatch)
+    p = VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x"))
+
+    _, music_client = _stub_interactions(monkeypatch, audio_b64="", lyrics=None)
+    p._client_music = music_client
+
+    create = asyncio.run(p.create_music_task(
+        UnifiedMusicRequest(model="lyria-3", content=[text_part("x")])
+    ))
+    with pytest.raises(TaskFailedError):
+        asyncio.run(p.get_music_task(create.task_id))
