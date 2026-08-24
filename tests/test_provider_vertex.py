@@ -251,6 +251,27 @@ def test_music_client_falls_back_to_image_base(monkeypatch: pytest.MonkeyPatch) 
     assert bases == ["https://image.test", "https://image.test", "https://image.test"]
 
 
+def test_each_client_pins_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each client pins HttpOptions.timeout (ms) so the SDK threads it to httpx
+    as the per-request timeout. Without one the SDK resolves ``None`` and httpx
+    clamps to its 5s default — which timed out Lyria's synchronous generation
+    client-side in CI (the request fired, ~5s later: "Request timed out. This is
+    a client-side timeout."). The music ceiling matches the AI Studio adapter's
+    240s httpx budget."""
+    _stub_auth(monkeypatch)
+    captured = _capture_client(monkeypatch)
+
+    VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x"))
+
+    assert len(captured) == 3  # image, video, music — in that build order
+    img, vid, mus = captured
+    assert img["http_options"].timeout == vertex_mod._IMAGE_TIMEOUT_MS
+    assert vid["http_options"].timeout == vertex_mod._VIDEO_TIMEOUT_MS
+    assert mus["http_options"].timeout == vertex_mod._MUSIC_TIMEOUT_MS
+    # The music ceiling stays under the e2e client's 300s poll budget.
+    assert vertex_mod._MUSIC_TIMEOUT_MS == 240_000
+
+
 # -- modality surface --------------------------------------------------- #
 
 

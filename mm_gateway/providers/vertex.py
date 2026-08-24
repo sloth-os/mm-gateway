@@ -87,6 +87,17 @@ _VERTEX_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 # global"). So when an operator pins no region, default the client there.
 _DEFAULT_LOCATION = "global"
 
+# Per-client request ceilings (ms), threaded through HttpOptions.timeout so the
+# SDK passes them to httpx as per-request timeouts. Without one the SDK resolves
+# a None per-request timeout and httpx clamps it to its 5s default, which is far
+# too short for generation: Lyria is synchronous and a full song takes well past
+# 5s; Veo polls a long-running operation; even Imagen can run a few seconds. The
+# music ceiling matches the AI Studio adapter's 240s httpx budget (which itself
+# stays under the e2e client's 300s poll budget).
+_IMAGE_TIMEOUT_MS = 300_000   # 5 min — Imagen generate_content.
+_VIDEO_TIMEOUT_MS = 900_000   # 15 min — Veo long-running video generation.
+_MUSIC_TIMEOUT_MS = 240_000   # 4 min — Lyria synchronous Interactions call.
+
 # In-memory store for the synchronous Lyria "tasks". Single-process only.
 _MUSIC_TASKS: dict[str, dict[str, Any]] = {}
 
@@ -123,11 +134,14 @@ class VertexProvider(
         image_base = backend.base_url or None
         video_base = backend.extra.get("video_base_url") or image_base
         music_base = backend.extra.get("music_base_url") or image_base
-        self._client = self._build_vertex_client(credentials, project, location, image_base)
-        self._client_video = self._build_vertex_client(credentials, project, location, video_base)
+        self._client = self._build_vertex_client(credentials, project, location, image_base, _IMAGE_TIMEOUT_MS)
+        self._client_video = self._build_vertex_client(credentials, project, location, video_base, _VIDEO_TIMEOUT_MS)
         # Lyria (Interactions) gets its own client so an operator can pin a
-        # music-specific base_url; it defaults to the same global client.
-        self._client_music = self._build_vertex_client(credentials, project, location, music_base)
+        # music-specific base_url; it defaults to the same global client. Its
+        # timeout matches the AI Studio adapter's httpx budget (Lyria is
+        # synchronous but a full song can take well over the SDK/httpx 5s
+        # default — without it the Interactions call times out client-side).
+        self._client_music = self._build_vertex_client(credentials, project, location, music_base, _MUSIC_TIMEOUT_MS)
 
     @staticmethod
     def _resolve_credentials(backend) -> tuple[Any, str | None, str | None]:
@@ -160,7 +174,7 @@ class VertexProvider(
         return creds, project or pid, location
 
     @staticmethod
-    def _build_vertex_client(credentials, project, location, base_url):
+    def _build_vertex_client(credentials, project, location, base_url, timeout_ms):
         kwargs: dict[str, Any] = {
             "vertexai": True,
             "credentials": credentials,
@@ -170,14 +184,18 @@ class VertexProvider(
         # Inject an httpx client whose event hooks log the backend request/
         # response (curl format + masked sensitive headers), matching the AI
         # Studio adapter. base_url overrides the endpoint when an operator pins
-        # a regional host via VERTEX_*_BASE_URL.
+        # a regional host via VERTEX_*_BASE_URL. ``timeout`` (ms) is what the SDK
+        # threads down to httpx as the per-request timeout; the SDK resolves
+        # ``None`` to a None per-request timeout, which httpx clamps to its 5s
+        # default — far too short for Lyria's synchronous generation — so each
+        # client pins a ceiling (matching the AI Studio adapter's 240s budget).
         http_kwargs: dict[str, Any] = {
             "httpxAsyncClient": httpx.AsyncClient(event_hooks=backend_event_hooks()),
         }
         if base_url:
-            kwargs["http_options"] = types.HttpOptions(base_url=base_url, **http_kwargs)
+            kwargs["http_options"] = types.HttpOptions(base_url=base_url, timeout=timeout_ms, **http_kwargs)
         else:
-            kwargs["http_options"] = types.HttpOptions(**http_kwargs)
+            kwargs["http_options"] = types.HttpOptions(timeout=timeout_ms, **http_kwargs)
         return genai.Client(**kwargs)
 
     # -- Lyria music ------------------------------------------------------- #

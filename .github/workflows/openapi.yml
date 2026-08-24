@@ -197,7 +197,15 @@ jobs:
           ls -la site
 
       - name: Configure Pages
+        # ``enablement: true`` makes configure-pages auto-enable the Pages site
+        # (Source = "GitHub Actions") when it isn't yet, using this job's
+        # ``pages: write`` permission. Without it the step 404s ("Get Pages site
+        # failed... Not Found") on a repo where Pages was never turned on —
+        # which is what was failing the run. Idempotent: once enabled, it's a
+        # no-op read of the existing site config.
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
