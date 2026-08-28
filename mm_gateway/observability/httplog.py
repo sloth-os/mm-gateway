@@ -165,9 +165,23 @@ async def _backend_response_hook(response: httpx.Response) -> None:
              headers=mask_headers(response.headers), body=body_text)
 
 
-def backend_event_hooks() -> dict[str, list]:
-    """Event hooks to attach to an ``httpx.AsyncClient`` for backend logging."""
-    return {"request": [_backend_request_hook], "response": [_backend_response_hook]}
+def backend_event_hooks(*, log_response: bool = True) -> dict[str, list]:
+    """Event hooks to attach to an ``httpx.AsyncClient`` for backend logging.
+
+    The response hook (:func:`_backend_response_hook`) materialises the response
+    body via ``aread()`` so it can be logged. That *consumes* the response byte
+    stream, which is fine for providers that then read ``response.content`` —
+    but a pass-through proxy streams the upstream response back to the client via
+    ``aiter_raw()`` and cannot tolerate the stream being consumed first. Such a
+    client should pass ``log_response=False``: the inbound upstream request is
+    still logged (masked credential + account attribution) and the response
+    status is logged by the proxy's own ``proxy_attempt_*`` line, so the response
+    hook is redundant there as well as incompatible.
+    """
+    hooks: dict[str, list] = {"request": [_backend_request_hook]}
+    if log_response:
+        hooks["response"] = [_backend_response_hook]
+    return hooks
 
 
 # Sync variants for providers whose SDK uses a synchronous ``httpx.Client``

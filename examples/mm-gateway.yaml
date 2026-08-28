@@ -62,6 +62,57 @@ backends:
     api_key: ${GOOGLE_API_KEY:}
     tags: [prod]
 
+# General pass-through proxies. A proxy forwards the *raw* request verbatim
+# (method, path, query, body, headers) to an upstream root URL, injecting one
+# configured account's credential as a header. The front-end caller still
+# authenticates with a bearer key above and must be allowed by the proxy's
+# `tags` (the same hybrid rule as backends); the upstream account key never
+# reaches the client. The public URL is `/proxy/{name}/{path}`.
+#
+# HTTP methods, WebSocket upgrades (`/proxy/{name}/...` over ws/wss), and
+# event-stream (SSE) responses are all transparent. A proxy fronts a *pool* of
+# upstream accounts (like a backend with `credentials`): the request layer
+# ranks them by live health and retries the next account on a rate-limit /
+# timeout / upstream 5xx. Leave `accounts` out to use the top-level `api_key`
+# as a single `default` account.
+proxies:
+  - name: openai-raw
+    base_url: https://api.openai.com
+    # `auth_header`+`auth_scheme` render the account credential. Default is
+    # `Authorization: Bearer <key>`. For a Google-style raw-key header set
+    # `auth_header: x-goog-api-key` and `auth_scheme: null`.
+    auth_header: Authorization
+    auth_scheme: Bearer
+    tags: [prod]
+    timeout: 120
+    websocket: true
+    # Static headers applied to every forwarded request (e.g. a required
+    # `x-goog-user-project`). Per-account `headers` shadow these.
+    headers: {}
+    # A pool of upstream accounts. Each entry is a mapping with an optional
+    # `id`/`base_url`/`headers`, or a bare string treated as an `api_key`.
+    # When set, the top-level `api_key` is ignored for account enumeration.
+    accounts:
+      - id: primary
+        api_key: ${OPENAI_PROXY_KEY_PRIMARY:}
+      - id: overflow
+        api_key: ${OPENAI_PROXY_KEY_OVERFLOW:}
+        # Optional per-account base_url / headers override.
+        # base_url: https://fallback.openai.example
+        # headers: {x-account: overflow}
+
+  - name: google-raw
+    # Google-style raw-key auth + a static header the upstream requires.
+    base_url: https://generativelanguage.googleapis.com
+    auth_header: x-goog-api-key
+    auth_scheme: null
+    tags: [prod]
+    headers:
+      x-goog-user-project: ${GOOGLE_PROJECT:}
+    accounts:
+      - id: only
+        api_key: ${GOOGLE_API_KEY:}
+
 # Front-end API keys. A request authenticated with a key may use any backend
 # whose tags intersect allow_tags OR whose name is in allow_backends (hybrid),
 # and never any backend named in deny_tags.

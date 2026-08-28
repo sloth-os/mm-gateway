@@ -61,6 +61,29 @@ keys:
     deny_tags: [video-primary]
     extra:
       note: pinned
+proxies:
+  - name: openai-raw
+    base_url: https://api.openai.com
+    auth_header: Authorization
+    auth_scheme: Bearer
+    tags: [prod]
+    timeout: 90
+    websocket: false
+    headers:
+      x-test: hi
+    accounts:
+      - id: primary
+        api_key: ${OPENAI_PROXY_KEY_PRIMARY}
+      - id: overflow
+        api_key: ${OPENAI_PROXY_KEY_OVERFLOW:}
+        headers:
+          x-account: overflow
+  - name: google-raw
+    base_url: https://generativelanguage.googleapis.com
+    auth_header: x-goog-api-key
+    auth_scheme: null
+    tags: [prod]
+    api_key: ${GOOGLE_API_KEY_PROXY}
 """
 
 
@@ -107,6 +130,9 @@ def test_from_file_parses_all_sections(monkeypatch, tmp_path):
     monkeypatch.setenv("VOLC_KEY", "sk-volc")
     monkeypatch.setenv("ALICE_TOKEN", "tok-alice")
     monkeypatch.delenv("MISSING_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_PROXY_KEY_PRIMARY", "sk-proxy-primary")
+    monkeypatch.setenv("OPENAI_PROXY_KEY_OVERFLOW", "sk-proxy-overflow")
+    monkeypatch.setenv("GOOGLE_API_KEY_PROXY", "sk-google-proxy")
     path = tmp_path / "mm-gateway.yaml"
     path.write_text(_SAMPLE_YAML, encoding="utf-8")
 
@@ -148,6 +174,34 @@ def test_from_file_parses_all_sections(monkeypatch, tmp_path):
     assert bob.allow_backends == ["openai-prod"]
     assert bob.deny_tags == ["video-primary"]
     assert bob.extra == {"note": "pinned"}
+
+    # proxies
+    assert [p.name for p in s.proxies] == ["openai-raw", "google-raw"]
+    openai_proxy = s.proxies[0]
+    assert openai_proxy.base_url == "https://api.openai.com"
+    assert openai_proxy.auth_header == "Authorization"
+    assert openai_proxy.auth_scheme == "Bearer"  # explicit, not the default
+    assert openai_proxy.tags == ["prod"]
+    assert openai_proxy.timeout == 90.0
+    assert openai_proxy.websocket is False
+    assert openai_proxy.headers == {"x-test": "hi"}
+    # ${ENV} substitution inside per-account entries, with a default fallback.
+    accounts = openai_proxy.enumerate_accounts()
+    assert [a[0] for a in accounts] == ["primary", "overflow"]
+    assert accounts[0][1] == "sk-proxy-primary"           # ${OPENAI_PROXY_KEY_PRIMARY}
+    assert accounts[1][1] == "sk-proxy-overflow"          # ${OPENAI_PROXY_KEY_OVERFLOW:}
+    # The static header survives; per-account headers shadow it.
+    assert accounts[0][3] == {"x-test": "hi"}
+    assert accounts[1][3] == {"x-test": "hi", "x-account": "overflow"}
+    assert openai_proxy.configured is True
+
+    google_proxy = s.proxies[1]
+    # auth_scheme: null parses as None (Google raw-key header), not the str "Bearer".
+    assert google_proxy.auth_header == "x-goog-api-key"
+    assert google_proxy.auth_scheme is None
+    # No `accounts` list -> one default account built from the top-level api_key.
+    assert google_proxy.enumerate_accounts() == [("default", "sk-google-proxy", None, {})]
+    assert google_proxy.configured is True
 
 
 def test_from_file_missing_keys_default_to_empty(monkeypatch, tmp_path):
@@ -420,6 +474,62 @@ def _clear_provider_envs(monkeypatch) -> None:
             monkeypatch.delenv(f"{n}_{suffix}", raising=False)
     monkeypatch.delenv("GATEWAY_API_KEY", raising=False)
     monkeypatch.delenv("MM_GATEWAY_CONFIG", raising=False)
+    # The general pass-through proxy is wired from PROXY_API_KEY / PROXY_NAME /
+    # PROXY_BASE_URL; clear them too so a stray shell value can't alter these
+    # backend-only tests.
+    for n in ("PROXY_API_KEY", "PROXY_NAME", "PROXY_BASE_URL"):
+        monkeypatch.delenv(n, raising=False)
+
+
+def test_from_env_legacy_proxy_from_proxy_api_key(monkeypatch, tmp_path):
+    # PROXY_API_KEY registers a single general pass-through proxy pointed at the
+    # AI Studio Generative Language host by default, using Google's raw
+    # x-goog-api-key header (auth_scheme=None). The front-end env key must be
+    # authorised to use it (allow_backends carries the proxy name).
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MM_GATEWAY_CONFIG", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+    monkeypatch.setenv("GATEWAY_API_KEY", "secret-gateway-token")
+    monkeypatch.setenv("PROXY_API_KEY", "goog-live-key")
+    monkeypatch.delenv("PROXY_NAME", raising=False)
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+    s = Settings.from_env()
+
+    assert [p.name for p in s.proxies] == ["gemini-live"]
+    proxy = s.proxies[0]
+    assert proxy.base_url == "https://generativelanguage.googleapis.com"
+    assert proxy.auth_header == "x-goog-api-key"
+    assert proxy.auth_scheme is None  # raw key, no "Bearer" scheme
+    assert proxy.websocket is True
+    assert proxy.api_key == "goog-live-key"
+    # The env key is authorised for the proxy by name (no allow_tags set, so
+    # usable_proxies checks allow_backends — which must carry the proxy name).
+    assert "gemini-live" in s.keys[0].allow_backends
+    assert "openai" in s.keys[0].allow_backends
+
+
+def test_from_env_legacy_proxy_overrides_name_and_base(monkeypatch, tmp_path):
+    # An operator can retarget the proxy at a different host and rename it.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MM_GATEWAY_CONFIG", raising=False)
+    monkeypatch.setenv("PROXY_API_KEY", "key")
+    monkeypatch.setenv("PROXY_NAME", "my-proxy")
+    monkeypatch.setenv("PROXY_BASE_URL", "https://custom.example")
+    s = Settings.from_env()
+    assert s.proxies[0].name == "my-proxy"
+    assert s.proxies[0].base_url == "https://custom.example"
+    assert "my-proxy" in s.keys[0].allow_backends
+
+
+def test_from_env_legacy_proxy_absent_when_no_key(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("MM_GATEWAY_CONFIG", raising=False)
+    monkeypatch.delenv("PROXY_API_KEY", raising=False)
+    monkeypatch.setenv("GATEWAY_API_KEY", "tok")
+    s = Settings.from_env()
+    assert s.proxies == []
+    assert all("gemini-live" not in k.allow_backends for k in s.keys)
 
 
 def test_from_env_split_image_triple_registers_image_model(monkeypatch, tmp_path):

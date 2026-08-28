@@ -18,6 +18,13 @@ EXPECTED_OPERATIONS = {
     ("/v1/music/{music_id}", "get"): "getMusic",
 }
 
+# The general pass-through proxy is a separate public surface: one catch-all
+# path forwarded verbatim for every HTTP method. It shares the bearer-key
+# auth + Problem Details contract but is not part of the media-generation
+# operation set above, so it is asserted separately.
+PROXY_PATH = "/proxy/{name}/{path}"
+PROXY_METHODS = ["get", "post", "put", "patch", "delete", "head", "options"]
+
 
 def _spec() -> dict:
     return create_app(Settings()).openapi()
@@ -35,9 +42,15 @@ def _walk_schema(value, path=()):
 
 def test_openapi_has_only_the_intended_rest_paths_and_operation_ids():
     spec = _spec()
-    assert set(spec["paths"]) == {path for path, _ in EXPECTED_OPERATIONS}
+    expected_paths = {path for path, _ in EXPECTED_OPERATIONS} | {PROXY_PATH}
+    assert set(spec["paths"]) == expected_paths
     for (path, method), operation_id in EXPECTED_OPERATIONS.items():
         assert spec["paths"][path][method]["operationId"] == operation_id
+    # Every proxy method is present with a unique operationId.
+    proxy_ops = spec["paths"][PROXY_PATH]
+    assert set(proxy_ops) == set(PROXY_METHODS)
+    op_ids = {op["operationId"] for op in proxy_ops.values()}
+    assert len(op_ids) == len(PROXY_METHODS)
 
 
 def test_create_operations_are_202_resources_with_polling_headers():

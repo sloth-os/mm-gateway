@@ -23,6 +23,9 @@ each backend adapter translates those concepts to its native SDK or REST shape.
 | `GET` | `/health` | Liveness check |
 | `GET` | `/metrics` | Prometheus metrics |
 
+The `/proxy/{name}/{path}` surface (documented below) forwards any HTTP
+method — and WebSocket upgrades — verbatim to a named upstream root URL.
+
 Generation is always asynchronous. A successful `POST` returns `202 Accepted`
 with the complete current task representation. The `Location` and
 `Link: <...>; rel="self"` headers identify the canonical task URL. Poll that URL
@@ -220,6 +223,75 @@ HTTP errors use RFC 9457 Problem Details with the
 `code` is the stable machine-readable extension. Provider identity and raw
 upstream payloads are available in gateway logs, not public error responses.
 
+## General pass-through proxy
+
+`/proxy/{name}/{path}` forwards a raw request verbatim — method, path, query
+string, body, and most client headers — to an upstream root URL configured per
+proxy. It exists for upstreams the gateway does not (and should not) translate
+through the media-generation contract: a model's own REST API, a vendor's
+non-media endpoints, or anything else that just needs the gateway's
+auth, pooling, and retry layered on top of a raw HTTP/SSE/WebSocket hop.
+
+```bash
+curl http://localhost:8000/proxy/openai-raw/v1/chat/completions \
+  -H "authorization: Bearer $GATEWAY_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+```
+
+The front-end caller authenticates with the same `Authorization: Bearer` key as
+the generation endpoints; the key must be allowed by the proxy's `tags` (the
+same hybrid tag rule as backends). The upstream account's credential is injected
+by the gateway and **never** reaches the client — a caller-supplied
+`Authorization` or `x-goog-api-key` is overwritten or dropped. A 401 means the
+front-end key was missing/unknown, a 403 means the key is not allowed on this
+proxy, and a 404 means no proxy is configured under that name.
+
+Every standard HTTP method is forwarded (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`,
+`HEAD`, `OPTIONS`). `CONNECT` is not. Event-stream (SSE) and any other responses
+are streamed back to the client unchanged — they are not buffered or wrapped.
+
+WebSocket upgrades on the same path are bridged to an upstream `ws`/`wss` URL
+when the proxy has `websocket: true` (the default). Browsers cannot set headers
+on a WS upgrade, so the front-end bearer key may instead be sent as an
+`access_token` (or `token`) query parameter; it authenticates the upgrade and is
+dropped before forwarding to the upstream.
+
+A proxy fronts a **pool** of upstream accounts, just like a backend with
+`credentials`: the request layer ranks them by live health (success rate,
+latency, rate-limit cooldown — the same store auto-routing uses) and retries
+the next account on a rate-limit, timeout, or upstream 5xx. A caller's 4xx is
+their own bad request and is not retried against another account. When every
+account fails, the last upstream response is surfaced verbatim rather than
+wrapped in a 502.
+
+```yaml
+proxies:
+  - name: openai-raw
+    base_url: https://api.openai.com
+    # auth_header + auth_scheme render the account credential. Default is
+    # `Authorization: Bearer <key>`. For a Google-style raw-key header use
+    # `auth_header: x-goog-api-key` and `auth_scheme: null`.
+    tags: [prod]
+    timeout: 120
+    websocket: true
+    # Static headers applied to every forwarded request. Per-account headers
+    # shadow these.
+    headers: {}
+    accounts:
+      - id: primary
+        api_key: ${OPENAI_PROXY_KEY_PRIMARY}
+      - id: overflow
+        api_key: ${OPENAI_PROXY_KEY_OVERFLOW:}
+        # Optional per-account base_url / headers override.
+        # base_url: https://fallback.openai.example
+        # headers: {x-account: overflow}
+```
+
+Leave `accounts` out to use the top-level `api_key` as a single `default`
+account. A proxy with no credential at all is unusable and is not registered —
+its path 404s rather than 503-ing.
+
 ## Authentication
 
 Generation and model-listing endpoints use `Authorization: Bearer <token>`.
@@ -283,6 +355,9 @@ keys:
 
 Provider credentials, endpoints, model pins, and adapter-only options belong in
 operator configuration. They do not change the public request schemas.
+
+The `proxies:` section configures the general pass-through proxy surface
+described under [General pass-through proxy](#general-pass-through-proxy) above.
 
 The bundled task store is process-local. Production deployments with multiple
 workers or replicas must use a shared durable task store so gateway task IDs,

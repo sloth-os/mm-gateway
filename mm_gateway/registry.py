@@ -20,7 +20,7 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-from mm_gateway.config import BackendConfig, KeyConfig, Settings
+from mm_gateway.config import BackendConfig, KeyConfig, ProxyConfig, Settings
 from mm_gateway.core.base import ImageProvider, MusicProvider, Provider, VideoProvider
 from mm_gateway.core.exceptions import (
     ForbiddenError,
@@ -107,6 +107,8 @@ class Registry:
         # backend name -> ordered account ids (at least one: "default").
         self._backend_accounts: dict[str, list[str]] = {}
         self._aliases = dict(_MODEL_ALIASES)
+        # proxy name -> ProxyConfig (the configured, pass-through proxies).
+        self._proxies: dict[str, ProxyConfig] = {}
         self._build()
 
     def _build(self) -> None:
@@ -150,6 +152,22 @@ class Registry:
             log.info("backend_registered", backend=cfg.name, type=cfg.type,
                      tags=cfg.tags, accounts=account_ids, image=default.supports_image,
                      video=default.supports_video, music=default.supports_music)
+
+        # General pass-through proxies. Unlike provider backends they carry no
+        # SDK instance — the proxy runner forwards raw HTTP/WebSocket — so only
+        # the configured ProxyConfig is retained, keyed by name for the routes.
+        for proxy in self.settings.proxies:
+            if not proxy.configured:
+                continue
+            if proxy.name in self._proxies or proxy.name in self._backends:
+                log.warning("proxy_name_collision", name=proxy.name)
+                continue
+            self._proxies[proxy.name] = proxy
+            log.info("proxy_registered", proxy=proxy.name,
+                     base_url=proxy.base_url, tags=proxy.tags,
+                     auth_header=proxy.auth_header,
+                     accounts=[aid for aid, *_ in proxy.enumerate_accounts()],
+                     websocket=proxy.websocket)
 
     def _per_account_config(self, cfg: BackendConfig, account_id: str,
                             api_key: str | None, base_url: str | None,
@@ -207,6 +225,37 @@ class Registry:
             tag_ok = bool(set(cfg.tags) & set(key.allow_tags))
             name_ok = name in key.allow_backends
             # An open key (no allow_tags/allow_backends) may use every backend.
+            open_key = not key.allow_tags and not key.allow_backends
+            if tag_ok or name_ok or open_key:
+                allowed.append(name)
+        return allowed
+
+    def proxy_names(self) -> list[str]:
+        return list(self._proxies)
+
+    def proxy(self, name: str) -> ProxyConfig:
+        """Return the configured :class:`ProxyConfig` for ``name``.
+
+        Raises ``ProviderNotFoundError`` (404) when no such proxy is configured;
+        ``ForbiddenError`` (403) when it exists but the authenticated key is not
+        allowed to use it — both surfaces so a caller can tell a typo from a
+        permissions gap.
+        """
+        proxy = self._proxies.get(name)
+        if proxy is None:
+            raise ProviderNotFoundError(f"Proxy '{name}' is not configured.")
+        return proxy
+
+    def usable_proxies(self, key: KeyConfig | None) -> list[str]:
+        """Proxy names a key may use, via the same hybrid allow/deny rule."""
+        if key is None:
+            return list(self._proxies)
+        allowed: list[str] = []
+        for name, proxy in self._proxies.items():
+            if name in key.deny_tags:
+                continue
+            tag_ok = bool(set(proxy.tags) & set(key.allow_tags))
+            name_ok = name in key.allow_backends
             open_key = not key.allow_tags and not key.allow_backends
             if tag_ok or name_ok or open_key:
                 allowed.append(name)

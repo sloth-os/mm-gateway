@@ -27,6 +27,7 @@ from mm_gateway.observability.logging import (
     get_logger,
     new_request_id,
 )
+from mm_gateway.proxy import ProxyRunner
 from mm_gateway.registry import Registry
 from mm_gateway.services import ImageService, MusicService, VideoService
 from mm_gateway.tasks.store import TaskStore
@@ -82,12 +83,15 @@ def create_app(
         poll_interval=settings.poll_interval, sync_default=settings.music_sync_default,
     )
     task_store = task_store or TaskStore()
+    proxy_runner = ProxyRunner()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         log.info("gateway_starting", host=settings.host, port=settings.port,
-                 providers=list(registry.providers.keys()))
+                 providers=list(registry.providers.keys()),
+                 proxies=list(registry.proxy_names()))
         yield
+        await proxy_runner.aclose()
         log.info("gateway_stopping")
 
     app = FastAPI(
@@ -101,6 +105,7 @@ def create_app(
     app.state.video_service = video_service
     app.state.music_service = music_service
     app.state.task_store = task_store
+    app.state.proxy_runner = proxy_runner
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):
@@ -136,17 +141,29 @@ def create_app(
         # request.
         captured = bytearray()
         original_iter = response.body_iterator
+        # A streaming proxy response (and the MCP SSE transport) may be a
+        # long-lived event stream — buffering it wholesale would hold the whole
+        # body in memory and stall the stream. Such responses mark themselves
+        # so the pass-through iterator below yields chunks without accumulating.
+        is_proxy_stream = getattr(response, "_mm_proxy_stream", False) or \
+            getattr(request.state, "proxy_streaming", False)
 
         async def logged_iter():
             bind_context(request_id=request_id)
             try:
                 async for chunk in original_iter:
-                    if isinstance(chunk, (bytes, bytearray)):
-                        captured.extend(chunk)
-                    elif isinstance(chunk, str):
-                        captured.extend(chunk.encode("utf-8"))
+                    if not is_proxy_stream:
+                        if isinstance(chunk, (bytes, bytearray)):
+                            captured.extend(chunk)
+                        elif isinstance(chunk, str):
+                            captured.extend(chunk.encode("utf-8"))
                     yield chunk
-                frontend_response_log(response.status_code, response.headers, bytes(captured))
+                if is_proxy_stream:
+                    # Don't log the (possibly huge / streaming) body — the
+                    # status + masked headers still correlate to the request.
+                    frontend_response_log(response.status_code, response.headers, None)
+                else:
+                    frontend_response_log(response.status_code, response.headers, bytes(captured))
             finally:
                 clear_context()
 
@@ -192,12 +209,14 @@ def create_app(
         image_routes,
         meta_routes,
         music_routes,
+        proxy_routes,
         video_routes,
     )
     app.include_router(meta_routes.router, tags=["meta"])
     app.include_router(image_routes.router)
     app.include_router(video_routes.router)
     app.include_router(music_routes.router)
+    app.include_router(proxy_routes.router)
 
     # Optionally mount the HTTP MCP endpoint (no-op when mcp_enabled is false).
     from mm_gateway.server.mcp import mount_mcp
@@ -430,6 +449,23 @@ def _install_openapi_customization(app: FastAPI) -> None:
         }
 
         problem_ref = {"$ref": "#/components/schemas/ProblemDetail"}
+        # FastAPI assigns a single operationId to every method of a multi-method
+        # ``api_route`` (the proxy catch-all forwards GET/POST/PUT/PATCH/DELETE/
+        # HEAD/OPTIONS through one handler). OpenAPI requires operationIds to be
+        # unique, so append the method to any that collide.
+        seen_op_ids: set[str] = set()
+        for path, item in spec.get("paths", {}).items():
+            for method, op in item.items():
+                if method not in ("get", "post", "put", "patch", "delete", "head", "options"):
+                    continue
+                op_id = op.get("operationId")
+                if not op_id:
+                    continue
+                if op_id in seen_op_ids:
+                    op["operationId"] = f"{op_id}_{method}"
+                    seen_op_ids.add(op["operationId"])
+                else:
+                    seen_op_ids.add(op_id)
         for path, item in spec.get("paths", {}).items():
             for method, op in item.items():
                 if method not in ("get", "post", "put", "patch", "delete"):

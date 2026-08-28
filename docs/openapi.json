@@ -1937,6 +1937,1352 @@
         ]
       }
     },
+    "/proxy/{name}/{path}": {
+      "delete": {
+        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "operationId": "proxyRequestDelete",
+        "parameters": [
+          {
+            "description": "Configured proxy name (the provider-domain segment).",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Configured proxy name (the provider-domain segment).",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path forwarded to the upstream root URL.",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "Path forwarded to the upstream root URL.",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upstream response, streamed back verbatim (any media type)."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to use this proxy."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No proxy configured for this name."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Every upstream account failed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "The proxy has no configured account."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Forward a request through a named proxy",
+        "tags": [
+          "proxy"
+        ]
+      },
+      "get": {
+        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "operationId": "proxyRequestGet",
+        "parameters": [
+          {
+            "description": "Configured proxy name (the provider-domain segment).",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Configured proxy name (the provider-domain segment).",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path forwarded to the upstream root URL.",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "Path forwarded to the upstream root URL.",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upstream response, streamed back verbatim (any media type)."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to use this proxy."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No proxy configured for this name."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Every upstream account failed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "The proxy has no configured account."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Forward a request through a named proxy",
+        "tags": [
+          "proxy"
+        ]
+      },
+      "head": {
+        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "operationId": "proxyRequestHead",
+        "parameters": [
+          {
+            "description": "Configured proxy name (the provider-domain segment).",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Configured proxy name (the provider-domain segment).",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path forwarded to the upstream root URL.",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "Path forwarded to the upstream root URL.",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upstream response, streamed back verbatim (any media type)."
+          },
+          "401": {
+            "description": "Missing or unknown API key."
+          },
+          "403": {
+            "description": "Key not allowed to use this proxy."
+          },
+          "404": {
+            "description": "No proxy configured for this name."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "Every upstream account failed."
+          },
+          "503": {
+            "description": "The proxy has no configured account."
+          }
+        },
+        "summary": "Forward a request through a named proxy",
+        "tags": [
+          "proxy"
+        ]
+      },
+      "options": {
+        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "operationId": "proxyRequestOptions",
+        "parameters": [
+          {
+            "description": "Configured proxy name (the provider-domain segment).",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Configured proxy name (the provider-domain segment).",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path forwarded to the upstream root URL.",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "Path forwarded to the upstream root URL.",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upstream response, streamed back verbatim (any media type)."
+          },
+          "401": {
+            "description": "Missing or unknown API key."
+          },
+          "403": {
+            "description": "Key not allowed to use this proxy."
+          },
+          "404": {
+            "description": "No proxy configured for this name."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "description": "Every upstream account failed."
+          },
+          "503": {
+            "description": "The proxy has no configured account."
+          }
+        },
+        "summary": "Forward a request through a named proxy",
+        "tags": [
+          "proxy"
+        ]
+      },
+      "patch": {
+        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "operationId": "proxyRequestPatch",
+        "parameters": [
+          {
+            "description": "Configured proxy name (the provider-domain segment).",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Configured proxy name (the provider-domain segment).",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path forwarded to the upstream root URL.",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "Path forwarded to the upstream root URL.",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upstream response, streamed back verbatim (any media type)."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to use this proxy."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No proxy configured for this name."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Every upstream account failed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "The proxy has no configured account."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Forward a request through a named proxy",
+        "tags": [
+          "proxy"
+        ]
+      },
+      "post": {
+        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "operationId": "proxyRequestPost",
+        "parameters": [
+          {
+            "description": "Configured proxy name (the provider-domain segment).",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Configured proxy name (the provider-domain segment).",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path forwarded to the upstream root URL.",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "Path forwarded to the upstream root URL.",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upstream response, streamed back verbatim (any media type)."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to use this proxy."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No proxy configured for this name."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Every upstream account failed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "The proxy has no configured account."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Forward a request through a named proxy",
+        "tags": [
+          "proxy"
+        ]
+      },
+      "put": {
+        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "operationId": "proxyRequestPut",
+        "parameters": [
+          {
+            "description": "Configured proxy name (the provider-domain segment).",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "Configured proxy name (the provider-domain segment).",
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Path forwarded to the upstream root URL.",
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "Path forwarded to the upstream root URL.",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The upstream response, streamed back verbatim (any media type)."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to use this proxy."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No proxy configured for this name."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Every upstream account failed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "The proxy has no configured account."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/proxy/{name}/{path}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Forward a request through a named proxy",
+        "tags": [
+          "proxy"
+        ]
+      }
+    },
     "/v1/images": {
       "post": {
         "operationId": "createImage",

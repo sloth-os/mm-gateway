@@ -165,6 +165,16 @@ jobs:
           ACESTEP_MUSIC_API_KEY: ${{ secrets.ACESTEP_MUSIC_API_KEY }}
           ACESTEP_MUSIC_BASE_URL: ${{ vars.ACESTEP_MUSIC_BASE_URL }}
           ACESTEP_MUSIC_MODEL: ${{ vars.ACESTEP_MUSIC_MODEL }}
+          # The Gemini Live (AI Studio) proxy e2e is independent of the
+          # provider modalities: its triple is PROXY_API_KEY (the upstream
+          # account key) + PROXY_MODEL (the Live model id) + GATEWAY_API_KEY
+          # (the front-end key, shared with the providers). PROXY_BASE_URL is
+          # optional — config defaults it to the AI Studio Generative Language
+          # host — so it does not gate. Exposed here only so the gate below can
+          # see it; threaded into the container in the e2e job.
+          PROXY_API_KEY: ${{ secrets.PROXY_API_KEY }}
+          PROXY_BASE_URL: ${{ vars.PROXY_BASE_URL }}
+          PROXY_MODEL: ${{ vars.PROXY_MODEL }}
         run: |
           set=0
           # A provider modality is "fully configured" iff all three of its
@@ -208,6 +218,13 @@ jobs:
             IFS=':' read -r k u m <<< "$triple"
             if [ -n "$k" ] && [ -n "$u" ] && [ -n "$m" ]; then set=1; break; fi
           done
+          # The Gemini Live proxy e2e is a separate surface from the provider
+          # modalities above: it drives the general /proxy/<name>/ WS bridge
+          # against the AI Studio Live API, so its own (PROXY_API_KEY +
+          # PROXY_MODEL) pair — the base URL is optional — flips the gate on
+          # its own. Without this, wiring only the proxy triple would leave
+          # secrets_present=0 and the e2e job would never run the proxy test.
+          if [ -n "$PROXY_API_KEY" ] && [ -n "$PROXY_MODEL" ]; then set=1; fi
           echo "secrets_present=$set" >> "$GITHUB_OUTPUT"
           echo "secrets_present=$set"
 
@@ -539,6 +556,14 @@ jobs:
           ACESTEP_MUSIC_API_KEY: ${{ secrets.ACESTEP_MUSIC_API_KEY }}
           ACESTEP_MUSIC_BASE_URL: ${{ vars.ACESTEP_MUSIC_BASE_URL }}
           ACESTEP_MUSIC_MODEL: ${{ vars.ACESTEP_MUSIC_MODEL }}
+          # The Gemini Live proxy triple: the upstream account key (PROXY_API_KEY)
+          # + its model id (PROXY_MODEL) reach the container so _from_legacy_env
+          # registers the gemini-live pass-through proxy. PROXY_BASE_URL is optional
+          # (config defaults to the AI Studio host); threaded only if set so an
+          # unset variable doesn't pass an empty string into the container.
+          PROXY_API_KEY: ${{ secrets.PROXY_API_KEY }}
+          PROXY_BASE_URL: ${{ vars.PROXY_BASE_URL }}
+          PROXY_NAME: ${{ vars.PROXY_NAME }}
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
         run: |
           docker run -d --name gateway --restart=no \
@@ -568,11 +593,18 @@ jobs:
             -e UDIOAPI_MUSIC_API_KEY -e UDIOAPI_MUSIC_BASE_URL -e UDIOAPI_MUSIC_MODEL \
             -e MUREKA_MUSIC_API_KEY -e MUREKA_MUSIC_BASE_URL -e MUREKA_MUSIC_MODEL \
             -e ACESTEP_MUSIC_API_KEY -e ACESTEP_MUSIC_BASE_URL -e ACESTEP_MUSIC_MODEL \
+            -e PROXY_API_KEY -e PROXY_BASE_URL -e PROXY_NAME \
             -e GATEWAY_API_KEY \
             ghcr.io/${{ github.repository }}:sha-${GITHUB_SHA::7}
 
       - name: Install e2e runner deps
-        run: pip install --quiet httpx
+        # httpx drives smoke.py; google-genai (>=2.19) + its transitive deps
+        # (cryptography for the TLS terminator's self-signed cert, websockets
+        # for the Live SDK transport) drive proxy_live.py. The gateway pins
+        # google-genai as a core dep, but the runner only has httpx by default,
+        # so install the SDK here. cryptography and websockets come with
+        # google-genai, so no separate pins.
+        run: pip install --quiet httpx "google-genai>=2.19"
 
       - name: Run e2e smoke
         env:
@@ -658,6 +690,22 @@ jobs:
           ACESTEP_MUSIC_BASE_URL: ${{ vars.ACESTEP_MUSIC_BASE_URL }}
           ACESTEP_MUSIC_MODEL: ${{ vars.ACESTEP_MUSIC_MODEL }}
         run: python tests/e2e/smoke.py
+
+      - name: Run Gemini Live proxy e2e
+        # Drives the general /proxy/<name>/ WebSocket bridge against the real
+        # AI Studio Live API via the google-genai SDK. Runs whenever its own
+        # triple is fully set (PROXY_API_KEY + PROXY_MODEL + GATEWAY_API_KEY)
+        # — independent of the provider modalities' gate. proxy_live.py exits 0
+        # when the triple is unset, so this step is green before the secrets
+        # are wired and only spends a real Live call once they are.
+        env:
+          MM_GATEWAY: http://127.0.0.1:8000
+          GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          PROXY_API_KEY: ${{ secrets.PROXY_API_KEY }}
+          PROXY_BASE_URL: ${{ vars.PROXY_BASE_URL }}
+          PROXY_NAME: ${{ vars.PROXY_NAME }}
+          PROXY_MODEL: ${{ vars.PROXY_MODEL }}
+        run: python tests/e2e/proxy_live.py
 
       - name: Dump gateway logs on failure
         if: failure()

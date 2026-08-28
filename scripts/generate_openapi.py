@@ -42,6 +42,7 @@ EXPECTED_PATHS = {
     "/v1/videos/{video_id}",
     "/v1/music",
     "/v1/music/{music_id}",
+    "/proxy/{name}/{path}",
     "/metrics",
 }
 
