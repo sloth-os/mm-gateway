@@ -558,12 +558,13 @@ jobs:
           ACESTEP_MUSIC_MODEL: ${{ vars.ACESTEP_MUSIC_MODEL }}
           # The Gemini Live proxy triple: the upstream account key (PROXY_API_KEY)
           # + its model id (PROXY_MODEL) reach the container so _from_legacy_env
-          # registers the gemini-live pass-through proxy. PROXY_BASE_URL is optional
-          # (config defaults to the AI Studio host); threaded only if set so an
-          # unset variable doesn't pass an empty string into the container.
+          # registers the gemini-live pass-through proxy. The proxy is matched by
+          # its upstream domain (the host of PROXY_BASE_URL; defaults to the AI
+          # Studio host), so there is no PROXY_NAME. PROXY_BASE_URL is optional;
+          # threaded only if set so an unset variable doesn't pass an empty
+          # string into the container.
           PROXY_API_KEY: ${{ secrets.PROXY_API_KEY }}
           PROXY_BASE_URL: ${{ vars.PROXY_BASE_URL }}
-          PROXY_NAME: ${{ vars.PROXY_NAME }}
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
         run: |
           docker run -d --name gateway --restart=no \
@@ -593,7 +594,7 @@ jobs:
             -e UDIOAPI_MUSIC_API_KEY -e UDIOAPI_MUSIC_BASE_URL -e UDIOAPI_MUSIC_MODEL \
             -e MUREKA_MUSIC_API_KEY -e MUREKA_MUSIC_BASE_URL -e MUREKA_MUSIC_MODEL \
             -e ACESTEP_MUSIC_API_KEY -e ACESTEP_MUSIC_BASE_URL -e ACESTEP_MUSIC_MODEL \
-            -e PROXY_API_KEY -e PROXY_BASE_URL -e PROXY_NAME \
+            -e PROXY_API_KEY -e PROXY_BASE_URL \
             -e GATEWAY_API_KEY \
             ghcr.io/${{ github.repository }}:sha-${GITHUB_SHA::7}
 
@@ -703,7 +704,6 @@ jobs:
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
           PROXY_API_KEY: ${{ secrets.PROXY_API_KEY }}
           PROXY_BASE_URL: ${{ vars.PROXY_BASE_URL }}
-          PROXY_NAME: ${{ vars.PROXY_NAME }}
           PROXY_MODEL: ${{ vars.PROXY_MODEL }}
         run: python tests/e2e/proxy_live.py
 

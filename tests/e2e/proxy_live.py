@@ -5,7 +5,7 @@ A companion to ``tests/e2e/smoke.py`` (which drives the generation contract
 against real image/video/music providers). This script drives the gateway's
 **general pass-through proxy** over a real upstream Gemini Live (bidirectional
 realtime) WebSocket call, using the google-genai SDK's ``client.aio.live`` API —
-the same SDK a real client uses — pointed at ``/proxy/gemini-live/...`` so the
+the same SDK a real client uses — pointed at ``/proxy/<domain>/...`` so the
 gateway's WebSocket bridge, front-end auth, and account injection are all
 exercised end-to-end against Google's Generative Language API.
 
@@ -65,7 +65,14 @@ BASE = os.environ.get("MM_GATEWAY", "http://127.0.0.1:8000").rstrip("/")
 TOKEN = os.environ.get("GATEWAY_API_KEY", "")
 PROXY_API_KEY = os.environ.get("PROXY_API_KEY", "")
 PROXY_MODEL = os.environ.get("PROXY_MODEL", "")
-PROXY_NAME = os.environ.get("PROXY_NAME", "gemini-live")
+# The proxy is matched by its upstream domain (the host of base_url). The
+# gateway's default proxy (from PROXY_API_KEY) targets the AI Studio Generative
+# Language host; PROXY_BASE_URL overrides it, and the routing domain follows.
+from urllib.parse import urlparse
+_PROXY_BASE_URL = os.environ.get(
+    "PROXY_BASE_URL", "https://generativelanguage.googleapis.com"
+)
+PROXY_DOMAIN = urlparse(_PROXY_BASE_URL).hostname or _PROXY_BASE_URL
 LIVE_TURN_TIMEOUT = float(os.environ.get("PROXY_LIVE_TIMEOUT", "60"))
 
 
@@ -214,15 +221,15 @@ async def _live_turn_via_proxy(relay_port: int) -> str:
     """Drive one text-in/text-out Gemini Live turn through the gateway proxy.
 
     The SDK client is pointed at the TLS relay so its forced-``wss`` connect
-    hits ``wss://127.0.0.1:<relay>/proxy/<PROXY_NAME>``; the relay terminates TLS
-    and pumps the bytes to the plain-HTTP gateway, which bridges the WS upgrade
-    to ``wss://generativelanguage.googleapis.com/...`` (the AI Studio upstream)
-    with the configured account's ``x-goog-api-key``. The SDK passes our
-    ``Authorization: Bearer`` front-end key on the handshake (via
+    hits ``wss://127.0.0.1:<relay>/proxy/<PROXY_DOMAIN>``; the relay terminates
+    TLS and pumps the bytes to the plain-HTTP gateway, which bridges the WS
+    upgrade to ``wss://generativelanguage.googleapis.com/...`` (the AI Studio
+    upstream) with the configured account's ``x-goog-api-key``. The SDK passes
+    our ``Authorization: Bearer`` front-end key on the handshake (via
     ``http_options.headers``); the gateway authenticates the caller with it and
     drops it before forwarding upstream.
     """
-    base_url = f"https://127.0.0.1:{relay_port}/proxy/{PROXY_NAME}"
+    base_url = f"https://127.0.0.1:{relay_port}/proxy/{PROXY_DOMAIN}"
     client = genai.Client(
         api_key=PROXY_API_KEY,
         http_options=types.HttpOptions(
@@ -267,7 +274,7 @@ async def _live_turn_via_proxy(relay_port: int) -> str:
 
 async def _run() -> int:
     log(f"target gateway: {BASE}")
-    log(f"proxy name: {PROXY_NAME}  model: {PROXY_MODEL}")
+    log(f"proxy domain: {PROXY_DOMAIN}  model: {PROXY_MODEL}")
 
     with httpx.Client(base_url=BASE, timeout=30) as client:
         wait_for_health(client)
@@ -277,7 +284,7 @@ async def _run() -> int:
         # the container); a 403 means the key isn't authorised for it. Both are
         # caught up front rather than surfacing as an opaque WS close.
         proxy_probe = client.get(
-            f"/proxy/{PROXY_NAME}/_probe", headers=auth_headers(), timeout=15,
+            f"/proxy/{PROXY_DOMAIN}/_probe", headers=auth_headers(), timeout=15,
         )
         # The gateway forwards the probe verbatim; Google returns 404/400 for an
         # unknown path, but a *gateway* 401/403/404 distinguishes front-end/auth
@@ -290,7 +297,7 @@ async def _run() -> int:
             )
         if proxy_probe.status_code == 404:
             raise RuntimeError(
-                f"proxy {PROXY_NAME!r} is not configured on the gateway "
+                f"proxy domain {PROXY_DOMAIN!r} is not configured on the gateway "
                 f"(PROXY_API_KEY not threaded into the container?)"
             )
         log(f"proxy reachable (probe -> {proxy_probe.status_code}; upstream "
@@ -298,7 +305,6 @@ async def _run() -> int:
 
     cert_path, key_path = _make_self_signed_cert()
     # Relay to the gateway's plain-HTTP listener. Parse host/port from BASE.
-    from urllib.parse import urlparse
     parsed = urlparse(BASE)
     up_host = parsed.hostname or "127.0.0.1"
     up_port = parsed.port or 8000

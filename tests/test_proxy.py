@@ -4,6 +4,11 @@ The proxy forwards raw HTTP to an upstream root URL through its own
 ``httpx.AsyncClient`` (owned by ``ProxyRunner`` and created lazily), so we use
 ``respx`` to intercept those clients by URL — no real network. The selection
 store is reset per test so account ranking starts deterministic.
+
+A proxy is matched by its upstream **domain** (the host of ``base_url``): the
+public URL is ``/proxy/{domain}/{path}``. The upstream credential is not a
+proxy field — it lives in each account's ``headers`` (whatever header a vendor
+expects, e.g. ``authorization: Bearer ...`` or ``x-goog-api-key: ...``).
 """
 
 from __future__ import annotations
@@ -19,30 +24,24 @@ from mm_gateway.server.app import create_app
 # A shared upstream root the proxies below point at. respx routes are matched
 # against the full URLs the ProxyRunner builds via _join_url(base_url, path).
 _UPSTREAM = "https://upstream.example.test"
+# The proxy's routing identity is the host of base_url (the {domain} segment).
+_DOMAIN = "upstream.example.test"
 
 _AUTH = {"Authorization": "Bearer t0pSecret"}
 
 
 def _proxy(
     *,
-    name: str = "svc",
     accounts: list | None = None,
-    auth_header: str = "Authorization",
-    auth_scheme: str | None = "Bearer",
     tags: list[str] | None = None,
     headers: dict | None = None,
     base_url: str = _UPSTREAM,
-    websocket: bool = True,
 ) -> ProxyConfig:
     return ProxyConfig(
-        name=name,
         base_url=base_url,
-        auth_header=auth_header,
-        auth_scheme=auth_scheme,
         tags=tags or [],
         headers=headers or {},
         accounts=accounts or [],
-        websocket=websocket,
     )
 
 
@@ -79,7 +78,7 @@ def app_with_proxy():
     """
     SELECTION_STORE.clear()
     proxy = _proxy(accounts=[
-        {"id": "acct-a", "api_key": "upstream-key-a"},
+        {"id": "acct-a", "headers": {"Authorization": "Bearer upstream-key-a"}},
     ])
     settings = _settings([proxy])
     app = create_app(settings)
@@ -106,28 +105,28 @@ def test_missing_api_key_is_401(app_with_proxy):
     from fastapi.testclient import TestClient
 
     with TestClient(app) as c:
-        resp = c.get("/proxy/svc/v1/anything")
+        resp = c.get(f"/proxy/{_DOMAIN}/v1/anything")
     assert resp.status_code == 401
     assert resp.headers["content-type"] == "application/problem+json"
     assert resp.json()["code"] == "unauthorized"
 
 
-def test_unknown_proxy_name_is_404(client):
-    resp = client.get("/proxy/nope/v1/x", headers=_AUTH)
+def test_unknown_proxy_domain_is_404(client):
+    resp = client.get("/proxy/nope.example/v1/x", headers=_AUTH)
     assert resp.status_code == 404
     assert resp.json()["code"] == "generation_service_not_found"
 
 
 def test_authorized_by_tag(client):
     # Rebuild the app with a tag-restricted key that DOES allow the proxy.
-    proxy = _proxy(tags=["team-a"], accounts=[{"id": "a", "api_key": "key-a"}])
+    proxy = _proxy(tags=["team-a"], accounts=[{"id": "a", "headers": {"Authorization": "Bearer key-a"}}])
     settings = _settings([proxy], allow_tags=["team-a"])
     from fastapi.testclient import TestClient
 
     with respx.mock:
         respx.get(f"{_UPSTREAM}/ok").mock(return_value=httpx.Response(200, text="hi"))
         with TestClient(create_app(settings)) as c:
-            resp = c.get("/proxy/svc/ok", headers=_AUTH)
+            resp = c.get(f"/proxy/{_DOMAIN}/ok", headers=_AUTH)
     assert resp.status_code == 200
     assert resp.text == "hi"
 
@@ -148,7 +147,7 @@ def test_forwards_path_query_method_and_body(client):
     with respx.mock:
         respx.post(f"{_UPSTREAM}/v1/things").mock(side_effect=handler)
         resp = client.post(
-            "/proxy/svc/v1/things?limit=5&tag=blue",
+            f"/proxy/{_DOMAIN}/v1/things?limit=5&tag=blue",
             headers={**_AUTH, "content-type": "application/json", "x-client-hdr": "c1"},
             json={"hello": "world"},
         )
@@ -173,7 +172,7 @@ def test_get_with_path_param_segments_forwarded(client):
         respx.get(f"{_UPSTREAM}/api/users/42/orders").mock(
             return_value=httpx.Response(200, text="ok")
         )
-        resp = client.get("/proxy/svc/api/users/42/orders", headers=_AUTH)
+        resp = client.get(f"/proxy/{_DOMAIN}/api/users/42/orders", headers=_AUTH)
     assert resp.status_code == 200
     assert resp.text == "ok"
 
@@ -189,7 +188,7 @@ def test_client_credential_never_reaches_upstream(client):
         respx.get(f"{_UPSTREAM}/x").mock(side_effect=handler)
         # A caller-supplied Authorization and x-goog-api-key must be overwritten /
         # dropped: the proxy injects the configured account key instead.
-        client.get("/proxy/svc/x", headers={
+        client.get(f"/proxy/{_DOMAIN}/x", headers={
             **_AUTH, "authorization": "Bearer evil-client-token",
             "x-goog-api-key": "evil-goog",
         })
@@ -197,10 +196,11 @@ def test_client_credential_never_reaches_upstream(client):
     assert "x-goog-api-key" not in seen["headers"]
 
 
-def test_raw_key_header_scheme_for_google_style_proxy():
+def test_account_header_is_whatever_the_vendor_expects():
+    # The credential is just a header on the account: x-goog-api-key (Google's
+    # raw-key style) is injected verbatim, and no Authorization is added.
     proxy = _proxy(
-        auth_header="x-goog-api-key", auth_scheme=None,
-        accounts=[{"id": "g", "api_key": "goog-raw-key"}],
+        accounts=[{"id": "g", "headers": {"x-goog-api-key": "goog-raw-key"}}],
     )
     settings = _settings([proxy])
     from fastapi.testclient import TestClient
@@ -214,9 +214,10 @@ def test_raw_key_header_scheme_for_google_style_proxy():
     with respx.mock:
         respx.get(f"{_UPSTREAM}/v1/models").mock(side_effect=handler)
         with TestClient(create_app(settings)) as c:
-            resp = c.get("/proxy/svc/v1/models", headers=_AUTH)
+            resp = c.get(f"/proxy/{_DOMAIN}/v1/models", headers=_AUTH)
     assert resp.status_code == 200
-    # Raw key, no scheme prefix.
+    # Raw key, no scheme prefix; the client's Authorization was dropped and the
+    # account injects no Authorization of its own.
     assert seen["headers"]["x-goog-api-key"] == "goog-raw-key"
     assert "authorization" not in seen["headers"]
 
@@ -226,8 +227,8 @@ def test_raw_key_header_scheme_for_google_style_proxy():
 
 def test_retries_429_to_next_account():
     proxy = _proxy(accounts=[
-        {"id": "a", "api_key": "key-a"},
-        {"id": "b", "api_key": "key-b"},
+        {"id": "a", "headers": {"Authorization": "Bearer key-a"}},
+        {"id": "b", "headers": {"Authorization": "Bearer key-b"}},
     ])
     settings = _settings([proxy])
     from fastapi.testclient import TestClient
@@ -244,7 +245,7 @@ def test_retries_429_to_next_account():
     with respx.mock:
         respx.get(f"{_UPSTREAM}/v1/x").mock(side_effect=handler)
         with TestClient(create_app(settings)) as c:
-            resp = c.get("/proxy/svc/v1/x", headers=_AUTH)
+            resp = c.get(f"/proxy/{_DOMAIN}/v1/x", headers=_AUTH)
     assert resp.status_code == 200
     assert resp.text == "ok-from-b"
     # Account a was tried (and got 429), then b.
@@ -253,8 +254,8 @@ def test_retries_429_to_next_account():
 
 def test_retries_5xx_to_next_account():
     proxy = _proxy(accounts=[
-        {"id": "a", "api_key": "key-a"},
-        {"id": "b", "api_key": "key-b"},
+        {"id": "a", "headers": {"Authorization": "Bearer key-a"}},
+        {"id": "b", "headers": {"Authorization": "Bearer key-b"}},
     ])
     settings = _settings([proxy])
     from fastapi.testclient import TestClient
@@ -271,7 +272,7 @@ def test_retries_5xx_to_next_account():
     with respx.mock:
         respx.get(f"{_UPSTREAM}/v1/x").mock(side_effect=handler)
         with TestClient(create_app(settings)) as c:
-            resp = c.get("/proxy/svc/v1/x", headers=_AUTH)
+            resp = c.get(f"/proxy/{_DOMAIN}/v1/x", headers=_AUTH)
     assert resp.status_code == 200
     assert resp.text == "ok-from-b"
     assert tried == ["a", "b"]
@@ -280,8 +281,8 @@ def test_retries_5xx_to_next_account():
 def test_client_4xx_not_retried_surfaces_verbatim():
     # A 400 is the caller's bad request — it must not burn another account.
     proxy = _proxy(accounts=[
-        {"id": "a", "api_key": "key-a"},
-        {"id": "b", "api_key": "key-b"},
+        {"id": "a", "headers": {"Authorization": "Bearer key-a"}},
+        {"id": "b", "headers": {"Authorization": "Bearer key-b"}},
     ])
     settings = _settings([proxy])
     from fastapi.testclient import TestClient
@@ -295,7 +296,7 @@ def test_client_4xx_not_retried_surfaces_verbatim():
     with respx.mock:
         respx.get(f"{_UPSTREAM}/v1/x").mock(side_effect=handler)
         with TestClient(create_app(settings)) as c:
-            resp = c.get("/proxy/svc/v1/x", headers=_AUTH)
+            resp = c.get(f"/proxy/{_DOMAIN}/v1/x", headers=_AUTH)
     assert resp.status_code == 400
     assert resp.json() == {"error": "bad request"}
     # Only the first account was contacted.
@@ -304,8 +305,8 @@ def test_client_4xx_not_retried_surfaces_verbatim():
 
 def test_all_accounts_retryable_fail_surfaces_last_status():
     proxy = _proxy(accounts=[
-        {"id": "a", "api_key": "key-a"},
-        {"id": "b", "api_key": "key-b"},
+        {"id": "a", "headers": {"Authorization": "Bearer key-a"}},
+        {"id": "b", "headers": {"Authorization": "Bearer key-b"}},
     ])
     settings = _settings([proxy])
     from fastapi.testclient import TestClient
@@ -319,7 +320,7 @@ def test_all_accounts_retryable_fail_surfaces_last_status():
     with respx.mock:
         respx.get(f"{_UPSTREAM}/v1/x").mock(side_effect=handler)
         with TestClient(create_app(settings)) as c:
-            resp = c.get("/proxy/svc/v1/x", headers=_AUTH)
+            resp = c.get(f"/proxy/{_DOMAIN}/v1/x", headers=_AUTH)
     # On the last account the real upstream 500 is streamed back verbatim
     # rather than being wrapped in a 502.
     assert resp.status_code == 500
@@ -328,14 +329,14 @@ def test_all_accounts_retryable_fail_surfaces_last_status():
 
 
 def test_proxy_with_no_configured_account_is_not_registered():
-    # A proxy whose accounts all lack a key is unusable (configured is False), so
-    # the registry never registers it: the route 404s rather than 503-ing.
-    proxy = _proxy(accounts=[{"id": "a", "api_key": None}])
+    # A proxy whose accounts carry no headers is unusable (configured is False),
+    # so the registry never registers it: the route 404s rather than 503-ing.
+    proxy = _proxy(accounts=[{"id": "a", "headers": {}}])
     settings = _settings([proxy])
     from fastapi.testclient import TestClient
 
     with TestClient(create_app(settings)) as c:
-        resp = c.get("/proxy/svc/v1/x", headers=_AUTH)
+        resp = c.get(f"/proxy/{_DOMAIN}/v1/x", headers=_AUTH)
     assert resp.status_code == 404
     assert resp.json()["code"] == "generation_service_not_found"
 
@@ -357,8 +358,8 @@ def test_sse_response_streamed_verbatim():
     with respx.mock:
         respx.get(f"{_UPSTREAM}/v1/stream").mock(side_effect=handler)
         with TestClient(create_app(settings=_settings([_proxy(
-            accounts=[{"id": "a", "api_key": "key-a"}])]))) as c:
-            resp = c.get("/proxy/svc/v1/stream", headers=_AUTH)
+            accounts=[{"id": "a", "headers": {"Authorization": "Bearer key-a"}}])]))) as c:
+            resp = c.get(f"/proxy/{_DOMAIN}/v1/stream", headers=_AUTH)
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "text/event-stream"
     assert resp.content == b"data: chunk1\n\ndata: chunk2\n\n"
@@ -367,12 +368,12 @@ def test_sse_response_streamed_verbatim():
 def test_forbidden_when_tag_not_allowed(client):
     # Build an app whose key only allows the "team-a" tag but the proxy carries
     # "team-b": configured (so registered) but not usable by this key -> 403.
-    proxy = _proxy(tags=["team-b"], accounts=[{"id": "a", "api_key": "key-a"}])
+    proxy = _proxy(tags=["team-b"], accounts=[{"id": "a", "headers": {"Authorization": "Bearer key-a"}}])
     settings = _settings([proxy], allow_tags=["team-a"])
     from fastapi.testclient import TestClient
 
     with TestClient(create_app(settings)) as c:
-        resp = c.get("/proxy/svc/v1/x", headers=_AUTH)
+        resp = c.get(f"/proxy/{_DOMAIN}/v1/x", headers=_AUTH)
     assert resp.status_code == 403
     assert resp.json()["code"] == "forbidden"
 
@@ -380,26 +381,37 @@ def test_forbidden_when_tag_not_allowed(client):
 # -- Pure helper unit tests ------------------------------------------------ #
 
 
-def test_proxy_auth_header_bearer_scheme():
-    from mm_gateway.proxy import proxy_auth_header
+def test_enumerate_accounts_merges_proxy_headers_under_account_headers():
+    # Proxy-level headers are a base; per-account headers override them. The
+    # merged set (which carries the credential) is what the forwarder injects.
+    proxy = _proxy(
+        headers={"x-goog-user-project": "base", "x-shared": "from-proxy"},
+        accounts=[{"id": "a", "headers": {
+            "Authorization": "Bearer key-a", "x-shared": "from-account",
+        }}],
+    )
+    accounts = proxy.enumerate_accounts()
+    assert accounts == [(
+        "a",
+        {"x-goog-user-project": "base", "x-shared": "from-account",
+         "Authorization": "Bearer key-a"},
+    )]
 
-    proxy = _proxy(auth_header="Authorization", auth_scheme="Bearer")
-    assert proxy_auth_header(proxy, "secret") == {"Authorization": "Bearer secret"}
+
+def test_host_is_the_routing_identity_lowercased():
+    assert ProxyConfig(base_url="https://API.Example.COM/v1").host == "api.example.com"
+    # No parseable host falls back to the raw base_url (lowercased).
+    assert ProxyConfig(base_url="not-a-url").host == "not-a-url"
 
 
-def test_proxy_auth_header_raw_key_for_google():
-    from mm_gateway.proxy import proxy_auth_header
-
-    proxy = _proxy(auth_header="x-goog-api-key", auth_scheme=None)
-    assert proxy_auth_header(proxy, "goog-raw") == {"x-goog-api-key": "goog-raw"}
-
-
-def test_proxy_auth_header_none_key_contributes_nothing():
-    from mm_gateway.proxy import proxy_auth_header
-
-    # An account with no key injects no credential header; static proxy headers
-    # (applied separately in _forward_headers) are unaffected.
-    assert proxy_auth_header(_proxy(), None) == {}
+def test_configured_is_false_when_no_account_has_headers():
+    assert _proxy(accounts=[]).configured is False
+    assert _proxy(accounts=[{"id": "a", "headers": {}}]).configured is False
+    # Proxy-level headers alone make an account usable (an account inherits them).
+    assert _proxy(
+        headers={"x-goog-api-key": "k"},
+        accounts=[{"id": "a", "headers": {}}],
+    ).configured is True
 
 
 def test_join_url_handles_leading_slash_and_empty_path():
@@ -428,12 +440,12 @@ def test_websocket_rejects_unknown_token():
     # can't set headers on an upgrade, so the token also comes via query).
     from fastapi.testclient import TestClient
 
-    proxy = _proxy(accounts=[{"id": "a", "api_key": "key-a"}])
+    proxy = _proxy(accounts=[{"id": "a", "headers": {"Authorization": "Bearer key-a"}}])
     settings = _settings([proxy])
     with TestClient(create_app(settings)) as c:
         with pytest.raises(Exception):
             with c.websocket_connect(
-                "/proxy/svc/v1/rt?access_token=not-a-real-key"
+                f"/proxy/{_DOMAIN}/v1/rt?access_token=not-a-real-key"
             ) as ws:
                 ws.receive()
 
@@ -518,8 +530,8 @@ async def test_websocket_bridge_pumps_both_directions_to_a_live_upstream():
         port = server.socks[0].getsockname()[1] if hasattr(server, "socks") \
             else server.sockets[0].getsockname()[1]
         proxy = ProxyConfig(
-            name="svc", base_url=f"ws://127.0.0.1:{port}",
-            accounts=[{"id": "a", "api_key": "upstream-key-a"}],
+            base_url=f"ws://127.0.0.1:{port}",
+            accounts=[{"id": "a", "headers": {"Authorization": "Bearer upstream-key-a"}}],
         )
         await bridge_websocket(proxy, "rt", fake.url.query, fake.headers, fake)
 

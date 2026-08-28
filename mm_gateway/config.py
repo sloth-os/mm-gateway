@@ -22,6 +22,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -112,83 +113,94 @@ class ProxyConfig:
 
     Unlike a provider ``BackendConfig`` (which translates a neutral media
     request into a provider SDK call), a proxy forwards the *raw* request
-    verbatim — method, path, query string, body, and most headers — to an
-    upstream root URL, injecting one configured account's credential as a
-    header (``Authorization: Bearer ...`` or ``x-goog-api-key: ...``). The
-    gateway authenticates the *front-end* caller with the usual bearer key and
-    authorizes it against the proxy's ``tags`` (the same hybrid rule as
-    backends); the upstream account key never reaches the client.
+    verbatim — method, path, query string, body, and most client headers — to an
+    upstream root URL. A proxy is identified by its upstream **domain** (the
+    host of ``base_url``): the public URL is ``/proxy/{domain}/{path}``, and
+    the gateway matches the request's domain segment to a configured proxy's
+    root — so one proxy per upstream service, no bespoke names to remember.
+
+    The upstream credential is **not** a special field: it lives directly in
+    each account's ``headers`` (e.g. ``authorization: Bearer <key>`` or
+    ``x-goog-api-key: <key>``). This is a single, provider-agnostic mechanism —
+    whatever header line a vendor's API expects is just a header on the
+    account, so the proxy supports any provider without per-provider auth
+    config. The client's copy of those credential headers is dropped before
+    forwarding and the account's value is injected, so the upstream key never
+    reaches the client and a caller cannot override it.
+
+    The front-end caller authenticates with the usual bearer key and is
+    authorized against the proxy the same hybrid way as backends: by the
+    proxy's domain in ``allow_backends``, by ``tags`` intersection, or as an
+    open key.
 
     A proxy fronts a *pool* of upstream accounts: list them under ``accounts``
-    (each entry a mapping with ``api_key`` and an optional ``base_url``/
-    ``headers`` override, or a bare string treated as an ``api_key``). The
-    request layer ranks accounts by live health (success rate + latency +
-    rate-limit cooldown, same store as auto-routing) and retries the next
-    account on a rate-limit / timeout / upstream 5xx, so one proxy name fronts
-    a pool of upstream keys. A proxy with no ``accounts`` yields a single
-    ``default`` account built from its top-level ``api_key`` — but a proxy with
-    no credential at all is unusable (``configured`` is False).
+    (each a mapping with an optional ``id`` and a ``headers`` map). The request
+    layer ranks accounts by live health (success rate + latency + rate-limit
+    cooldown, the same store as auto-routing) and retries the next account on a
+    rate-limit / timeout / upstream 5xx, so one domain fronts a pool of keys.
 
-    The public URL is ``/proxy/{name}/{path}`` where ``{path}`` is forwarded to
-    ``{base_url}/{path}``. HTTP methods, WebSocket upgrades, and event-stream
+    HTTP methods, WebSocket upgrades (auto-detected from the client's
+    ``Upgrade: websocket`` header — no per-proxy toggle), and event-stream
     (SSE) responses are all transparent: the path, query, and body are
     forwarded unchanged and the upstream response is streamed back.
     """
 
-    name: str
     base_url: str
-    # Header the account credential is injected as. ``"Authorization"`` (the
-    # default) with ``auth_scheme="Bearer"`` renders ``Authorization: Bearer
-    # <key>``; set ``auth_header="x-goog-api-key"`` and ``auth_scheme=None`` for
-    # Google's raw-key header. Any header name is accepted.
-    auth_header: str = "Authorization"
-    auth_scheme: str | None = "Bearer"
     tags: list[str] = field(default_factory=list)
-    # Static headers applied to every forwarded request (e.g. a required
-    # ``x-goog-user-project``). Per-account ``headers`` shadow these.
+    # Static headers applied to every forwarded request of every account (e.g.
+    # a required ``x-goog-user-project``). Per-account ``headers`` shadow
+    # these. A header whose interpolated value is ``None`` (an unset
+    # ``${ENV:}``) is dropped at enumeration time, so a static header can be
+    # left blank in the file without injecting a literal ``"None"`` upstream.
     headers: dict[str, Any] = field(default_factory=dict)
-    api_key: str | None = None
-    # Per-account credentials; each entry is a mapping with optional
-    # ``id``/``api_key``/``base_url``/``headers`` (an entry may be a bare
-    # string treated as an ``api_key``). When non-empty the top-level
-    # ``api_key`` is ignored for account enumeration.
+    # Per-account credentials; each entry is a mapping with an optional ``id``
+    # and a ``headers`` map carrying that account's credential + overrides.
     accounts: list[dict[str, Any]] = field(default_factory=list)
     # Per-proxy request timeout (seconds). Streaming/SSE responses are not
     # bound by this — only the time to receive the upstream response headers.
     timeout: float = 120.0
-    # When True (default) a WebSocket upgrade on the same path is bridged to an
-    # upstream ws/wss connection. Set False to serve HTTP only.
-    websocket: bool = True
+
+    @property
+    def host(self) -> str:
+        """The upstream domain — the proxy's routing identity.
+
+        Lowercased so a request's ``/proxy/{domain}/...`` segment matches
+        case-insensitively (hostnames are). Falls back to the raw ``base_url``
+        if it has no parseable host.
+        """
+        return (urlparse(self.base_url).hostname or self.base_url).lower()
 
     @property
     def configured(self) -> bool:
-        if self.accounts:
-            return any(_cred_api_key(c) for c in self.accounts)
-        return bool(self.api_key)
+        # An account is usable iff merging its headers over the proxy-level
+        # headers yields at least one header (its credential).
+        return any(merged for _, merged in self.enumerate_accounts())
 
-    def enumerate_accounts(self) -> list[tuple[str, str | None, str | None, dict[str, str]]]:
-        """Yield ``(account_id, api_key, base_url, headers)`` per credential.
+    def enumerate_accounts(self) -> list[tuple[str, dict[str, str]]]:
+        """Yield ``(account_id, headers)`` per account.
 
-        Mirrors :meth:`BackendConfig.accounts`: an account's ``headers`` are
-        merged over the proxy-level ``headers``; ``base_url`` is the account's
-        own override (``None`` inherits the proxy root). ``account_id`` is
-        ``id``/``name``/``account`` from the entry, or a synthetic
-        ``account-<i>``. A proxy with no ``accounts`` yields one ``default``
-        account built from its top-level ``api_key``/``base_url``/``headers``.
+        ``headers`` is the account's own ``headers`` merged over the
+        proxy-level ``headers`` (account wins) — this merged set carries the
+        credential and is what the forwarder injects on the upstream request.
+        ``account_id`` is ``id``/``name``/``account`` from the entry, or a
+        synthetic ``account-<i>``. A header whose value is ``None`` (e.g. an
+        unset ``${ENV:}`` in the YAML, which interpolates to empty and parses
+        as null) is dropped, so an unset credential leaves the account
+        unconfigured rather than injecting a literal ``"None"`` upstream.
+        Accounts with no headers (and no inherited proxy-level headers) are
+        still yielded — the retry layer surfaces an upstream 401 and moves on
+        — but ``configured`` is False when *every* account is empty, so an
+        all-empty proxy is not registered at all.
         """
-        if not self.accounts:
-            return [("default", self.api_key, None, dict(self.headers))]
-        out: list[tuple[str, str | None, str | None, dict[str, str]]] = []
+        out: list[tuple[str, dict[str, str]]] = []
         for i, cred in enumerate(self.accounts):
             account_id = _cred_id(cred, i)
-            api_key = _cred_api_key(cred)
-            base_url = _cred_base_url(cred)
             merged = dict(self.headers)
             if isinstance(cred, dict):
                 cheaders = cred.get("headers")
                 if isinstance(cheaders, dict):
-                    merged.update(cheaders)
-            out.append((account_id, api_key, base_url, merged))
+                    merged.update({str(k): str(v) for k, v in cheaders.items() if v is not None})
+            out.append((account_id, merged))
         return out
 
 
@@ -252,10 +264,10 @@ class Settings:
 
     backends: list[BackendConfig] = field(default_factory=list)
     keys: list[KeyConfig] = field(default_factory=list)
-    # General pass-through proxies. Each is a named, authenticated forwarder to
-    # an upstream HTTP/WebSocket service with its own account pool; the same
-    # front-end bearer key + hybrid tag authorization governs access. See
-    # :class:`ProxyConfig`.
+    # General pass-through proxies. Each is a domain-matched, authenticated
+    # forwarder to an upstream HTTP/WebSocket service with its own account
+    # pool; the same front-end bearer key + hybrid tag authorization governs
+    # access. See :class:`ProxyConfig`.
     proxies: list[ProxyConfig] = field(default_factory=list)
 
     # -- accessors ------------------------------------------------------------ #
@@ -275,9 +287,9 @@ class Settings:
                 return k
         return None
 
-    def proxy(self, name: str) -> ProxyConfig | None:
+    def proxy(self, domain: str) -> ProxyConfig | None:
         for p in self.proxies:
-            if p.name == name:
+            if p.host == domain.lower():
                 return p
         return None
 
@@ -354,16 +366,11 @@ class Settings:
         ]
         proxies = [
             ProxyConfig(
-                name=p["name"],
                 base_url=p["base_url"],
-                auth_header=str(p.get("auth_header") or "Authorization"),
-                auth_scheme=p.get("auth_scheme") if "auth_scheme" in p else "Bearer",
                 tags=list(p.get("tags") or []),
-                headers={str(k2): str(v2) for k2, v2 in (p.get("headers") or {}).items()},
-                api_key=p.get("api_key"),
+                headers={str(k2): str(v2) for k2, v2 in (p.get("headers") or {}).items() if v2 is not None},
                 accounts=list(p.get("accounts") or []),
                 timeout=float(p.get("timeout") or 120),
-                websocket=_bool(p.get("websocket", True)),
             )
             for p in (raw.get("proxies") or [])
         ]
@@ -605,38 +612,36 @@ class Settings:
             ))
         # General pass-through proxy from PROXY_API_KEY. The Gemini Live (AI
         # Studio) WebSocket API is a raw upstream the generation contract does
-        # not translate, so it fronts the general /proxy/<name>/ surface. The
+        # not translate, so it fronts the general /proxy/<domain>/ surface. The
         # default upstream is the AI Studio Generative Language host; an operator
-        # can override the root with PROXY_BASE_URL and the proxy path segment
-        # with PROXY_NAME. auth_header=x-goog-api-key + auth_scheme=None renders
-        # the account key as Google's raw-key header (the SDK's own x-goog-api-key
-        # on the front-end handshake is dropped by _DROP_CLIENT_HEADERS and
-        # replaced with this account key). websocket=True bridges the WS upgrade
-        # on /proxy/<name>/ws/... to wss://<host>/ws/...
+        # can override the root with PROXY_BASE_URL. The credential is set
+        # directly on the account's headers (x-goog-api-key), so the proxy needs
+        # no per-provider auth config — whatever header Google expects is just a
+        # header. The SDK's own x-goog-api-key on the front-end handshake is
+        # dropped by _DROP_CLIENT_HEADERS and replaced with this account key. A
+        # WS upgrade is auto-detected from the client's Upgrade header, so no
+        # websocket flag: /proxy/<domain>/ws/... bridges to wss://<host>/ws/...
         proxies: list[ProxyConfig] = []
         proxy_key = _env("PROXY_API_KEY")
         if proxy_key:
             proxies.append(ProxyConfig(
-                name=_env("PROXY_NAME") or "gemini-live",
                 base_url=_env("PROXY_BASE_URL") or "https://generativelanguage.googleapis.com",
-                auth_header="x-goog-api-key",
-                auth_scheme=None,
                 tags=[],
-                api_key=proxy_key,
+                headers={},
+                accounts=[{"headers": {"x-goog-api-key": proxy_key}}],
                 timeout=120.0,
-                websocket=True,
             ))
         # An implicit key authorises all configured backends. If the operator
         # sets GATEWAY_API_KEY, that becomes the required token; otherwise the
         # gateway is open (token matches anything, incl. absent). The key's
-        # allow_backends also carries any configured proxy name so the front-end
-        # bearer key can use it (usable_proxies checks allow_backends by name,
+        # allow_backends also carries every proxy's domain so the front-end
+        # bearer key can use it (usable_proxies checks allow_backends by domain,
         # mirroring backends; the env key sets no allow_tags, so tag-intersection
         # alone would not authorize a tagged proxy).
         token = _env("GATEWAY_API_KEY") or ""
         keys = [KeyConfig(
             id="env", key=token,
-            allow_backends=[b.name for b in backends] + [p.name for p in proxies],
+            allow_backends=[b.name for b in backends] + [p.host for p in proxies],
             default_image_backend=_env("DEFAULT_IMAGE_PROVIDER"),
             default_video_backend=_env("DEFAULT_VIDEO_PROVIDER"),
             default_music_backend=_env("DEFAULT_MUSIC_PROVIDER"),

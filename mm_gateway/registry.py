@@ -107,7 +107,7 @@ class Registry:
         # backend name -> ordered account ids (at least one: "default").
         self._backend_accounts: dict[str, list[str]] = {}
         self._aliases = dict(_MODEL_ALIASES)
-        # proxy name -> ProxyConfig (the configured, pass-through proxies).
+        # proxy domain -> ProxyConfig (the configured, pass-through proxies).
         self._proxies: dict[str, ProxyConfig] = {}
         self._build()
 
@@ -155,19 +155,18 @@ class Registry:
 
         # General pass-through proxies. Unlike provider backends they carry no
         # SDK instance — the proxy runner forwards raw HTTP/WebSocket — so only
-        # the configured ProxyConfig is retained, keyed by name for the routes.
+        # the configured ProxyConfig is retained, keyed by upstream domain (the
+        # proxy's routing identity) for the routes.
         for proxy in self.settings.proxies:
             if not proxy.configured:
                 continue
-            if proxy.name in self._proxies or proxy.name in self._backends:
-                log.warning("proxy_name_collision", name=proxy.name)
+            if proxy.host in self._proxies or proxy.host in self._backends:
+                log.warning("proxy_domain_collision", domain=proxy.host)
                 continue
-            self._proxies[proxy.name] = proxy
-            log.info("proxy_registered", proxy=proxy.name,
+            self._proxies[proxy.host] = proxy
+            log.info("proxy_registered", proxy=proxy.host,
                      base_url=proxy.base_url, tags=proxy.tags,
-                     auth_header=proxy.auth_header,
-                     accounts=[aid for aid, *_ in proxy.enumerate_accounts()],
-                     websocket=proxy.websocket)
+                     accounts=[aid for aid, _ in proxy.enumerate_accounts()])
 
     def _per_account_config(self, cfg: BackendConfig, account_id: str,
                             api_key: str | None, base_url: str | None,
@@ -231,34 +230,43 @@ class Registry:
         return allowed
 
     def proxy_names(self) -> list[str]:
+        """Proxy domains (the routing identity), for diagnostics/listing."""
         return list(self._proxies)
 
-    def proxy(self, name: str) -> ProxyConfig:
-        """Return the configured :class:`ProxyConfig` for ``name``.
+    def proxy(self, domain: str) -> ProxyConfig:
+        """Return the configured :class:`ProxyConfig` for ``domain``.
 
-        Raises ``ProviderNotFoundError`` (404) when no such proxy is configured;
-        ``ForbiddenError`` (403) when it exists but the authenticated key is not
-        allowed to use it — both surfaces so a caller can tell a typo from a
-        permissions gap.
+        ``domain`` is the upstream host (the proxy's routing identity, matched
+        case-insensitively against the request's ``/proxy/{domain}/...`` path
+        segment). Raises ``ProviderNotFoundError`` (404) when no such proxy is
+        configured; ``ForbiddenError`` (403) when it exists but the
+        authenticated key is not allowed to use it — both surface so a caller
+        can tell a typo from a permissions gap.
         """
-        proxy = self._proxies.get(name)
+        proxy = self._proxies.get(domain)
         if proxy is None:
-            raise ProviderNotFoundError(f"Proxy '{name}' is not configured.")
+            raise ProviderNotFoundError(f"Proxy '{domain}' is not configured.")
         return proxy
 
     def usable_proxies(self, key: KeyConfig | None) -> list[str]:
-        """Proxy names a key may use, via the same hybrid allow/deny rule."""
+        """Proxy domains a key may use, via the same hybrid allow/deny rule.
+
+        A key is authorised for a proxy by the proxy's domain in
+        ``allow_backends``, by ``tags`` intersection, or as an open key (no
+        allow_tags/allow_backends). Domains the key denies (in ``deny_tags``)
+        are excluded.
+        """
         if key is None:
             return list(self._proxies)
         allowed: list[str] = []
-        for name, proxy in self._proxies.items():
-            if name in key.deny_tags:
+        for domain, proxy in self._proxies.items():
+            if domain in key.deny_tags:
                 continue
             tag_ok = bool(set(proxy.tags) & set(key.allow_tags))
-            name_ok = name in key.allow_backends
+            domain_ok = domain in key.allow_backends
             open_key = not key.allow_tags and not key.allow_backends
-            if tag_ok or name_ok or open_key:
-                allowed.append(name)
+            if tag_ok or domain_ok or open_key:
+                allowed.append(domain)
         return allowed
 
     def _modality_models(self, prov: Provider, modality: str) -> list[str]:

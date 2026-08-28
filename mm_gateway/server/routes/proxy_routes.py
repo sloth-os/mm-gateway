@@ -1,11 +1,17 @@
 """General pass-through proxy routes.
 
-Mounts a single catch-all path ``/proxy/{name}/{path:path}`` that forwards any
-HTTP method to an upstream service (:class:`ProxyConfig`) and, on a WebSocket
-upgrade, bridges the connection to an upstream ws/wss endpoint. The front-end
-caller authenticates with the usual bearer key; the same hybrid tag
+Mounts a single catch-all path ``/proxy/{domain}/{path:path}`` that forwards
+any HTTP method to an upstream service (:class:`ProxyConfig`) and, on a
+WebSocket upgrade, bridges the connection to an upstream ws/wss endpoint. The
+front-end caller authenticates with the usual bearer key; the same hybrid tag
 authorization governs which proxies a key may use. The upstream account's
 credential is injected by the gateway and never reaches the client.
+
+A proxy is identified by its upstream **domain** (the host of its configured
+``base_url``): the request's ``domain`` path segment selects it. A WebSocket
+upgrade is auto-detected from the client's ``Upgrade: websocket`` header on
+the same path (Starlette routes an upgrade to the ``websocket`` operation, a
+plain request to the HTTP one) — there is no per-proxy ``websocket`` toggle.
 
 See :mod:`mm_gateway.proxy` for the forwarding/selection/retry mechanics.
 """
@@ -32,39 +38,40 @@ _PROXY_RESPONSES = {
     200: {"description": "The upstream response, streamed back verbatim (any media type)."},
     401: {"description": "Missing or unknown API key."},
     403: {"description": "Key not allowed to use this proxy."},
-    404: {"description": "No proxy configured for this name."},
+    404: {"description": "No proxy configured for this domain."},
     502: {"description": "Every upstream account failed."},
     503: {"description": "The proxy has no configured account."},
 }
 
 
-def _resolve_proxy(request: Request, name: str, key: KeyConfig) -> "object":
+def _resolve_proxy(request: Request, domain: str, key: KeyConfig) -> "object":
     registry = request.app.state.registry
-    if name not in registry.usable_proxies(key):
+    if domain not in registry.usable_proxies(key):
         # Distinguish "no such proxy" (404) from "not allowed" (403): the proxy
         # may be configured but out of the key's tag set, which is a permissions
-        # gap, while an unknown name is a client typo.
-        if name in registry.proxy_names():
-            raise ForbiddenError(f"API key '{key.id}' is not allowed to use proxy '{name}'.")
+        # gap, while an unknown domain is a client typo.
+        if domain in registry.proxy_names():
+            raise ForbiddenError(f"API key '{key.id}' is not allowed to use proxy '{domain}'.")
         from mm_gateway.core.exceptions import ProviderNotFoundError
-        raise ProviderNotFoundError(f"Proxy '{name}' is not configured.")
-    return registry.proxy(name)
+        raise ProviderNotFoundError(f"Proxy '{domain}' is not configured.")
+    return registry.proxy(domain)
 
 
 async def proxy_request(
     request: Request,
-    name: Annotated[str, Path(description="Configured proxy name (the provider-domain segment).")],
+    domain: Annotated[str, Path(description="Configured proxy domain (the upstream host segment selecting the proxy).")],
     path: Annotated[str, Path(description="Path forwarded to the upstream root URL.")],
     key: Annotated[KeyConfig, Depends(get_api_key)],
 ) -> Response:
-    """Forward an HTTP request through a named proxy to its upstream service.
+    """Forward an HTTP request through a domain-matched proxy to its upstream.
 
     The path, query string, body, and most client headers are forwarded
     verbatim to ``{base_url}/{path}``; the configured account's credential is
-    injected as a header and the upstream response (including event streams) is
-    streamed back. Retries across accounts on a rate-limit / timeout / 5xx.
+    injected from the account's ``headers`` and the upstream response (including
+    event streams) is streamed back. Retries across accounts on a rate-limit /
+    timeout / 5xx.
     """
-    proxy = _resolve_proxy(request, name, key)
+    proxy = _resolve_proxy(request, domain, key)
     runner: ProxyRunner = request.app.state.proxy_runner
     # Signal the response-logging middleware: this response may be a long-lived
     # event stream, so it must flow through without buffering.
@@ -77,26 +84,28 @@ async def proxy_request(
 # violates the spec's uniqueness requirement). They share the handler above.
 for _method in _HTTP_METHODS:
     router.api_route(
-        "/proxy/{name}/{path:path}",
+        "/proxy/{domain}/{path:path}",
         methods=[_method],
         operation_id=f"proxyRequest{_method.title()}",
-        summary="Forward a request through a named proxy",
+        summary="Forward a request through a domain-matched proxy",
         response_class=Response,
         responses=_PROXY_RESPONSES,
     )(proxy_request)
 
 
-@router.websocket("/proxy/{name}/{path:path}")
+@router.websocket("/proxy/{domain}/{path:path}")
 async def proxy_websocket(
     websocket: WebSocket,
-    name: Annotated[str, Path(description="Configured proxy name.")],
+    domain: Annotated[str, Path(description="Configured proxy domain (the upstream host segment).")],
     path: Annotated[str, Path(description="Path forwarded to the upstream root URL.")],
 ) -> None:
     """Bridge a WebSocket upgrade on the same path to an upstream ws/wss URL.
 
-    The front-end caller authenticates with the usual bearer key, read off the
-    upgrade handshake's ``Authorization`` header (or an ``access_token`` /
-    ``token`` query param, since browsers cannot set headers on a WS upgrade).
+    The upgrade is auto-detected from the client's ``Upgrade: websocket``
+    header. The front-end caller authenticates with the usual bearer key, read
+    off the upgrade handshake's ``Authorization`` header (or an
+    ``access_token`` / ``token`` query param, since browsers cannot set headers
+    on a WS upgrade).
     """
     app = websocket.app
     settings = app.state.settings
@@ -107,14 +116,11 @@ async def proxy_websocket(
         await websocket.close(code=4401, reason="unauthorized")
         return
     registry = app.state.registry
-    if name not in registry.usable_proxies(key):
-        await websocket.close(code=4403, reason="forbidden" if name in registry.proxy_names()
+    if domain not in registry.usable_proxies(key):
+        await websocket.close(code=4403, reason="forbidden" if domain in registry.proxy_names()
                               else "not_configured")
         return
-    proxy = registry.proxy(name)
-    if not getattr(proxy, "websocket", True):
-        await websocket.close(code=4400, reason="websocket not enabled for this proxy")
-        return
+    proxy = registry.proxy(domain)
     # The WebSocket exposes its own headers/query_params, so pass them straight
     # to the bridge. Wrapping a websocket scope in a Starlette ``Request`` is
     # not possible: its constructor asserts ``scope["type"] == "http"``.

@@ -225,15 +225,17 @@ upstream payloads are available in gateway logs, not public error responses.
 
 ## General pass-through proxy
 
-`/proxy/{name}/{path}` forwards a raw request verbatim — method, path, query
-string, body, and most client headers — to an upstream root URL configured per
-proxy. It exists for upstreams the gateway does not (and should not) translate
-through the media-generation contract: a model's own REST API, a vendor's
-non-media endpoints, or anything else that just needs the gateway's
-auth, pooling, and retry layered on top of a raw HTTP/SSE/WebSocket hop.
+`/proxy/{domain}/{path}` forwards a raw request verbatim — method, path, query
+string, body, and most client headers — to an upstream root URL. A proxy is
+matched by its upstream **domain** (the host of `base_url`), not a name: one
+proxy per upstream service, no bespoke names to remember. It exists for upstreams
+the gateway does not (and should not) translate through the media-generation
+contract: a model's own REST API, a vendor's non-media endpoints, or anything
+else that just needs the gateway's auth, pooling, and retry layered on top of a
+raw HTTP/SSE/WebSocket hop.
 
 ```bash
-curl http://localhost:8000/proxy/openai-raw/v1/chat/completions \
+curl http://localhost:8000/proxy/api.openai.com/v1/chat/completions \
   -H "authorization: Bearer $GATEWAY_API_KEY" \
   -H 'content-type: application/json' \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
@@ -245,15 +247,16 @@ same hybrid tag rule as backends). The upstream account's credential is injected
 by the gateway and **never** reaches the client — a caller-supplied
 `Authorization` or `x-goog-api-key` is overwritten or dropped. A 401 means the
 front-end key was missing/unknown, a 403 means the key is not allowed on this
-proxy, and a 404 means no proxy is configured under that name.
+proxy, and a 404 means no proxy is configured for that domain.
 
 Every standard HTTP method is forwarded (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`,
 `HEAD`, `OPTIONS`). `CONNECT` is not. Event-stream (SSE) and any other responses
 are streamed back to the client unchanged — they are not buffered or wrapped.
 
 WebSocket upgrades on the same path are bridged to an upstream `ws`/`wss` URL
-when the proxy has `websocket: true` (the default). Browsers cannot set headers
-on a WS upgrade, so the front-end bearer key may instead be sent as an
+automatically: the upgrade is detected from the client's `Upgrade: websocket`
+header, so there is no per-proxy `websocket` toggle to set. Browsers cannot set
+headers on a WS upgrade, so the front-end bearer key may instead be sent as an
 `access_token` (or `token`) query parameter; it authenticates the upgrade and is
 dropped before forwarding to the upstream.
 
@@ -265,32 +268,36 @@ their own bad request and is not retried against another account. When every
 account fails, the last upstream response is surfaced verbatim rather than
 wrapped in a 502.
 
+The upstream credential is not a special field — it lives directly on each
+account's `headers`, exactly the header line the vendor expects. A Bearer
+provider puts `authorization: Bearer <key>` there; a Google-style raw-key
+provider puts `x-goog-api-key: <key>` there. One provider-agnostic mechanism
+covers any upstream.
+
 ```yaml
 proxies:
-  - name: openai-raw
-    base_url: https://api.openai.com
-    # auth_header + auth_scheme render the account credential. Default is
-    # `Authorization: Bearer <key>`. For a Google-style raw-key header use
-    # `auth_header: x-goog-api-key` and `auth_scheme: null`.
+  - base_url: https://api.openai.com
     tags: [prod]
     timeout: 120
-    websocket: true
     # Static headers applied to every forwarded request. Per-account headers
     # shadow these.
     headers: {}
     accounts:
       - id: primary
-        api_key: ${OPENAI_PROXY_KEY_PRIMARY}
+        headers:
+          authorization: Bearer ${OPENAI_PROXY_KEY_PRIMARY}
       - id: overflow
-        api_key: ${OPENAI_PROXY_KEY_OVERFLOW:}
-        # Optional per-account base_url / headers override.
-        # base_url: https://fallback.openai.example
+        headers:
+          authorization: Bearer ${OPENAI_PROXY_KEY_OVERFLOW:}
+        # Optional per-account headers override (merged over the proxy-level
+        # set, account wins).
         # headers: {x-account: overflow}
 ```
 
-Leave `accounts` out to use the top-level `api_key` as a single `default`
-account. A proxy with no credential at all is unusable and is not registered —
-its path 404s rather than 503-ing.
+A proxy with no credential at all is unusable and is not registered — its path
+404s rather than 503-ing. A header whose `${ENV:}` is unset is dropped, so an
+absent credential leaves the account empty rather than injecting a literal
+`"None"` upstream.
 
 ## Authentication
 

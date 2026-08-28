@@ -22,7 +22,7 @@ EXPECTED_OPERATIONS = {
 # path forwarded verbatim for every HTTP method. It shares the bearer-key
 # auth + Problem Details contract but is not part of the media-generation
 # operation set above, so it is asserted separately.
-PROXY_PATH = "/proxy/{name}/{path}"
+PROXY_PATH = "/proxy/{domain}/{path}"
 PROXY_METHODS = ["get", "post", "put", "patch", "delete", "head", "options"]
 
 

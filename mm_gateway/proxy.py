@@ -1,22 +1,31 @@
 """General pass-through proxy: forward HTTP / WebSocket / event-stream
 requests to an upstream service with multi-account scheduling and retry.
 
-The public URL is ``/proxy/{name}/{path:path}``. The gateway authenticates the
-front-end caller with the usual bearer key and authorizes it against the
-proxy's tags (the same hybrid rule as provider backends), then forwards the
-request verbatim — method, the captured ``path``, query string, body, and
-client headers — to the upstream ``base_url`` root, injecting one configured
-account's credential as a header.
+The public URL is ``/proxy/{domain}/{path:path}``. A proxy is identified by its
+upstream domain (the host of its configured ``base_url``); the request's
+domain segment selects the proxy, and the captured ``path`` is forwarded to
+``{base_url}/{path}``. The gateway authenticates the front-end caller with the
+usual bearer key and authorizes it against the proxy (by domain in
+``allow_backends``, by tag intersection, or as an open key), then forwards the
+request verbatim — method, path, query string, body, and most client headers.
+
+The upstream credential is **not** a proxy-level field: it lives in each
+account's ``headers`` (e.g. ``authorization: Bearer ...`` or
+``x-goog-api-key: ...``). Whatever header a vendor's API expects is just a
+header on the account, so one mechanism covers every provider — no
+per-provider auth config. The client's copy of those credential headers is
+dropped and the account's value injected, so the key never reaches the client.
 
 A proxy fronts a *pool* of upstream accounts (:meth:`ProxyConfig.enumerate_accounts`).
 The gateway ranks them by live health (success rate + latency + rate-limit
 cooldown — the same selection store auto-routing uses) and retries the next
-account on a rate-limit (429), timeout, or upstream 5xx, so one proxy name
-fronts a pool of upstream keys. Client-side 4xx is not retried across
-accounts — the caller's request was rejected, not the account.
+account on a rate-limit (429), timeout, or upstream 5xx, so one domain fronts
+a pool of upstream keys. Client-side 4xx is not retried across accounts — the
+caller's request was rejected, not the account.
 
 HTTP responses (including SSE / event streams) are streamed back chunk by
-chunk; a WebSocket upgrade on the same path is bridged to an upstream
+chunk; a WebSocket upgrade (auto-detected from the client's
+``Upgrade: websocket`` header) on the same path is bridged to an upstream
 ws/wss connection in both directions. The account credential never reaches
 the client: it is injected only on the request to the upstream.
 """
@@ -61,53 +70,52 @@ _HOP_BY_HOP = {
     "content-length",
 }
 
-# Client headers that must not be copied onto the upstream request.
-_DROP_CLIENT_HEADERS = _HOP_BY_HOP | {"authorization", "x-goog-api-key", "api-key", "apikey"}
-
-
-def proxy_auth_header(proxy: ProxyConfig, api_key: str | None) -> dict[str, str]:
-    """Render the credential header for an account, per the proxy config.
-
-    ``auth_header="Authorization"`` (default) with ``auth_scheme="Bearer"``
-    produces ``{"Authorization": "Bearer <key>"}``; set
-    ``auth_header="x-goog-api-key"`` and ``auth_scheme=None`` for Google's
-    raw-key header. An account with no key contributes no auth header (its
-    request may still carry static ``headers`` from the config).
-    """
-    if not api_key:
-        return {}
-    if proxy.auth_scheme:
-        return {proxy.auth_header: f"{proxy.auth_scheme} {api_key}"}
-    return {proxy.auth_header: api_key}
+# Client headers that must not be copied onto the upstream request: the
+# hop-by-hop transport headers, plus the credential headers the account
+# injects. The proxy does not keep a fixed list of "auth headers" — the
+# credential is whatever header(s) the account config carries (by default
+# ``Authorization`` and ``x-goog-api-key``, but any header is an account
+# header). The few common credential header names are dropped here so a
+# caller cannot pass their own value onto the upstream; the account's own
+# ``headers`` then supply the real credential.
+_DROP_CLIENT_HEADERS = _HOP_BY_HOP | {
+    "authorization",
+    "proxy-authorization",
+    "x-goog-api-key",
+    "api-key",
+    "apikey",
+    "x-api-key",
+    "x-auth-token",
+}
 
 
 def _selection_keys(proxy: ProxyConfig, account_id: str) -> dict[str, Any]:
     """Keyword args for the selection store keyed on the proxy + account."""
     return {
-        "backend": proxy.name,
+        "backend": proxy.host,
         "account": account_id,
         "model": "*",
         "modality": "proxy",
     }
 
 
-def _ranked_accounts(proxy: ProxyConfig) -> list[tuple[str, str | None, str | None, dict[str, str], float]]:
-    """Return ``(account_id, api_key, base_url, headers, score)`` best-first.
+def _ranked_accounts(proxy: ProxyConfig) -> list[tuple[str, dict[str, str], float]]:
+    """Return ``(account_id, headers, score)`` best-first.
 
     A non-rate-limited, healthy, fast account ranks first; one in a
     rate-limit cooldown sinks to the bottom but is still returned (the cooldown
-    may be stale). Returns one entry per credential.
+    may be stale). Returns one entry per account credential.
     """
-    ranked: list[tuple[float, float, str, str | None, str | None, dict[str, str]]] = []
-    for account_id, api_key, base_url, headers in proxy.enumerate_accounts():
+    ranked: list[tuple[float, float, str, dict[str, str]]] = []
+    for account_id, headers in proxy.enumerate_accounts():
         keys = _selection_keys(proxy, account_id)
         score = SELECTION_STORE.score(**keys)
         rate_limited = SELECTION_STORE.is_rate_limited(**keys)
         # rate_limited (0/1) sorts first so healthy accounts win; negate score
         # so a higher health score ranks earlier; account_id is the stable tie-break.
-        ranked.append((1 if rate_limited else 0, -score, account_id, api_key, base_url, headers))
+        ranked.append((1 if rate_limited else 0, -score, account_id, headers))
     ranked.sort(key=lambda item: (item[0], item[1], item[2]))
-    return [(aid, ak, bu, h, -neg_score) for (_, neg_score, aid, ak, bu, h) in ranked]
+    return [(aid, h, -neg_score) for (_, neg_score, aid, h) in ranked]
 
 
 def _is_retryable_status(status: int) -> bool:
@@ -133,7 +141,7 @@ class ProxyRunner:
         self._clients: dict[str, httpx.AsyncClient] = {}
 
     def _client(self, proxy: ProxyConfig) -> httpx.AsyncClient:
-        client = self._clients.get(proxy.name)
+        client = self._clients.get(proxy.host)
         if client is None:
             client = httpx.AsyncClient(
                 timeout=httpx.Timeout(proxy.timeout, connect=10.0),
@@ -144,19 +152,19 @@ class ProxyRunner:
                 event_hooks=backend_event_hooks(log_response=False),
                 follow_redirects=False,
             )
-            self._clients[proxy.name] = client
+            self._clients[proxy.host] = client
         return client
 
     @staticmethod
     def _forward_headers(client_headers: Any, proxy: ProxyConfig,
-                         account_id: str, api_key: str | None,
-                         account_headers: dict[str, str]) -> dict[str, str]:
+                         account_id: str, account_headers: dict[str, str]) -> dict[str, str]:
         """Merge client + proxy + account headers for the upstream request.
 
-        The client's hop-by-hop and credential headers are dropped (the proxy
-        injects the configured account's credential); proxy-level and account
-        headers are applied over the forwarded client headers; ``host`` is left
-        for httpx to derive from the upstream URL.
+        The client's hop-by-hop and credential headers are dropped; the account's
+        merged headers (which carry the credential) and the proxy-level headers
+        are applied over the forwarded client headers. ``account_headers`` already
+        has the proxy-level ``headers`` merged in (account wins), so it is applied
+        last; ``host`` is left for httpx to derive from the upstream URL.
         """
         out: dict[str, str] = {}
         # ``request.headers`` is a Starlette ``Headers`` object (not a dict):
@@ -171,12 +179,10 @@ class ProxyRunner:
             if name.lower() in _DROP_CLIENT_HEADERS:
                 continue
             out[name] = value
-        # Proxy-level static headers, then per-account headers (account wins),
-        # then the credential header injected last so it always overrides any
-        # client-supplied value with the configured account's key.
-        out.update(proxy.headers)
+        # The account's merged headers (proxy-level + account-level, account
+        # wins) carry the credential; applied last so they always override any
+        # client-supplied value.
         out.update(account_headers)
-        out.update(proxy_auth_header(proxy, api_key))
         out["x-mm-gateway-proxy-account"] = account_id
         return out
 
@@ -210,16 +216,16 @@ class ProxyRunner:
         accounts = _ranked_accounts(proxy)
         if not accounts:
             raise GatewayError(
-                f"Proxy '{proxy.name}' has no configured account.",
-                code="provider_not_configured", status_code=503, provider=proxy.name,
+                f"Proxy '{proxy.host}' has no configured account.",
+                code="provider_not_configured", status_code=503, provider=proxy.host,
             )
 
         client = self._client(proxy)
         last_exc: BaseException | None = None
-        for index, (account_id, api_key, base_url, account_headers, _score) in enumerate(accounts):
-            upstream_url = _join_url(base_url or proxy.base_url, path)
+        for index, (account_id, account_headers, _score) in enumerate(accounts):
+            upstream_url = _join_url(proxy.base_url, path)
             headers = self._forward_headers(
-                request.headers, proxy, account_id, api_key, account_headers,
+                request.headers, proxy, account_id, account_headers,
             )
             start = time.monotonic()
             try:
@@ -230,21 +236,21 @@ class ProxyRunner:
             except httpx.TimeoutException as exc:
                 latency = time.monotonic() - start
                 self._observe(proxy, account_id, "failure", latency, rate_limited=False)
-                log.info("proxy_attempt_failed", proxy=proxy.name, account=account_id,
+                log.info("proxy_attempt_failed", proxy=proxy.host, account=account_id,
                          method=method, url=upstream_url, latency_s=round(latency, 3),
                          error=f"timeout: {exc}", retryable=True)
                 last_exc = ProviderTimeoutError(
-                    f"proxy '{proxy.name}' upstream timed out: {exc}", provider=proxy.name,
+                    f"proxy '{proxy.host}' upstream timed out: {exc}", provider=proxy.host,
                 )
                 continue
             except httpx.HTTPError as exc:
                 latency = time.monotonic() - start
                 self._observe(proxy, account_id, "failure", latency, rate_limited=False)
-                log.info("proxy_attempt_failed", proxy=proxy.name, account=account_id,
+                log.info("proxy_attempt_failed", proxy=proxy.host, account=account_id,
                          method=method, url=upstream_url, latency_s=round(latency, 3),
                          error=f"transport: {exc}", retryable=True)
                 last_exc = ProviderRequestError(
-                    f"proxy '{proxy.name}' transport error: {exc}", provider=proxy.name,
+                    f"proxy '{proxy.host}' transport error: {exc}", provider=proxy.host,
                 )
                 continue
 
@@ -255,12 +261,12 @@ class ProxyRunner:
                 await resp.aclose()
                 rate_limited = resp.status_code == 429
                 self._observe(proxy, account_id, "failure", latency, rate_limited=rate_limited)
-                log.info("proxy_attempt_failed", proxy=proxy.name, account=account_id,
+                log.info("proxy_attempt_failed", proxy=proxy.host, account=account_id,
                          method=method, url=upstream_url, latency_s=round(latency, 3),
                          status=resp.status_code, rate_limited=rate_limited, retryable=True)
                 last_exc = ProviderRequestError(
-                    f"proxy '{proxy.name}' upstream returned HTTP {resp.status_code}",
-                    provider=proxy.name, status_code=resp.status_code,
+                    f"proxy '{proxy.host}' upstream returned HTTP {resp.status_code}",
+                    provider=proxy.host, status_code=resp.status_code,
                 )
                 continue
 
@@ -271,7 +277,7 @@ class ProxyRunner:
             self._observe(proxy, account_id, outcome, latency,
                           rate_limited=resp.status_code == 429)
             log.info("proxy_attempt_ok" if outcome == "success" else "proxy_attempt_final",
-                     proxy=proxy.name, account=account_id, method=method, url=upstream_url,
+                     proxy=proxy.host, account=account_id, method=method, url=upstream_url,
                      latency_s=round(latency, 3), status=resp.status_code,
                      attempts=index + 1)
             return _stream_upstream(resp)
@@ -279,15 +285,15 @@ class ProxyRunner:
         if last_exc is not None:
             raise last_exc
         raise GatewayError(
-            f"No account could serve proxy '{proxy.name}'.",
-            code="provider_error", status_code=502, provider=proxy.name,
+            f"No account could serve proxy '{proxy.host}'.",
+            code="provider_error", status_code=502, provider=proxy.host,
         )
 
     @staticmethod
     def _observe(proxy: ProxyConfig, account_id: str, outcome: str,
                  latency: float, *, rate_limited: bool) -> None:
         SELECTION_STORE.observe(
-            backend=proxy.name, account=account_id, model="*", modality="proxy",
+            backend=proxy.host, account=account_id, model="*", modality="proxy",
             outcome=outcome, latency_s=latency, rate_limited=rate_limited,
         )
 
@@ -390,12 +396,12 @@ async def bridge_websocket(
 
     upstream = None
     chosen_account: str | None = None
-    for index, (account_id, api_key, base_url, account_headers, _score) in enumerate(accounts):
-        upstream_url = _ws_url(base_url or proxy.base_url, path)
+    for index, (account_id, account_headers, _score) in enumerate(accounts):
+        upstream_url = _ws_url(proxy.base_url, path)
         if query:
             upstream_url = f"{upstream_url}?{query}"
         headers = _forward_headers_drop_auth(request_headers, proxy, account_id,
-                                             api_key, account_headers)
+                                             account_headers)
         start = time.monotonic()
         try:
             upstream = await connect(
@@ -414,7 +420,7 @@ async def bridge_websocket(
                 retryable = False
             ProxyRunner._observe(proxy, account_id, "failure", latency,
                                  rate_limited=status == 429)
-            log.info("proxy_ws_connect_failed", proxy=proxy.name, account=account_id,
+            log.info("proxy_ws_connect_failed", proxy=proxy.host, account=account_id,
                      url=upstream_url, latency_s=round(latency, 3),
                      status=status, error=str(exc), retryable=retryable)
             if not retryable and index == 0:
@@ -430,7 +436,7 @@ async def bridge_websocket(
         latency = time.monotonic() - start
         ProxyRunner._observe(proxy, account_id, "success", latency, rate_limited=False)
         chosen_account = account_id
-        log.info("proxy_ws_connect_ok", proxy=proxy.name, account=account_id,
+        log.info("proxy_ws_connect_ok", proxy=proxy.host, account=account_id,
                  url=upstream_url, latency_s=round(latency, 3),
                  subprotocol=getattr(upstream, "subprotocol", None))
         break
@@ -442,7 +448,7 @@ async def bridge_websocket(
     await client_ws.accept(
         subprotocol=_negotiated_subprotocol(upstream, subprotocols)
     )
-    log.info("proxy_ws_bridge_open", proxy=proxy.name, account=chosen_account)
+    log.info("proxy_ws_bridge_open", proxy=proxy.host, account=chosen_account)
     try:
         await _pump_ws(client_ws, upstream)
     finally:
@@ -450,12 +456,16 @@ async def bridge_websocket(
             await upstream.close()
         except Exception:  # noqa: BLE001
             pass
-        log.info("proxy_ws_bridge_closed", proxy=proxy.name, account=chosen_account)
+        log.info("proxy_ws_bridge_closed", proxy=proxy.host, account=chosen_account)
 
 
 def _forward_headers_drop_auth(client_headers, proxy: ProxyConfig, account_id: str,
-                              api_key: str | None, account_headers: dict[str, str]) -> dict[str, str]:
-    """Forward client headers minus credentials, then inject the account key."""
+                              account_headers: dict[str, str]) -> dict[str, str]:
+    """Forward client headers minus credentials, then inject account headers.
+
+    ``account_headers`` already merges the proxy-level ``headers`` (account
+    wins) and carries the credential, so it is applied last.
+    """
     out: dict[str, str] = {}
     if hasattr(client_headers, "items"):
         items = list(client_headers.items())
@@ -469,9 +479,7 @@ def _forward_headers_drop_auth(client_headers, proxy: ProxyConfig, account_id: s
         if name.lower().startswith("sec-websocket-"):
             continue
         out[name] = value
-    out.update(proxy.headers)
     out.update(account_headers)
-    out.update(proxy_auth_header(proxy, api_key))
     out["x-mm-gateway-proxy-account"] = account_id
     return out
 
@@ -549,5 +557,4 @@ async def _pump_ws(client_ws, upstream) -> None:
 __all__ = [
     "ProxyRunner",
     "bridge_websocket",
-    "proxy_auth_header",
 ]
