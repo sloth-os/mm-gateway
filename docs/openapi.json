@@ -1937,19 +1937,19 @@
         ]
       }
     },
-    "/proxy/{name}/{path}": {
+    "/proxy/{domain}/{path}": {
       "delete": {
-        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "description": "Forward an HTTP request through a domain-matched proxy to its upstream.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected from the account's ``headers`` and the upstream response (including\nevent streams) is streamed back. Retries across accounts on a rate-limit /\ntimeout / 5xx.",
         "operationId": "proxyRequestDelete",
         "parameters": [
           {
-            "description": "Configured proxy name (the provider-domain segment).",
+            "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
             "in": "path",
-            "name": "name",
+            "name": "domain",
             "required": true,
             "schema": {
-              "description": "Configured proxy name (the provider-domain segment).",
-              "title": "Name",
+              "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
+              "title": "Domain",
               "type": "string"
             }
           },
@@ -1978,7 +1978,7 @@
                     "value": {
                       "code": "invalid_request_error",
                       "detail": "The routing profile is unavailable.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 400,
                       "title": "Invalid Request Error",
@@ -2002,7 +2002,7 @@
                     "value": {
                       "code": "unauthorized",
                       "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 401,
                       "title": "Unauthorized",
@@ -2026,7 +2026,7 @@
                     "value": {
                       "code": "forbidden",
                       "detail": "The API key is not allowed to perform this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 403,
                       "title": "Forbidden",
@@ -2050,7 +2050,7 @@
                     "value": {
                       "code": "task_not_found",
                       "detail": "image task img_unknown not found",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 404,
                       "title": "Task Not Found",
@@ -2063,7 +2063,7 @@
                 }
               }
             },
-            "description": "No proxy configured for this name."
+            "description": "No proxy configured for this domain."
           },
           "422": {
             "content": {
@@ -2084,7 +2084,7 @@
                           "type": "missing"
                         }
                       ],
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 422,
                       "title": "Validation Error",
@@ -2108,7 +2108,7 @@
                     "value": {
                       "code": "generation_service_error",
                       "detail": "The generation service returned an error.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 502,
                       "title": "Generation Service Error",
@@ -2132,7 +2132,7 @@
                     "value": {
                       "code": "generation_service_unavailable",
                       "detail": "No generation service is available for this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 503,
                       "title": "Generation Service Unavailable",
@@ -2156,7 +2156,7 @@
                     "value": {
                       "code": "generation_service_timeout",
                       "detail": "The generation service timed out.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 504,
                       "title": "Generation Service Timeout",
@@ -2177,23 +2177,23 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Forward a request through a named proxy",
+        "summary": "Forward a request through a domain-matched proxy",
         "tags": [
           "proxy"
         ]
       },
       "get": {
-        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "description": "Forward an HTTP request through a domain-matched proxy to its upstream.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected from the account's ``headers`` and the upstream response (including\nevent streams) is streamed back. Retries across accounts on a rate-limit /\ntimeout / 5xx.",
         "operationId": "proxyRequestGet",
         "parameters": [
           {
-            "description": "Configured proxy name (the provider-domain segment).",
+            "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
             "in": "path",
-            "name": "name",
+            "name": "domain",
             "required": true,
             "schema": {
-              "description": "Configured proxy name (the provider-domain segment).",
-              "title": "Name",
+              "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
+              "title": "Domain",
               "type": "string"
             }
           },
@@ -2222,7 +2222,7 @@
                     "value": {
                       "code": "invalid_request_error",
                       "detail": "The routing profile is unavailable.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 400,
                       "title": "Invalid Request Error",
@@ -2246,7 +2246,7 @@
                     "value": {
                       "code": "unauthorized",
                       "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 401,
                       "title": "Unauthorized",
@@ -2270,7 +2270,7 @@
                     "value": {
                       "code": "forbidden",
                       "detail": "The API key is not allowed to perform this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 403,
                       "title": "Forbidden",
@@ -2294,7 +2294,7 @@
                     "value": {
                       "code": "task_not_found",
                       "detail": "image task img_unknown not found",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 404,
                       "title": "Task Not Found",
@@ -2307,7 +2307,7 @@
                 }
               }
             },
-            "description": "No proxy configured for this name."
+            "description": "No proxy configured for this domain."
           },
           "422": {
             "content": {
@@ -2328,7 +2328,7 @@
                           "type": "missing"
                         }
                       ],
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 422,
                       "title": "Validation Error",
@@ -2352,7 +2352,7 @@
                     "value": {
                       "code": "generation_service_error",
                       "detail": "The generation service returned an error.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 502,
                       "title": "Generation Service Error",
@@ -2376,7 +2376,7 @@
                     "value": {
                       "code": "generation_service_unavailable",
                       "detail": "No generation service is available for this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 503,
                       "title": "Generation Service Unavailable",
@@ -2400,7 +2400,7 @@
                     "value": {
                       "code": "generation_service_timeout",
                       "detail": "The generation service timed out.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 504,
                       "title": "Generation Service Timeout",
@@ -2421,23 +2421,23 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Forward a request through a named proxy",
+        "summary": "Forward a request through a domain-matched proxy",
         "tags": [
           "proxy"
         ]
       },
       "head": {
-        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "description": "Forward an HTTP request through a domain-matched proxy to its upstream.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected from the account's ``headers`` and the upstream response (including\nevent streams) is streamed back. Retries across accounts on a rate-limit /\ntimeout / 5xx.",
         "operationId": "proxyRequestHead",
         "parameters": [
           {
-            "description": "Configured proxy name (the provider-domain segment).",
+            "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
             "in": "path",
-            "name": "name",
+            "name": "domain",
             "required": true,
             "schema": {
-              "description": "Configured proxy name (the provider-domain segment).",
-              "title": "Name",
+              "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
+              "title": "Domain",
               "type": "string"
             }
           },
@@ -2464,7 +2464,7 @@
             "description": "Key not allowed to use this proxy."
           },
           "404": {
-            "description": "No proxy configured for this name."
+            "description": "No proxy configured for this domain."
           },
           "422": {
             "content": {
@@ -2483,23 +2483,23 @@
             "description": "The proxy has no configured account."
           }
         },
-        "summary": "Forward a request through a named proxy",
+        "summary": "Forward a request through a domain-matched proxy",
         "tags": [
           "proxy"
         ]
       },
       "options": {
-        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "description": "Forward an HTTP request through a domain-matched proxy to its upstream.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected from the account's ``headers`` and the upstream response (including\nevent streams) is streamed back. Retries across accounts on a rate-limit /\ntimeout / 5xx.",
         "operationId": "proxyRequestOptions",
         "parameters": [
           {
-            "description": "Configured proxy name (the provider-domain segment).",
+            "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
             "in": "path",
-            "name": "name",
+            "name": "domain",
             "required": true,
             "schema": {
-              "description": "Configured proxy name (the provider-domain segment).",
-              "title": "Name",
+              "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
+              "title": "Domain",
               "type": "string"
             }
           },
@@ -2526,7 +2526,7 @@
             "description": "Key not allowed to use this proxy."
           },
           "404": {
-            "description": "No proxy configured for this name."
+            "description": "No proxy configured for this domain."
           },
           "422": {
             "content": {
@@ -2545,23 +2545,23 @@
             "description": "The proxy has no configured account."
           }
         },
-        "summary": "Forward a request through a named proxy",
+        "summary": "Forward a request through a domain-matched proxy",
         "tags": [
           "proxy"
         ]
       },
       "patch": {
-        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "description": "Forward an HTTP request through a domain-matched proxy to its upstream.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected from the account's ``headers`` and the upstream response (including\nevent streams) is streamed back. Retries across accounts on a rate-limit /\ntimeout / 5xx.",
         "operationId": "proxyRequestPatch",
         "parameters": [
           {
-            "description": "Configured proxy name (the provider-domain segment).",
+            "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
             "in": "path",
-            "name": "name",
+            "name": "domain",
             "required": true,
             "schema": {
-              "description": "Configured proxy name (the provider-domain segment).",
-              "title": "Name",
+              "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
+              "title": "Domain",
               "type": "string"
             }
           },
@@ -2590,7 +2590,7 @@
                     "value": {
                       "code": "invalid_request_error",
                       "detail": "The routing profile is unavailable.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 400,
                       "title": "Invalid Request Error",
@@ -2614,7 +2614,7 @@
                     "value": {
                       "code": "unauthorized",
                       "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 401,
                       "title": "Unauthorized",
@@ -2638,7 +2638,7 @@
                     "value": {
                       "code": "forbidden",
                       "detail": "The API key is not allowed to perform this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 403,
                       "title": "Forbidden",
@@ -2662,7 +2662,7 @@
                     "value": {
                       "code": "task_not_found",
                       "detail": "image task img_unknown not found",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 404,
                       "title": "Task Not Found",
@@ -2675,7 +2675,7 @@
                 }
               }
             },
-            "description": "No proxy configured for this name."
+            "description": "No proxy configured for this domain."
           },
           "422": {
             "content": {
@@ -2696,7 +2696,7 @@
                           "type": "missing"
                         }
                       ],
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 422,
                       "title": "Validation Error",
@@ -2720,7 +2720,7 @@
                     "value": {
                       "code": "generation_service_error",
                       "detail": "The generation service returned an error.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 502,
                       "title": "Generation Service Error",
@@ -2744,7 +2744,7 @@
                     "value": {
                       "code": "generation_service_unavailable",
                       "detail": "No generation service is available for this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 503,
                       "title": "Generation Service Unavailable",
@@ -2768,7 +2768,7 @@
                     "value": {
                       "code": "generation_service_timeout",
                       "detail": "The generation service timed out.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 504,
                       "title": "Generation Service Timeout",
@@ -2789,23 +2789,23 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Forward a request through a named proxy",
+        "summary": "Forward a request through a domain-matched proxy",
         "tags": [
           "proxy"
         ]
       },
       "post": {
-        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "description": "Forward an HTTP request through a domain-matched proxy to its upstream.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected from the account's ``headers`` and the upstream response (including\nevent streams) is streamed back. Retries across accounts on a rate-limit /\ntimeout / 5xx.",
         "operationId": "proxyRequestPost",
         "parameters": [
           {
-            "description": "Configured proxy name (the provider-domain segment).",
+            "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
             "in": "path",
-            "name": "name",
+            "name": "domain",
             "required": true,
             "schema": {
-              "description": "Configured proxy name (the provider-domain segment).",
-              "title": "Name",
+              "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
+              "title": "Domain",
               "type": "string"
             }
           },
@@ -2834,7 +2834,7 @@
                     "value": {
                       "code": "invalid_request_error",
                       "detail": "The routing profile is unavailable.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 400,
                       "title": "Invalid Request Error",
@@ -2858,7 +2858,7 @@
                     "value": {
                       "code": "unauthorized",
                       "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 401,
                       "title": "Unauthorized",
@@ -2882,7 +2882,7 @@
                     "value": {
                       "code": "forbidden",
                       "detail": "The API key is not allowed to perform this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 403,
                       "title": "Forbidden",
@@ -2906,7 +2906,7 @@
                     "value": {
                       "code": "task_not_found",
                       "detail": "image task img_unknown not found",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 404,
                       "title": "Task Not Found",
@@ -2919,7 +2919,7 @@
                 }
               }
             },
-            "description": "No proxy configured for this name."
+            "description": "No proxy configured for this domain."
           },
           "422": {
             "content": {
@@ -2940,7 +2940,7 @@
                           "type": "missing"
                         }
                       ],
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 422,
                       "title": "Validation Error",
@@ -2964,7 +2964,7 @@
                     "value": {
                       "code": "generation_service_error",
                       "detail": "The generation service returned an error.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 502,
                       "title": "Generation Service Error",
@@ -2988,7 +2988,7 @@
                     "value": {
                       "code": "generation_service_unavailable",
                       "detail": "No generation service is available for this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 503,
                       "title": "Generation Service Unavailable",
@@ -3012,7 +3012,7 @@
                     "value": {
                       "code": "generation_service_timeout",
                       "detail": "The generation service timed out.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 504,
                       "title": "Generation Service Timeout",
@@ -3033,23 +3033,23 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Forward a request through a named proxy",
+        "summary": "Forward a request through a domain-matched proxy",
         "tags": [
           "proxy"
         ]
       },
       "put": {
-        "description": "Forward an HTTP request through a named proxy to its upstream service.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected as a header and the upstream response (including event streams) is\nstreamed back. Retries across accounts on a rate-limit / timeout / 5xx.",
+        "description": "Forward an HTTP request through a domain-matched proxy to its upstream.\n\nThe path, query string, body, and most client headers are forwarded\nverbatim to ``{base_url}/{path}``; the configured account's credential is\ninjected from the account's ``headers`` and the upstream response (including\nevent streams) is streamed back. Retries across accounts on a rate-limit /\ntimeout / 5xx.",
         "operationId": "proxyRequestPut",
         "parameters": [
           {
-            "description": "Configured proxy name (the provider-domain segment).",
+            "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
             "in": "path",
-            "name": "name",
+            "name": "domain",
             "required": true,
             "schema": {
-              "description": "Configured proxy name (the provider-domain segment).",
-              "title": "Name",
+              "description": "Configured proxy domain (the upstream host segment selecting the proxy).",
+              "title": "Domain",
               "type": "string"
             }
           },
@@ -3078,7 +3078,7 @@
                     "value": {
                       "code": "invalid_request_error",
                       "detail": "The routing profile is unavailable.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 400,
                       "title": "Invalid Request Error",
@@ -3102,7 +3102,7 @@
                     "value": {
                       "code": "unauthorized",
                       "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 401,
                       "title": "Unauthorized",
@@ -3126,7 +3126,7 @@
                     "value": {
                       "code": "forbidden",
                       "detail": "The API key is not allowed to perform this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 403,
                       "title": "Forbidden",
@@ -3150,7 +3150,7 @@
                     "value": {
                       "code": "task_not_found",
                       "detail": "image task img_unknown not found",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 404,
                       "title": "Task Not Found",
@@ -3163,7 +3163,7 @@
                 }
               }
             },
-            "description": "No proxy configured for this name."
+            "description": "No proxy configured for this domain."
           },
           "422": {
             "content": {
@@ -3184,7 +3184,7 @@
                           "type": "missing"
                         }
                       ],
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 422,
                       "title": "Validation Error",
@@ -3208,7 +3208,7 @@
                     "value": {
                       "code": "generation_service_error",
                       "detail": "The generation service returned an error.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 502,
                       "title": "Generation Service Error",
@@ -3232,7 +3232,7 @@
                     "value": {
                       "code": "generation_service_unavailable",
                       "detail": "No generation service is available for this request.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 503,
                       "title": "Generation Service Unavailable",
@@ -3256,7 +3256,7 @@
                     "value": {
                       "code": "generation_service_timeout",
                       "detail": "The generation service timed out.",
-                      "instance": "/proxy/{name}/{path}",
+                      "instance": "/proxy/{domain}/{path}",
                       "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
                       "status": 504,
                       "title": "Generation Service Timeout",
@@ -3277,7 +3277,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Forward a request through a named proxy",
+        "summary": "Forward a request through a domain-matched proxy",
         "tags": [
           "proxy"
         ]

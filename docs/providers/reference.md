@@ -27,7 +27,7 @@ names are not accepted by the public REST or MCP parameter schemas; see
 - **Video (Sora)**: `client.videos.create(model, prompt, seconds="4|8|12", size, input_reference=)` → `Video{id,status,progress}`. Poll `client.videos.retrieve(id)` until `completed`/`failed`, then `client.videos.download_content(id)` → MP4 bytes.
   - Models: `sora-2`, `sora-2-pro`.
 
-## google-genai — `google-genai` v2.16.0
+## google-genai — `google-genai` v2.19.0
 
 - **Client**: `from google import genai; client = genai.Client(api_key=)` (env `GOOGLE_API_KEY`/`GEMINI_API_KEY`). Async via `client.aio.models.*`.
 - **Sync vs async URL**: two `genai.Client` instances — image (Imagen /

@@ -23,8 +23,9 @@ each backend adapter translates those concepts to its native SDK or REST shape.
 | `GET` | `/health` | Liveness check |
 | `GET` | `/metrics` | Prometheus metrics |
 
-The `/proxy/{name}/{path}` surface (documented below) forwards any HTTP
-method — and WebSocket upgrades — verbatim to a named upstream root URL.
+The `/proxy/{domain}/{path}` surface (documented below) forwards any HTTP
+method — and WebSocket upgrades — verbatim to a configured upstream root URL,
+matched by its upstream domain.
 
 Generation is always asynchronous. A successful `POST` returns `202 Accepted`
 with the complete current task representation. The `Location` and
@@ -382,11 +383,19 @@ If no YAML file exists, environment-based backend configuration is also
 available. The split variables are `<PROVIDER>_IMAGE_*`,
 `<PROVIDER>_VIDEO_*`, and `<PROVIDER>_MUSIC_*`, each with `API_KEY`, `BASE_URL`,
 and `MODEL` variants. `vertex` is the exception: it authenticates with
-Application Default Credentials (a service-account JSON key), so it uses
-`VERTEX_CREDENTIALS_JSON` (raw key content), `VERTEX_CREDENTIALS_FILE` (key
-path), `VERTEX_PROJECT`, and `VERTEX_LOCATION` (region, required) instead of an
-`API_KEY`/`BASE_URL` pair. Lyria is not available on Vertex, so there is no
-music variant.
+Application Default Credentials (a service-account JSON key), so instead of an
+`API_KEY` it reads `VERTEX_CREDENTIALS_JSON` (raw key content, e.g. a CI secret)
+or `VERTEX_CREDENTIALS_FILE` (key path, e.g. a YAML deployment), falling back to
+ambient ADC (`GOOGLE_APPLICATION_CREDENTIALS` / metadata server) when neither is
+set. The `VERTEX_PROJECT` and optional `VERTEX_LOCATION` (region) select the
+endpoint — when no location is pinned the client defaults to the `global`
+endpoint, which is the one Lyria 3 requires. Model and base-URL pins follow the
+same split as the other providers: `VERTEX_IMAGE_MODEL` / `VERTEX_VIDEO_MODEL` /
+`VERTEX_MUSIC_MODEL` and `VERTEX_IMAGE_BASE_URL` (or `VERTEX_BASE_URL`) /
+`VERTEX_VIDEO_BASE_URL` / `VERTEX_MUSIC_BASE_URL`. Vertex supports all three
+modalities — Imagen (image), Veo (video), and Lyria (music); the music modality
+goes through the same Interactions surface as the AI Studio adapter, just
+authenticated with the ADC bearer token instead of an `x-goog-api-key`.
 
 ## Development
 
