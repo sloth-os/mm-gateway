@@ -166,12 +166,16 @@ jobs:
           ACESTEP_MUSIC_BASE_URL: ${{ vars.ACESTEP_MUSIC_BASE_URL }}
           ACESTEP_MUSIC_MODEL: ${{ vars.ACESTEP_MUSIC_MODEL }}
           # The Gemini Live (AI Studio) proxy e2e is independent of the
-          # provider modalities: its triple is PROXY_API_KEY (the upstream
-          # account key) + PROXY_MODEL (the Live model id) + GATEWAY_API_KEY
-          # (the front-end key, shared with the providers). PROXY_BASE_URL is
-          # optional — config defaults it to the AI Studio Generative Language
-          # host — so it does not gate. Exposed here only so the gate below can
-          # see it; threaded into the container in the e2e job.
+          # provider modalities: its pair is PROXY_API_KEY (the upstream
+          # account key) + PROXY_MODEL (the Live model id). GATEWAY_API_KEY
+          # (the front-end key) is NOT required: when unset, the gateway's env
+          # key has an empty token — an "open" key that admits any caller
+          # (resolve_key), so the proxy e2e authenticates with no
+          # Authorization header at all. So the proxy e2e runs on the Gemini
+          # key + model alone, even if no front-end key is configured. PROXY_BASE_URL
+          # is optional too — config defaults it to the AI Studio Generative
+          # Language host — so it does not gate. Exposed here only so the gate
+          # below can see it; threaded into the container in the e2e job.
           PROXY_API_KEY: ${{ secrets.PROXY_API_KEY }}
           PROXY_BASE_URL: ${{ vars.PROXY_BASE_URL }}
           PROXY_MODEL: ${{ vars.PROXY_MODEL }}
@@ -219,11 +223,13 @@ jobs:
             if [ -n "$k" ] && [ -n "$u" ] && [ -n "$m" ]; then set=1; break; fi
           done
           # The Gemini Live proxy e2e is a separate surface from the provider
-          # modalities above: it drives the general /proxy/<name>/ WS bridge
+          # modalities above: it drives the general /proxy/<domain>/ WS bridge
           # against the AI Studio Live API, so its own (PROXY_API_KEY +
-          # PROXY_MODEL) pair — the base URL is optional — flips the gate on
-          # its own. Without this, wiring only the proxy triple would leave
-          # secrets_present=0 and the e2e job would never run the proxy test.
+          # PROXY_MODEL) pair — the base URL is optional, and the front-end
+          # GATEWAY_API_KEY is optional too (an unset one makes the gateway's
+          # env key open) — flips the gate on its own. Without this, wiring
+          # only the proxy pair would leave secrets_present=0 and the e2e job
+          # would never run the proxy test.
           if [ -n "$PROXY_API_KEY" ] && [ -n "$PROXY_MODEL" ]; then set=1; fi
           echo "secrets_present=$set" >> "$GITHUB_OUTPUT"
           echo "secrets_present=$set"
@@ -693,12 +699,16 @@ jobs:
         run: python tests/e2e/smoke.py
 
       - name: Run Gemini Live proxy e2e
-        # Drives the general /proxy/<name>/ WebSocket bridge against the real
+        # Drives the general /proxy/<domain>/ WebSocket bridge against the real
         # AI Studio Live API via the google-genai SDK. Runs whenever its own
-        # triple is fully set (PROXY_API_KEY + PROXY_MODEL + GATEWAY_API_KEY)
-        # — independent of the provider modalities' gate. proxy_live.py exits 0
-        # when the triple is unset, so this step is green before the secrets
-        # are wired and only spends a real Live call once they are.
+        # pair is fully set (PROXY_API_KEY + PROXY_MODEL) — independent of the
+        # provider modalities' gate and NOT requiring GATEWAY_API_KEY. The
+        # front-end key is threaded in too: when set the gateway is protected
+        # and the script authenticates with it; when unset (empty) the
+        # gateway's env key is open and the script needs no Authorization
+        # header. proxy_live.py exits 0 when the pair is unset, so this step is
+        # green before the secrets are wired and only spends a real Live call
+        # once they are.
         env:
           MM_GATEWAY: http://127.0.0.1:8000
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}

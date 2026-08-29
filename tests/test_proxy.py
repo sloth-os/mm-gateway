@@ -45,9 +45,24 @@ def _proxy(
     )
 
 
-def _settings(proxies: list[ProxyConfig], *, allow_tags: list[str] | None = None) -> Settings:
-    # A key that either is open (no allow_tags) or restricted to given tags.
-    key = KeyConfig(id="test", key="t0pSecret", allow_tags=allow_tags or [])
+def _settings(
+    proxies: list[ProxyConfig],
+    *,
+    allow_tags: list[str] | None = None,
+    allow_backends: list[str] | None = None,
+    key_token: str = "t0pSecret",
+) -> Settings:
+    # A key that either is open (no allow_tags) or restricted to given tags. A
+    # blank ``key_token`` models the legacy env key with no GATEWAY_API_KEY:
+    # resolve_key treats its empty token as an "open" key that admits any caller
+    # (incl. one sending no Authorization header), so the proxy e2e can run with
+    # just PROXY_API_KEY + PROXY_MODEL and no front-end key.
+    key = KeyConfig(
+        id="test",
+        key=key_token,
+        allow_tags=allow_tags or [],
+        allow_backends=allow_backends or [],
+    )
     # A fake backend keeps create_app's registry happy without importing a real
     # provider module; the proxies are what we actually exercise.
     return Settings(
@@ -109,6 +124,27 @@ def test_missing_api_key_is_401(app_with_proxy):
     assert resp.status_code == 401
     assert resp.headers["content-type"] == "application/problem+json"
     assert resp.json()["code"] == "unauthorized"
+
+
+def test_open_env_key_admits_a_no_header_caller(client):
+    # The proxy e2e must run with just PROXY_API_KEY + PROXY_MODEL and no
+    # GATEWAY_API_KEY. With no front-end key the legacy env key has an empty
+    # token — resolve_key treats that as an "open" key admitting any caller,
+    # incl. one sending NO Authorization header. So a request with no auth
+    # header reaches the upstream instead of 401-ing. allow_backends carries the
+    # proxy domain (as the env builder does) so the open key is authorised too.
+    from fastapi.testclient import TestClient
+
+    proxy = _proxy(accounts=[{"id": "a", "headers": {"Authorization": "Bearer key-a"}}])
+    settings = _settings([proxy], key_token="", allow_backends=[_DOMAIN])
+
+    with respx.mock:
+        respx.get(f"{_UPSTREAM}/v1/anything").mock(return_value=httpx.Response(200, text="ok"))
+        with TestClient(create_app(settings)) as c:
+            # No Authorization header at all — the open env key admits it.
+            resp = c.get(f"/proxy/{_DOMAIN}/v1/anything")
+    assert resp.status_code == 200
+    assert resp.text == "ok"
 
 
 def test_unknown_proxy_domain_is_404(client):
@@ -430,6 +466,34 @@ def test_ws_url_rewrites_http_schemes_to_ws():
     assert _ws_url("http://up.test", "ws") == "ws://up.test/ws"
     assert _ws_url("wss://up.test", "ws") == "wss://up.test/ws"
     assert _ws_url("ws://up.test", "ws") == "ws://up.test/ws"
+
+
+def test_websocket_open_env_key_admits_a_no_header_upgrade():
+    # The WS bridge admits an open env key too: with no GATEWAY_API_KEY the env
+    # key's empty token is an open key, so a WS upgrade carrying no
+    # Authorization header (and no access_token query param) still authenticates
+    # and bridges — the proxy Live e2e's path when no front-end key is set.
+    # Mock the upstream so the upgrade is admitted and a frame round-trips; the
+    # absence of a 4401 close proves auth succeeded without a front-end key.
+    from fastapi.testclient import TestClient
+    import respx
+
+    proxy = _proxy(accounts=[{"id": "a", "headers": {"Authorization": "Bearer key-a"}}])
+    settings = _settings([proxy], key_token="", allow_backends=[_DOMAIN])
+    with TestClient(create_app(settings)) as c:
+        # No headers, no query token — the open env key must admit the upgrade.
+        # A closed-before-bridging upgrade surfaces as a WebSocketDisconnect with
+        # code 4401; an admitted one reaches the upstream.
+        with respx.mock:
+            respx.get(f"{_UPSTREAM}/v1/rt").mock(return_value=httpx.Response(426))
+            try:
+                with c.websocket_connect(f"/proxy/{_DOMAIN}/v1/rt") as ws:
+                    ws.receive()
+            except Exception as exc:  # noqa: BLE001
+                # An auth rejection would close with code 4401; anything else
+                # means the upgrade was admitted and only the upstream failed.
+                assert getattr(exc, "code", None) != 4401
+
 
 
 # -- WebSocket bridge ------------------------------------------------------ #

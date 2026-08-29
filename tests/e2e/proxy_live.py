@@ -29,10 +29,15 @@ take its mldev path (an ``api_key`` client). That path is what forces
 
 When to run
 -----------
-Runs only when ``PROXY_API_KEY`` + ``PROXY_MODEL`` + ``GATEWAY_API_KEY`` are all
-set (matching the CI ``secret_gate`` triple for the proxy). When any is unset it
-exits 0 (skips), so the workflow is green before secrets are wired and only
-spends a real Live call once the proxy is fully configured.
+Runs only when ``PROXY_API_KEY`` + ``PROXY_MODEL`` are both set — it does **not**
+require ``GATEWAY_API_KEY``. The front-end key is optional: when set, the
+gateway is protected and the script authenticates with it; when unset, the
+gateway's env key has an empty token (an "open" key that admits any caller, per
+``resolve_key``), so the script sends no ``Authorization`` header and still
+authenticates. So the proxy e2e can run with just the Gemini upstream key +
+model, independent of the front-end key the provider modalities share. When the
+pair is unset it exits 0 (skips), so the workflow is green before secrets are
+wired and only spends a real Live call once the proxy is fully configured.
 
 Exit codes: 0 ok / skipped, 1 the gateway proxy path is broken (auth,
 forwarding, or the real upstream call failed), 2 misconfigured.
@@ -81,11 +86,20 @@ def log(msg: str) -> None:
 
 
 def configured() -> bool:
-    """The proxy Live e2e runs iff its triple is fully set (mirrors smoke.py)."""
-    return bool(PROXY_API_KEY and PROXY_MODEL and TOKEN)
+    """Run iff the proxy pair is set: PROXY_API_KEY (Gemini upstream key) +
+    PROXY_MODEL (the Live model id). GATEWAY_API_KEY is *optional*: when set
+    the gateway is token-protected and the script authenticates with it; when
+    unset the gateway's env key has an empty token (an "open" key that admits
+    any caller), so the script needs no front-end key at all. So the proxy
+    e2e stands alone on the Gemini key + model, independent of the front-end
+    key the provider modalities share."""
+    return bool(PROXY_API_KEY and PROXY_MODEL)
 
 
 def auth_headers() -> dict[str, str]:
+    # No front-end key when GATEWAY_API_KEY is unset: the gateway's env key has
+    # an empty token, which resolve_key treats as an open key admitting any
+    # caller. Sending no Authorization header still authenticates there.
     return {"authorization": f"Bearer {TOKEN}"} if TOKEN else {}
 
 
@@ -224,18 +238,25 @@ async def _live_turn_via_proxy(relay_port: int) -> str:
     hits ``wss://127.0.0.1:<relay>/proxy/<PROXY_DOMAIN>``; the relay terminates
     TLS and pumps the bytes to the plain-HTTP gateway, which bridges the WS
     upgrade to ``wss://generativelanguage.googleapis.com/...`` (the AI Studio
-    upstream) with the configured account's ``x-goog-api-key``. The SDK passes
-    our ``Authorization: Bearer`` front-end key on the handshake (via
-    ``http_options.headers``); the gateway authenticates the caller with it and
-    drops it before forwarding upstream.
+    upstream) with the configured account's ``x-goog-api-key``. When a front-end
+    ``GATEWAY_API_KEY`` is set, the SDK passes our ``Authorization: Bearer``
+    front-end key on the handshake (via ``http_options.headers``) and the
+    gateway authenticates the caller with it; when it is unset the gateway's
+    env key is open and the upgrade carries no Authorization header, which
+    still authenticates. Either way the front-end header is dropped before the
+    upstream call.
     """
     base_url = f"https://127.0.0.1:{relay_port}/proxy/{PROXY_DOMAIN}"
+    # Attach the front-end bearer only when a key is set; an open gateway needs
+    # none. The SDK puts http_options.headers on the WS handshake, so the
+    # gateway reads the bearer off the upgrade to authenticate the caller.
+    ws_headers = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
     client = genai.Client(
         api_key=PROXY_API_KEY,
         http_options=types.HttpOptions(
             base_url=base_url,
             api_version="v1beta",
-            headers={"Authorization": f"Bearer {TOKEN}"},
+            headers=ws_headers,
             # Trust our self-signed terminator; the SDK passes this ssl context
             # to ws_connect via _websocket_ssl_ctx (only filled in if unset).
             async_client_args={"ssl": _client_unverified_ssl_ctx()},
@@ -329,8 +350,8 @@ async def _run() -> int:
 def main() -> int:
     if not configured():
         log(
-            "PROXY_API_KEY + PROXY_MODEL + GATEWAY_API_KEY not all set — "
-            "skipping Gemini Live proxy e2e"
+            "PROXY_API_KEY + PROXY_MODEL not set — skipping Gemini Live proxy e2e "
+            "(GATEWAY_API_KEY is optional and not required)"
         )
         return 0
     try:
