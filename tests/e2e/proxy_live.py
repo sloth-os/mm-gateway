@@ -67,18 +67,22 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 BASE = os.environ.get("MM_GATEWAY", "http://127.0.0.1:8000").rstrip("/")
-TOKEN = os.environ.get("GATEWAY_API_KEY", "")
-PROXY_API_KEY = os.environ.get("PROXY_API_KEY", "")
-PROXY_MODEL = os.environ.get("PROXY_MODEL", "")
+TOKEN = os.environ.get("GATEWAY_API_KEY", "") or ""
+PROXY_API_KEY = os.environ.get("PROXY_API_KEY", "") or ""
+PROXY_MODEL = os.environ.get("PROXY_MODEL", "") or ""
 # The proxy is matched by its upstream domain (the host of base_url). The
-# gateway's default proxy (from PROXY_API_KEY) targets the AI Studio Generative
-# Language host; PROXY_BASE_URL overrides it, and the routing domain follows.
+# gateway's default proxy (registered from PROXY_API_KEY in _from_legacy_env)
+# targets the AI Studio Generative Language host when PROXY_BASE_URL is unset;
+# PROXY_BASE_URL overrides it, and the routing domain follows. Treat an
+# empty-but-set PROXY_BASE_URL as unset (CI passes `${{ vars.PROXY_BASE_URL }}`,
+# which is the empty string when the variable is not defined), else urlparse('')
+# yields no hostname and the domain collapses to '' — a 404 that masks the real
+# "everything else is fine" state.
 from urllib.parse import urlparse
-_PROXY_BASE_URL = os.environ.get(
-    "PROXY_BASE_URL", "https://generativelanguage.googleapis.com"
-)
+_PROXY_BASE_URL = os.environ.get("PROXY_BASE_URL", "").strip() \
+    or "https://generativelanguage.googleapis.com"
 PROXY_DOMAIN = urlparse(_PROXY_BASE_URL).hostname or _PROXY_BASE_URL
-LIVE_TURN_TIMEOUT = float(os.environ.get("PROXY_LIVE_TIMEOUT", "60"))
+LIVE_TURN_TIMEOUT = float(os.environ.get("PROXY_LIVE_TIMEOUT", "60") or 60)
 
 
 def log(msg: str) -> None:
@@ -300,29 +304,34 @@ async def _run() -> int:
     with httpx.Client(base_url=BASE, timeout=30) as client:
         wait_for_health(client)
         log("gateway healthy")
-        # Sanity: the proxy must be visible to this caller's key. A 404 here
-        # means PROXY_API_KEY never registered the proxy (env not threaded into
-        # the container); a 403 means the key isn't authorised for it. Both are
-        # caught up front rather than surfacing as an opaque WS close.
+        # Sanity: the proxy must be visible to this caller's key. A gateway-level
+        # rejection (401/403/404) is caught up front with a clear message rather
+        # than surfacing later as an opaque WS close. The distinguishing signal is
+        # the gateway's Problem Details content type: a *gateway* 401/403/404 is
+        # always ``application/problem+json``, whereas a 404/400 returned by the
+        # upstream (Google rejecting the synthetic ``/_probe`` path) carries a
+        # different content type — so an upstream rejection does NOT count as a
+        # failure here. Only the gateway-level responses (problem+json) fail.
         proxy_probe = client.get(
             f"/proxy/{PROXY_DOMAIN}/_probe", headers=auth_headers(), timeout=15,
         )
-        # The gateway forwards the probe verbatim; Google returns 404/400 for an
-        # unknown path, but a *gateway* 401/403/404 distinguishes front-end/auth
-        # problems from an upstream one. Only the gateway-level failures fail.
-        if proxy_probe.status_code in (401, 403):
+        is_gateway_problem = proxy_probe.headers.get("content-type", "").startswith(
+            "application/problem+json"
+        )
+        if proxy_probe.status_code in (401, 403) and is_gateway_problem:
             raise RuntimeError(
                 f"gateway rejected proxy access: {proxy_probe.status_code} "
-                f"{proxy_probe.text[:200]} (is GATEWAY_API_KEY / PROXY_API_KEY set "
+                f"{proxy_probe.text[:200]} (is the front-end / PROXY_API_KEY set "
                 f"in the gateway env?)"
             )
-        if proxy_probe.status_code == 404:
+        if proxy_probe.status_code == 404 and is_gateway_problem:
             raise RuntimeError(
                 f"proxy domain {PROXY_DOMAIN!r} is not configured on the gateway "
                 f"(PROXY_API_KEY not threaded into the container?)"
             )
-        log(f"proxy reachable (probe -> {proxy_probe.status_code}; upstream "
-            f"rejection of /_probe is expected and fine)")
+        log(f"proxy reachable (probe -> {proxy_probe.status_code} "
+            f"{proxy_probe.headers.get('content-type', '')}; an upstream rejection "
+            f"of /_probe is expected and fine)")
 
     cert_path, key_path = _make_self_signed_cert()
     # Relay to the gateway's plain-HTTP listener. Parse host/port from BASE.
