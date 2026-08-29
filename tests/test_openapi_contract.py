@@ -111,6 +111,23 @@ def test_validation_errors_use_shared_problem_details():
         assert schema == {"$ref": "#/components/schemas/ProblemDetail"}
 
 
+def test_proxy_methods_carry_problem_detail_422_and_require_auth():
+    # The proxy catch-all forwards every HTTP method through one handler, so
+    # each method shares the Problem Details validation contract and the
+    # bearer-key auth dependency. Asserting HEAD/OPTIONS too is what locks in
+    # the fix: the OpenAPI post-processor must attach the problem+json 422 (and
+    # BearerAuth security) to those methods, not leave FastAPI's default 422 that
+    # $refs a popped schema — that dangling ref crashed the Go SDK generator.
+    spec = _spec()
+    for method in PROXY_METHODS:
+        op = spec["paths"][PROXY_PATH][method]
+        assert op["security"] == [{"BearerAuth": []}]
+        response = op["responses"]["422"]
+        assert set(response["content"]) == {"application/problem+json"}
+        schema = response["content"]["application/problem+json"]["schema"]
+        assert schema == {"$ref": "#/components/schemas/ProblemDetail"}
+
+
 def test_public_parameter_schemas_are_strict_and_provider_neutral():
     schemas = _spec()["components"]["schemas"]
     provider_fields = {
@@ -231,9 +248,62 @@ def test_visual_parameters_use_one_dimensions_shape():
 
 
 def test_unused_fastapi_validation_envelopes_are_not_published():
-    schemas = _spec()["components"]["schemas"]
+    spec = _spec()
+    schemas = spec["components"]["schemas"]
     assert "HTTPValidationError" not in schemas
     assert "ValidationError" not in schemas
+    # Absent is not enough: the gateway pops these schemas because every public
+    # operation returns ProblemDetail for validation errors instead. A response
+    # that still $refs a popped schema is a dangling ref — openapi-generator's
+    # swagger-parser aborts on it (it broke the Go SDK publish job when the
+    # proxy's HEAD/OPTIONS kept FastAPI's default 422). Assert nothing in the
+    # published spec points at the removed envelopes.
+    popped = {
+        "#/components/schemas/HTTPValidationError",
+        "#/components/schemas/ValidationError",
+    }
+    for path, node in _walk_schema(spec):
+        if isinstance(node, dict) and node.get("$ref") in popped:
+            raise AssertionError(
+                f"dangling $ref to a popped schema at "
+                f"{'.'.join(map(str, path))}: {node['$ref']}"
+            )
+
+
+def test_every_ref_resolves_to_a_defined_component():
+    # openapi-generator's swagger-parser aborts on any $ref whose target is
+    # missing (it broke the Go SDK publish job via a dangling HTTPValidationError
+    # ref). Walk the whole spec and assert every internal component ref resolves,
+    # so a future dangling ref fails this local gate instead of a downstream job.
+    spec = _spec()
+    components = spec.get("components", {})
+    buckets = {
+        name: components.get(name, {})
+        for name in (
+            "schemas",
+            "responses",
+            "parameters",
+            "examples",
+            "requestBodies",
+            "headers",
+            "securitySchemes",
+            "links",
+            "callbacks",
+        )
+    }
+    dangling = []
+    for path, node in _walk_schema(spec):
+        if not (isinstance(node, dict) and "$ref" in node):
+            continue
+        ref = node["$ref"]
+        if not ref.startswith("#/components/"):
+            continue  # this spec uses only internal component refs
+        kind, _, name = ref[len("#/components/"):].partition("/")
+        if name not in buckets.get(kind, {}):
+            dangling.append((ref, ".".join(map(str, path))))
+    assert not dangling, (
+        f"dangling $refs (would break openapi-generator): {dangling}"
+    )
 
 
 def test_model_catalogue_does_not_expose_backend_details():

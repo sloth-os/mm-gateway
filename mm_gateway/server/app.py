@@ -468,7 +468,13 @@ def _install_openapi_customization(app: FastAPI) -> None:
                     seen_op_ids.add(op_id)
         for path, item in spec.get("paths", {}).items():
             for method, op in item.items():
-                if method not in ("get", "post", "put", "patch", "delete"):
+                # Same method set as the operationId-dedup pass above: the proxy
+                # catch-all registers HEAD/OPTIONS too, and they must get the
+                # Problem Details 422 (and BearerAuth security) the same as the
+                # other methods. Skipping them here left FastAPI's default 422
+                # ($ref HTTPValidationError) on HEAD/OPTIONS while the schema was
+                # popped below — a dangling ref that breaks openapi-generator.
+                if method not in ("get", "post", "put", "patch", "delete", "head", "options"):
                     continue
                 if path not in _OPEN_PATHS:
                     op.setdefault("security", [{"BearerAuth": []}])
