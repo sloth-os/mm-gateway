@@ -44,8 +44,16 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install package (with dev deps)
-        run: pip install -e ".[dev]"
+      - name: Install package (with dev + socks deps)
+        # Install the optional [socks] extra (socksio / python-socks /
+        # aiohttp-socks) alongside [dev] so the outbound-proxy unit tests that
+        # build real SOCKS-wired clients (httpx, the runapi transport, the
+        # dashscope aiohttp session, the WebSocket bridge) run for real rather
+        # than tripping the missing-shim ProviderRequestError guards. The
+        # production Dockerfile deliberately omits this extra — it is a
+        # deployment-time opt-in for SOCKS / dashscope-proxy deployments — but
+        # CI must exercise the wiring it guards, so it is installed here only.
+        run: pip install -e ".[dev,socks]"
 
       - name: Import check (every provider module imports)
         # Import each provider adapter module (which transitively imports its
