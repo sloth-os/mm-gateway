@@ -8,6 +8,14 @@ Everything below is adapter-side implementation detail. These native field
 names are not accepted by the public REST or MCP parameter schemas; see
 `docs/design/unification.md` for the provider-neutral contract.
 
+Every adapter routes its outbound SDK/httpx traffic through the configured
+`outbound_proxy` (HTTP or SOCKS5): a global default, overridable per backend via
+`outbound_proxy` / `extra["outbound_proxy"]`, resolved at startup. HTTP proxies
+need no extra dep on the httpx paths; SOCKS5 needs the optional `[socks]` extra
+(`socksio` for httpx-based providers), and the dashscope (aiohttp) path routes
+any explicit proxy — HTTP or SOCKS — through `aiohttp-socks`. See the README
+*Outbound proxy* section.
+
 ---
 
 ## openai — `openai` v2.53.0

@@ -300,6 +300,13 @@ A proxy with no credential at all is unusable and is not registered — its path
 absent credential leaves the account empty rather than injecting a literal
 `"None"` upstream.
 
+The proxy's HTTP forwarder and WebSocket bridge route their **outbound** traffic
+to the upstream through the same `outbound_proxy` knob as the backend providers
+(global default, overridable per proxy); see
+[Outbound proxy](#outbound-proxy). A misconfigured SOCKS proxy (e.g. the
+`python-socks` extra missing for a WS bridge) rejects the upgrade with `4503`
+before any upstream connect.
+
 ## Authentication
 
 Generation and model-listing endpoints use `Authorization: Bearer <token>`.
@@ -396,6 +403,70 @@ same split as the other providers: `VERTEX_IMAGE_MODEL` / `VERTEX_VIDEO_MODEL` /
 modalities — Imagen (image), Veo (video), and Lyria (music); the music modality
 goes through the same Interactions surface as the AI Studio adapter, just
 authenticated with the ADC bearer token instead of an `x-goog-api-key`.
+
+### Outbound proxy
+
+Every backend provider's outbound SDK/httpx traffic **and** every pass-through
+proxy's HTTP forwarder and WebSocket bridge can be routed through an HTTP or
+SOCKS5 proxy. Set the global default once, then override it per backend or per
+proxy:
+
+```yaml
+outbound_proxy: ${OUTBOUND_PROXY:}        # global default for all backends + proxies
+
+backends:
+  - name: openai-default
+    type: openai
+    api_key: ${OPENAI_API_KEY}
+    outbound_proxy: http://proxy:3128    # overrides the global for this backend only
+
+proxies:
+  - base_url: https://api.openai.com
+    outbound_proxy: socks5://proxy:1080  # overrides the global for this proxy's
+                                          # forwarder + WebSocket bridge
+    accounts: [...]
+```
+
+A backend may also nest the value under `extra.outbound_proxy`; a top-level
+`outbound_proxy` and `extra.outbound_proxy` are equivalent, and an explicit
+`extra.outbound_proxy` wins when both are set. Resolution order is **per-target
+override (backend `outbound_proxy` / proxy `outbound_proxy`) → global
+`outbound_proxy`**, and the registry bakes the effective URL onto each backend
+and proxy at startup, so the adapters and the proxy layer read one authoritative
+value.
+
+When `outbound_proxy` is unset (and no per-target override is set), providers and
+the proxy layer connect directly: httpx-based clients keep httpx's default
+`trust_env=True`, so ambient `HTTP_PROXY`/`HTTPS_PROXY` still apply; the
+WebSocket bridge honours ambient `ALL_PROXY`/`HTTPS_PROXY`; and the dashscope
+SDK falls back to its shared env-honouring session. An explicit `outbound_proxy`
+always wins where it is set.
+
+HTTP (CONNECT) proxies need no extra dependency on the httpx-based providers, the
+HTTP forwarder, or the WebSocket bridge (built in). SOCKS5 needs a transport shim
+per client. The dashscope SDK speaks aiohttp internally, and an explicit
+`outbound_proxy` on a dashscope backend — of **any** scheme, HTTP or SOCKS — is
+routed through an `aiohttp_socks` `ProxyConnector`, so it needs `aiohttp-socks`
+even for an HTTP proxy. All three shims are bundled in the optional `[socks]`
+extra:
+
+```bash
+pip install -e ".[socks]"
+```
+
+Without it, a proxy that needs a missing shim raises a clear
+`ProviderRequestError` naming the package — `socksio` for the httpx-based
+providers and the HTTP forwarder (SOCKS only), `python-socks` for the WebSocket
+bridge (SOCKS only), and `aiohttp-socks` for the dashscope async path (any
+explicit proxy) — rather than failing opaquely at handshake time. The `[socks]`
+extra is not in the base dependencies; a Docker deployment that uses SOCKS (or a
+dashscope HTTP proxy) must add it (the base image installs only
+`[project.dependencies]`).
+
+In the env-var layout (no YAML), set the global `OUTBOUND_PROXY`, a per-backend
+`<PROVIDER>_OUTBOUND_PROXY` override (e.g. `OPENAI_OUTBOUND_PROXY`,
+`VERTEX_OUTBOUND_PROXY`), and `PROXY_OUTBOUND_PROXY` for the pass-through
+proxy — the last falls back to `OUTBOUND_PROXY` when unset.
 
 ## Development
 

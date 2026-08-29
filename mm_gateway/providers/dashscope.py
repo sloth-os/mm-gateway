@@ -89,6 +89,7 @@ from dashscope.api_entities.dashscope_response import (
 from dashscope.api_entities.http_request import HttpRequest
 from dashscope.client.base_api import BaseAsyncAioApi
 
+from mm_gateway.config import _is_socks_proxy
 from mm_gateway.core.base import ImageProvider, VideoProvider
 from mm_gateway.core.exceptions import (
     ProviderNotConfiguredError,
@@ -103,7 +104,7 @@ from mm_gateway.observability.httplog import (
 )
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._dimensions import aspect_ratio, pixel_size
-from mm_gateway.providers._http import _map_status
+from mm_gateway.providers._http import _map_status, proxy_kwargs
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
     ImageData,
@@ -193,6 +194,69 @@ def _install_dashscope_logging() -> None:
 
 
 _install_dashscope_logging()
+
+
+# -- Outbound proxy for the aiohttp SDK path -------------------------------- #
+# Unlike the other providers (which build an httpx client we can hand a ``proxy=``),
+# DashScope's SDK speaks aiohttp internally with no httpx injection point. Its
+# shared session uses ``trust_env=True``, so an operator can already steer HTTP
+# traffic through env vars — but that is global and silent, and it does not cover
+# SOCKS (aiohttp honours only HTTP(S) env proxies). To route a configured
+# outbound proxy (per-backend override wins, else the global the registry folded
+# into ``extra["outbound_proxy"]``) we build a dedicated aiohttp ClientSession
+# whose connector is an ``aiohttp_socks.ProxyConnector`` (HTTP CONNECT and
+# SOCKS4/4a/5/5h), and hand it to the SDK via the ``session=`` kwarg:
+# ``_build_api_request`` forwards ``session`` to the ``HttpRequest`` as its
+# ``_external_aio_session``, which the request then uses in place of the shared
+# session. When no proxy is configured, ``None`` is passed and the SDK falls back
+# to its shared session (preserving the prior env-var behaviour).
+
+def _aiohttp_proxy_connector(proxy_url: str):
+    """Build an aiohttp connector that routes upstream traffic through a proxy.
+
+    ``aiohttp_socks.ProxyConnector.from_url`` accepts ``http://`` and the
+    ``socks4/4a/5/5h`` schemes (tunnelling an HTTPS upstream via CONNECT for the
+    HTTP proxy type) and forwards its ``**kwargs`` to ``TCPConnector``, so the
+    SDK's certifi-backed SSL context is passed for upstream verification. It
+    raises ``ValueError`` on an ``https://`` proxy URL (a TLS link to the proxy
+    itself is not supported by aiohttp_socks), which is surfaced as a clear
+    error rather than a silent misconfiguration.
+    """
+    try:
+        from aiohttp_socks import ProxyConnector
+    except ImportError as exc:  # pragma: no cover - config-time guard
+        # Unlike the httpx/websockets paths (where HTTP CONNECT is built in),
+        # the dashscope SDK speaks aiohttp, and an explicit outbound proxy of
+        # *any* scheme (HTTP or SOCKS) is routed through an aiohttp_socks
+        # ProxyConnector — so the package is needed here for HTTP proxies too,
+        # not only SOCKS. Surface a clear error rather than an opaque ImportError
+        # at first use.
+        raise ProviderRequestError(
+            f"outbound proxy {proxy_url!r} on the dashscope (aiohttp) path "
+            "requires the 'aiohttp-socks' package (install mm-gateway[socks]).",
+            provider="dashscope",
+        ) from exc
+    from dashscope.api_entities.aio_session import get_ssl_context
+    try:
+        return ProxyConnector.from_url(proxy_url, ssl=get_ssl_context())
+    except ValueError as exc:  # https:// proxy URL
+        raise ProviderRequestError(
+            f"outbound proxy {proxy_url!r} (https scheme) is not supported on "
+            "the dashscope (aiohttp) path; use http:// or socks5://.",
+            provider="dashscope",
+        ) from exc
+
+
+async def _build_proxy_aio_session(proxy_url: str):
+    """A dedicated ``aiohttp.ClientSession`` routed through ``proxy_url``.
+
+    ``trust_env`` is False so the explicit connector is authoritative and the
+    ambient ``HTTP_PROXY``/``HTTPS_PROXY`` env vars do not double-apply.
+    """
+    import aiohttp
+    return aiohttp.ClientSession(
+        connector=_aiohttp_proxy_connector(proxy_url), trust_env=False,
+    )
 
 
 # -- Patch wait/fetch to forward base_address -------------------------------- #
@@ -344,6 +408,11 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         self._video_base = (
             backend.extra.get("video_base_url") or backend.base_url or None
         )
+        # Resolved effective outbound proxy (backend override, else the global
+        # the registry folded in). Routed through the aiohttp SDK session below
+        # and the httpx poll clients (both must honour the same proxy or the
+        # submit and the poll would leave through different egresses).
+        self._proxy_url = backend.extra.get("outbound_proxy")
         # Dedicated httpx clients for the task *poll*. The SDK's
         # ``AioImageGeneration.wait``/``AioImageSynthesis.wait``/
         # ``AioVideoSynthesis.fetch`` are bypassed here (see
@@ -355,16 +424,38 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         # no ``base_url`` — the full slashless URL is built per call so httpx's
         # relative-URL path-joining cannot silently drop the ``/v1`` segment.
         # The auth header rides on each client.
+        pkwargs = proxy_kwargs(self._proxy_url)
         self._client_image = httpx.AsyncClient(
             timeout=300.0,
             headers={"Authorization": f"Bearer {self._api_key}"},
             event_hooks=backend_event_hooks(),
+            **pkwargs,
         )
         self._client_video = httpx.AsyncClient(
             timeout=300.0,
             headers={"Authorization": f"Bearer {self._api_key}"},
             event_hooks=backend_event_hooks(),
+            **pkwargs,
         )
+
+    async def _aio_session(self):
+        """A cached proxy-carrying aiohttp session for the SDK path, or None.
+
+        Built lazily on first use (aiohttp binds the session to the running
+        loop, so it cannot be created at ``__init__`` time). When no outbound
+        proxy is configured this returns ``None`` and the SDK falls back to its
+        shared session (which honours env-var proxies via ``trust_env``). The
+        session is reused for the provider's lifetime so connection pooling is
+        preserved; a closed session (e.g. after an event-loop teardown) is
+        rebuilt transparently.
+        """
+        if not self._proxy_url:
+            return None
+        sess = getattr(self, "_aio_proxy_session", None)
+        if sess is None or sess.closed:
+            sess = await _build_proxy_aio_session(self._proxy_url)
+            self._aio_proxy_session = sess
+        return sess
 
     @staticmethod
     def _is_generation_model(model: str) -> bool:
@@ -552,7 +643,8 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         """
         try:
             create = await AioImageGeneration.async_call(
-                api_key=self._api_key, base_address=self._image_base, **kwargs
+                api_key=self._api_key, base_address=self._image_base,
+                session=await self._aio_session(), **kwargs
             )
         except _AsyncNotSupported:
             raise
@@ -593,7 +685,8 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         """Synchronous multimodal-generation call — finished images inline."""
         try:
             return await AioImageGeneration.call(
-                api_key=self._api_key, base_address=self._image_base, **kwargs
+                api_key=self._api_key, base_address=self._image_base,
+                session=await self._aio_session(), **kwargs
             )
         except Exception as exc:
             raise ProviderRequestError(
@@ -656,7 +749,8 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         """
         try:
             create = await AioImageSynthesis.async_call(
-                api_key=self._api_key, base_address=self._image_base, **kwargs
+                api_key=self._api_key, base_address=self._image_base,
+                session=await self._aio_session(), **kwargs
             )
         except _AsyncNotSupported:
             raise
@@ -703,7 +797,8 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         """
         try:
             return await AioImageSynthesis.sync_call(
-                api_key=self._api_key, base_address=self._image_base, **kwargs
+                api_key=self._api_key, base_address=self._image_base,
+                session=await self._aio_session(), **kwargs
             )
         except Exception as exc:
             raise ProviderRequestError(
@@ -788,7 +883,8 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
 
         try:
             resp = await AioVideoSynthesis.async_call(
-                api_key=self._api_key, base_address=self._video_base, **kwargs
+                api_key=self._api_key, base_address=self._video_base,
+                session=await self._aio_session(), **kwargs
             )
         except Exception as exc:
             raise ProviderRequestError(

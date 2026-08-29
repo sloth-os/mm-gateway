@@ -25,6 +25,7 @@ from mm_gateway.core.exceptions import (
 )
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.providers._dimensions import aspect_ratio
+from mm_gateway.providers._http import proxy_kwargs
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
     ImageData,
@@ -79,10 +80,16 @@ class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         image_base = backend.base_url or _BASE
         video_base = backend.extra.get("video_base_url") or image_base
         headers = {"Authorization": f"Bearer {self._api_key}"}
+        pkwargs = proxy_kwargs(backend.extra.get("outbound_proxy"))
+        # Resolved effective outbound proxy; passed to _decode_image_input so a
+        # caller-supplied http(s):// input image is fetched through the same
+        # egress as the upstream calls (a proxy-only network can otherwise not
+        # reach the image URL).
+        self._proxy_url = backend.extra.get("outbound_proxy")
         self._client = httpx.AsyncClient(base_url=image_base, timeout=300, headers=headers,
-                                         event_hooks=backend_event_hooks())
+                                         event_hooks=backend_event_hooks(), **pkwargs)
         self._client_video = httpx.AsyncClient(base_url=video_base, timeout=300, headers=headers,
-                                               event_hooks=backend_event_hooks())
+                                               event_hooks=backend_event_hooks(), **pkwargs)
 
     def _image_path(self, model: str) -> str:
         if model in _IMAGE_PATHS:
@@ -148,7 +155,7 @@ class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         if not first_image:
             raise ProviderRequestError("stability SVD requires an input image", provider="stability",
                                        status_code=400)
-        image_bytes, mime = _decode_image_input(first_image)
+        image_bytes, mime = _decode_image_input(first_image, self._proxy_url)
         task_id = f"svd-{uuid.uuid4().hex}"
         _VIDEO_TASKS[task_id] = {
             "model": request.model, "prompt": request.prompt() or "",
@@ -216,14 +223,20 @@ class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         )
 
 
-def _decode_image_input(image: str) -> tuple[bytes, str]:
-    """Accept a data: URI or fetch an http(s) URL to raw bytes."""
+def _decode_image_input(image: str, proxy_url: str | None = None) -> tuple[bytes, str]:
+    """Accept a data: URI or fetch an http(s) URL to raw bytes.
+
+    An ``http(s)://`` URL is fetched through the configured outbound proxy
+    (the same ``proxy_kwargs`` resolution as the provider's other clients), so a
+    proxy-only network can pull the caller's input image. A ``data:`` URI decodes
+    locally with no network.
+    """
     if image.startswith("data:"):
         header, _, b64 = image.partition(",")
         mime = header.split(";")[0].split(":")[1] if ":" in header else "image/png"
         return base64.b64decode(b64), mime
     # lazy to avoid a module-level httpx for a pure helper
-    with httpx.Client(timeout=60) as c:
+    with httpx.Client(timeout=60, **proxy_kwargs(proxy_url)) as c:
         r = c.get(image)
         r.raise_for_status()
         mime = r.headers.get("content-type", "image/png")

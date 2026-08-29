@@ -19,6 +19,17 @@ video:
 defaults:
   enable_metrics: true
 
+# Route every backend provider's outbound SDK/httpx traffic AND every pass-through
+# proxy's HTTP forwarder + WebSocket bridge through one HTTP or SOCKS5 proxy.
+# Override it per backend (`outbound_proxy:` on a backend) or per proxy
+# (`outbound_proxy:` on a proxy entry); the more specific value always wins.
+# When unset, the underlying clients connect directly but still honour ambient
+# HTTP_PROXY / HTTPS_PROXY (and ALL_PROXY for the WS bridge). HTTP (CONNECT)
+# proxies need no extra dep on the httpx/WS paths; SOCKS5 needs the optional
+# `[socks]` extra (socksio / python-socks / aiohttp-socks) — note the dashscope
+# (aiohttp) path routes *any* explicit proxy, HTTP or SOCKS, through aiohttp-socks.
+outbound_proxy: ${OUTBOUND_PROXY:}
+
 # Expose the gateway as an MCP Streamable-HTTP server. Disabled by default — set
 # enabled: true to mount the seven gateway tools (list_models, create_image,
 # get_image, create_video, get_video, create_music, get_music) at `path`
@@ -44,6 +55,10 @@ backends:
     type: openai
     api_key: ${OPENAI_API_KEY}
     tags: [prod, image-primary]
+    # Route just this backend's outbound traffic through a different proxy than
+    # the global `outbound_proxy` above (or nested under `extra.outbound_proxy`,
+    # which is equivalent and wins if both are set).
+    # outbound_proxy: ${OPENAI_OUTBOUND_PROXY:}
     # One backend can front a *pool* of upstream keys: list them under
     # `credentials` and auto-mode rotates among them (retrying the next key on
     # a rate-limit) and ranks them by live health. The single `api_key` above
@@ -92,6 +107,10 @@ proxies:
   - base_url: https://api.openai.com
     tags: [prod]
     timeout: 120
+    # Route this proxy's HTTP forwarder + WebSocket bridge through a different
+    # proxy than the global `outbound_proxy` (overrides it for this proxy only).
+    # Falls back to the global value when unset.
+    # outbound_proxy: ${PROXY_OUTBOUND_PROXY:}
     # Static headers applied to every forwarded request of every account (e.g.
     # a required `x-goog-user-project`). Per-account `headers` shadow these.
     headers: {}

@@ -86,15 +86,18 @@ class XAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         video_base = (self._normalise_base(video_base_url) if video_base_url
                       else image_base)
         self._base = image_base
+        proxy_url = backend.extra.get("outbound_proxy")
         self._client = make_client(
             image_base,
             timeout=180.0,
             headers={"authorization": f"Bearer {backend.api_key}"},
+            proxy_url=proxy_url,
         )
         self._client_video = make_client(
             video_base,
             timeout=180.0,
             headers={"authorization": f"Bearer {backend.api_key}"},
+            proxy_url=proxy_url,
         )
 
     @staticmethod

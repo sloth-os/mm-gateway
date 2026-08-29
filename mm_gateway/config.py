@@ -30,6 +30,20 @@ def _env(name: str, default: str | None = None) -> str | None:
     return val if val not in (None, "") else default
 
 
+def _is_socks_proxy(url: str | None) -> bool:
+    """True iff the URL is a SOCKS proxy scheme (``socks4``/``socks4a``/``socks5``/``socks5h``).
+
+    HTTP (``http://``) and HTTPS (``https://``) proxy URLs are handled by the
+    transports' built-in CONNECT support; only SOCKS needs the extra
+    ``socksio`` / ``python-socks`` / ``aiohttp-socks`` shims, so callers branch
+    on this to install the right transport (and surface a clear error if the
+    SOCKS shim is missing).
+    """
+    if not url:
+        return False
+    return url.lower().split(":", 1)[0] in ("socks4", "socks4a", "socks5", "socks5h")
+
+
 @dataclass(frozen=True)
 class BackendConfig:
     """One named, typed provider instance with credentials and tags.
@@ -48,6 +62,14 @@ class BackendConfig:
     retries the next account on a rate-limit), so one backend name fronts a
     pool of upstream keys. A backend with no ``credentials`` behaves exactly as
     before — a single (default) account.
+
+    An ``outbound_proxy`` URL may be set on a backend's ``extra`` to route this
+    backend's *outbound* traffic (the SDK/httpx client it builds in
+    ``__init__``) through an HTTP or SOCKS5 proxy. When unset, the backend
+    inherits the global :attr:`Settings.outbound_proxy`. The registry resolves
+    the effective URL (backend override wins) onto the per-account config so the
+    adapter's ``backend.extra["outbound_proxy"]`` always carries the resolved
+    value it should actually use.
     """
 
     name: str
@@ -159,6 +181,12 @@ class ProxyConfig:
     # Per-proxy request timeout (seconds). Streaming/SSE responses are not
     # bound by this — only the time to receive the upstream response headers.
     timeout: float = 120.0
+    # Route this proxy's *outbound* traffic (the httpx forwarder and the
+    # WebSocket bridge) through an HTTP or SOCKS5 proxy. When unset, the proxy
+    # inherits the global :attr:`Settings.outbound_proxy`; the registry bakes the
+    # effective URL (per-proxy override wins) onto this field at registration so
+    # the proxy runner and ``bridge_websocket`` read one authoritative value.
+    outbound_proxy: str | None = None
 
     @property
     def host(self) -> str:
@@ -248,6 +276,16 @@ class Settings:
     max_sync_wait: float = field(default_factory=lambda: float(_env("MAX_SYNC_WAIT", "300") or "300"))
     poll_interval: float = field(default_factory=lambda: float(_env("POLL_INTERVAL", "2.0") or "2.0"))
     enable_metrics: bool = field(default_factory=lambda: _env("ENABLE_METRICS", "true").lower() == "true")
+
+    # Route every backend provider's *outbound* traffic and every pass-through
+    # proxy's forwarder/bridge through this HTTP or SOCKS5 proxy URL (e.g.
+    # ``http://proxy:3128`` or ``socks5://proxy:1080``). A backend or proxy may
+    # override it individually (``extra["outbound_proxy"]`` / ProxyConfig field).
+    # When unset, providers and the proxy layer connect to their upstreams
+    # directly (their httpx clients keep httpx's default ``trust_env=True``, so
+    # ambient ``HTTP_PROXY``/``HTTPS_PROXY`` env vars still apply — an explicit
+    # ``outbound_proxy`` always wins over the env vars where it is set).
+    outbound_proxy: str | None = field(default_factory=lambda: _env("OUTBOUND_PROXY"))
 
     # Whether the HTTP MCP server (POST /<mcp_path>) is mounted, and the path
     # it is served on. The MCP server exposes the gateway's image/video/model
@@ -342,7 +380,8 @@ class Settings:
                 api_key=b.get("api_key"),
                 base_url=b.get("base_url"),
                 tags=list(b.get("tags") or []),
-                extra=dict(b.get("extra") or {}),
+                extra=_with_outbound_proxy(dict(b.get("extra") or {}),
+                                           b.get("outbound_proxy")),
                 credentials=list(b.get("credentials") or []),
             )
             for b in (raw.get("backends") or [])
@@ -371,6 +410,7 @@ class Settings:
                 headers={str(k2): str(v2) for k2, v2 in (p.get("headers") or {}).items() if v2 is not None},
                 accounts=list(p.get("accounts") or []),
                 timeout=float(p.get("timeout") or 120),
+                outbound_proxy=_resolve_outbound_proxy(p.get("outbound_proxy")),
             )
             for p in (raw.get("proxies") or [])
         ]
@@ -407,6 +447,10 @@ class Settings:
             backends=backends,
             keys=keys,
             proxies=proxies,
+            outbound_proxy=_resolve_outbound_proxy(
+                raw.get("outbound_proxy") if isinstance(raw, dict) else None,
+                env_fallback=True,
+            ),
         )
 
     @classmethod
@@ -502,6 +546,17 @@ class Settings:
              ("ACESTEP_API_KEY", "ACESTEP_BASE_URL", "ACESTEP_MODEL"),
              ("ACESTEP_MUSIC_API_KEY", "ACESTEP_MUSIC_BASE_URL", "ACESTEP_MUSIC_MODEL")),
         ]
+        # Per-backend outbound-proxy env: ``<NAME>_OUTBOUND_PROXY`` (resolved
+        # from the legacy key env's stem) routes that one backend's outbound
+        # traffic through a proxy, overriding the global ``OUTBOUND_PROXY``.
+        def _backend_outbound_proxy(key_env: str | None, legacy: str) -> str | None:
+            if key_env:
+                stem = key_env[: -len("_API_KEY")] if key_env.endswith("_API_KEY") else key_env
+                v = _env(f"{stem}_OUTBOUND_PROXY")
+                if v:
+                    return v
+            return _env(f"{legacy[: -len('_API_KEY')] if legacy.endswith('_API_KEY') else legacy}_OUTBOUND_PROXY")
+
         backends: list[BackendConfig] = []
         for (type_, (img_key_env, vid_key_env), (img_url_env, vid_url_env),
              (img_model_env, vid_model_env), (legacy_key, legacy_url, legacy_model),
@@ -564,6 +619,7 @@ class Settings:
                     extra["video_base_url"] = vid_base
                 if mus_base and mus_base != img_base:
                     extra["music_base_url"] = mus_base
+                _with_outbound_proxy(extra, _env("VERTEX_OUTBOUND_PROXY"))
                 backends.append(BackendConfig(
                     name=type_, type=type_, api_key=None,
                     base_url=base_url, tags=[], extra=extra,
@@ -602,6 +658,10 @@ class Settings:
                 extra["video_base_url"] = _env(vid_url_env)
             if _env(mus_url_env) and _env(mus_url_env) != base_url:
                 extra["music_base_url"] = _env(mus_url_env)
+            # Per-backend outbound proxy: ``<NAME>_OUTBOUND_PROXY`` (resolved
+            # from the modality key env's stem, falling back to the legacy
+            # backend-level stem) overrides the global ``OUTBOUND_PROXY``.
+            _with_outbound_proxy(extra, _backend_outbound_proxy(img_key_env, legacy_key))
             # creds (the multi-account list) was resolved above as part of the
             # configured gate; pass it through so the registry builds one
             # provider per credential.
@@ -630,6 +690,8 @@ class Settings:
                 headers={},
                 accounts=[{"headers": {"x-goog-api-key": proxy_key}}],
                 timeout=120.0,
+                outbound_proxy=_resolve_outbound_proxy(
+                    _env("PROXY_OUTBOUND_PROXY"), env_fallback=True),
             ))
         # An implicit key authorises all configured backends. If the operator
         # sets GATEWAY_API_KEY, that becomes the required token; otherwise the
@@ -646,7 +708,10 @@ class Settings:
             default_video_backend=_env("DEFAULT_VIDEO_PROVIDER"),
             default_music_backend=_env("DEFAULT_MUSIC_PROVIDER"),
         )]
-        return cls(backends=backends, keys=keys, proxies=proxies)
+        return cls(
+            backends=backends, keys=keys, proxies=proxies,
+            outbound_proxy=_env("OUTBOUND_PROXY"),
+        )
 
 
 def _find_config_file() -> str | None:
@@ -723,3 +788,36 @@ def _bool(v: Any) -> bool:
     if isinstance(v, bool):
         return v
     return str(v).lower() == "true"
+
+
+def _resolve_outbound_proxy(value: Any, *, env_fallback: bool = False) -> str | None:
+    """Normalise an outbound-proxy URL from config to ``str | None``.
+
+    An explicit non-empty value wins; an empty/None value means "not set here".
+    When ``env_fallback`` is set (the global setting only), a YAML-omitted
+    global proxy falls back to the ``OUTBOUND_PROXY`` env var, so an operator
+    can set the global proxy without a YAML file at all.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return _env("OUTBOUND_PROXY") if env_fallback else None
+    return str(value).strip() or None
+
+
+def _with_outbound_proxy(extra: dict[str, Any], value: Any) -> dict[str, Any]:
+    """Fold a backend-level ``outbound_proxy`` field into its ``extra``.
+
+    A backend may declare the proxy either as a top-level ``outbound_proxy``
+    field or nested under ``extra.outbound_proxy``; both land on
+    ``extra["outbound_proxy"]`` for the provider to read. An explicit
+    ``extra.outbound_proxy`` wins over the top-level shorthand so nothing
+    surprising happens when both are present. ``None`` (e.g. an unset
+    ``${ENV:}``) is dropped so an unset value leaves no ``"None"`` string.
+    """
+    resolved = _resolve_outbound_proxy(value)
+    if resolved is not None:
+        extra.setdefault("outbound_proxy", resolved)
+    else:
+        # A null shorthand should not override an explicit extra value, but it
+        # must not inject a literal "None" either.
+        extra.pop("outbound_proxy", None)
+    return extra

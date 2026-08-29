@@ -62,6 +62,7 @@ class MurekaProvider(MusicProvider):
             backend.base_url or _BASE,
             timeout=180.0,
             headers={"Authorization": f"Bearer {backend.api_key}"},
+            proxy_url=backend.extra.get("outbound_proxy"),
         )
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:

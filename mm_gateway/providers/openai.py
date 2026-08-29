@@ -14,6 +14,7 @@ from mm_gateway.core.exceptions import ProviderNotConfiguredError, ProviderReque
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._dimensions import pixel_size
+from mm_gateway.providers._http import proxy_kwargs
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
     ImageData,
@@ -26,8 +27,8 @@ from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 log = get_logger("provider.openai")
 
 
-def _logged_httpx() -> httpx.AsyncClient:
-    return httpx.AsyncClient(event_hooks=backend_event_hooks())
+def _logged_httpx(proxy_url: str | None = None) -> httpx.AsyncClient:
+    return httpx.AsyncClient(event_hooks=backend_event_hooks(), **proxy_kwargs(proxy_url))
 
 
 class OpenAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
@@ -54,8 +55,11 @@ class OpenAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         # them apart.
         image_base = backend.base_url or None
         video_base = backend.extra.get("video_base_url") or image_base
-        self._client = AsyncOpenAI(api_key=backend.api_key, base_url=image_base, http_client=_logged_httpx())
-        self._client_video = AsyncOpenAI(api_key=backend.api_key, base_url=video_base, http_client=_logged_httpx())
+        proxy_url = backend.extra.get("outbound_proxy")
+        self._client = AsyncOpenAI(api_key=backend.api_key, base_url=image_base,
+                                   http_client=_logged_httpx(proxy_url))
+        self._client_video = AsyncOpenAI(api_key=backend.api_key, base_url=video_base,
+                                         http_client=_logged_httpx(proxy_url))
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         kwargs: dict[str, Any] = {"model": request.model, "prompt": request.prompt() or ""}

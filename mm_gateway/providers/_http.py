@@ -10,14 +10,44 @@ from __future__ import annotations
 
 import httpx
 
+from mm_gateway.config import _is_socks_proxy
 from mm_gateway.core.exceptions import ProviderRequestError, ProviderTimeoutError
 from mm_gateway.observability.httplog import backend_event_hooks
 
 
-def make_client(base_url: str, *, timeout: float, headers: dict[str, str] | None = None) -> httpx.AsyncClient:
+def proxy_kwargs(proxy_url: str | None) -> dict:
+    """Build httpx client kwargs that route traffic through ``proxy_url``.
+
+    httpx accepts an explicit ``proxy=<url>`` for both HTTP CONNECT and SOCKS
+    proxies (SOCKS needs the optional ``socksio`` extra). An explicit proxy
+    **wins** over the ambient ``HTTP_PROXY`` / ``HTTPS_PROXY`` env vars httpx
+    otherwise honours via ``trust_env``. When ``proxy_url`` is ``None`` we set
+    nothing, so the client keeps its default ``trust_env=True`` and an operator
+    can still steer traffic through env vars alone.
+
+    The resolved URL lives in ``backend.extra["outbound_proxy"]`` (the registry
+    folds the global ``Settings.outbound_proxy`` in when no per-backend override
+    is set), so callers pass that value straight through.
+    """
+    if not proxy_url:
+        return {}
+    if _is_socks_proxy(proxy_url):
+        try:
+            import socksio  # noqa: F401  — registering the httpx SOCKS extension
+        except ImportError as exc:  # pragma: no cover - config-time guard
+            raise ProviderRequestError(
+                f"SOCKS outbound proxy {proxy_url!r} requires the 'socksio' "
+                "package (install httpx[socks]); HTTP proxies need no extra dep."
+            ) from exc
+    return {"proxy": proxy_url}
+
+
+def make_client(base_url: str, *, timeout: float,
+                headers: dict[str, str] | None = None,
+                proxy_url: str | None = None) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         base_url=base_url, timeout=timeout, headers=headers or {},
-        event_hooks=backend_event_hooks(),
+        event_hooks=backend_event_hooks(), **proxy_kwargs(proxy_url),
     )
 
 

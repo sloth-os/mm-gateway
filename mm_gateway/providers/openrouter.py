@@ -59,8 +59,9 @@ class OpenRouterProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         image_base = backend.base_url or _BASE
         video_base = backend.extra.get("video_base_url") or image_base
         headers = {"Authorization": f"Bearer {backend.api_key}"}
-        self._client = make_client(image_base, timeout=120, headers=headers)
-        self._client_video = make_client(video_base, timeout=120, headers=headers)
+        proxy_url = backend.extra.get("outbound_proxy")
+        self._client = make_client(image_base, timeout=120, headers=headers, proxy_url=proxy_url)
+        self._client_video = make_client(video_base, timeout=120, headers=headers, proxy_url=proxy_url)
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         body = _image_body(request)

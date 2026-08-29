@@ -96,7 +96,8 @@ class AceStepProvider(MusicProvider):
         if backend.api_key:
             headers["Authorization"] = f"Bearer {backend.api_key}"
         self._mode = self._resolve_mode(backend)
-        self._client = make_client(backend.base_url, timeout=300.0, headers=headers)
+        self._client = make_client(backend.base_url, timeout=300.0, headers=headers,
+                                   proxy_url=backend.extra.get("outbound_proxy"))
 
     @staticmethod
     def _resolve_mode(backend) -> str:

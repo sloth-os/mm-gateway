@@ -77,4 +77,12 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else 1)" || exit 1
 
+# Note: the image installs only the base dependencies (the
+# [project.dependencies] block) — it does NOT include the optional [socks] extra
+# (socksio / python-socks / aiohttp-socks). A deployment that routes outbound
+# traffic through a SOCKS5 proxy — or that sets an explicit outbound_proxy on a
+# dashscope backend (the aiohttp path routes any explicit proxy, HTTP or SOCKS,
+# through aiohttp-socks) — must add it, e.g. build a child image that runs
+# `pip install mm-gateway[socks]`. HTTP (CONNECT) proxies on the httpx/WS paths
+# need no extra dep.
 CMD ["mm-gateway"]

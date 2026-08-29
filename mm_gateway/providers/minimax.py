@@ -41,7 +41,7 @@ from mm_gateway.core.exceptions import (
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._dimensions import aspect_ratio
-from mm_gateway.providers._http import _map_status
+from mm_gateway.providers._http import _map_status, proxy_kwargs
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
@@ -91,13 +91,14 @@ class MiniMaxProvider(MusicProvider, VideoProvider):
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
+        pkwargs = proxy_kwargs(backend.extra.get("outbound_proxy"))
         self._client = httpx.AsyncClient(
             base_url=music_base, timeout=300, headers=headers,
-            event_hooks=backend_event_hooks(),
+            event_hooks=backend_event_hooks(), **pkwargs,
         )
         self._client_video = httpx.AsyncClient(
             base_url=video_base, timeout=300, headers=headers,
-            event_hooks=backend_event_hooks(),
+            event_hooks=backend_event_hooks(), **pkwargs,
         )
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:

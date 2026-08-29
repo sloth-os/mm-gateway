@@ -36,6 +36,22 @@ dev = [
     "pytest-asyncio>=0.23",
     "respx>=0.21",
 ]
+# SOCKS5 outbound-proxy support. HTTP (CONNECT) proxies need no extra dep on the
+# httpx paths or the WebSocket bridge (built in); SOCKS5 needs a transport shim
+# per client:
+#   - httpx (most providers + the proxy HTTP forwarder): ``socksio`` (SOCKS only)
+#   - websockets (the proxy WebSocket bridge): ``python-socks`` (SOCKS only)
+#   - aiohttp (the dashscope SDK's async path): ``aiohttp-socks`` — needed for ANY
+#     explicit proxy (HTTP or SOCKS), since the SDK speaks aiohttp and we route it
+#     through an ``aiohttp_socks.ProxyConnector``
+# An operator who routes outbound traffic through a SOCKS proxy (or sets an
+# explicit proxy on a dashscope backend) installs this extra
+# (``pip install mm-gateway[socks]``); HTTP-only, non-dashscope deployments skip it.
+socks = [
+    "socksio>=1.0",
+    "python-socks>=2.0",
+    "aiohttp-socks>=0.10",
+]
 
 [project.scripts]
 mm-gateway = "mm_gateway.server.app:run"

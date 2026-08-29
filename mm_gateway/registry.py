@@ -17,6 +17,7 @@ default tag/backend > the first usable backend.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 from typing import Any
 
@@ -160,6 +161,7 @@ class Registry:
         for proxy in self.settings.proxies:
             if not proxy.configured:
                 continue
+            proxy = self._resolve_proxy(proxy)
             if proxy.host in self._proxies or proxy.host in self._backends:
                 log.warning("proxy_domain_collision", domain=proxy.host)
                 continue
@@ -180,10 +182,33 @@ class Registry:
         """
         merged = dict(extra)
         merged.setdefault("__account_id", account_id)
+        # Resolve the effective outbound proxy onto ``extra``: a backend- or
+        # account-level override (already in ``extra["outbound_proxy"]``) wins
+        # over the global ``settings.outbound_proxy``; when neither is set the
+        # key is simply absent and the provider builds a direct (env-honoring)
+        # client. The provider init thus reads one authoritative URL from
+        # ``backend.extra["outbound_proxy"]`` with no settings access of its own.
+        merged.setdefault("outbound_proxy", self.settings.outbound_proxy)
         return BackendConfig(
             name=cfg.name, type=cfg.type, api_key=api_key or cfg.api_key,
             base_url=base_url or cfg.base_url, tags=list(cfg.tags), extra=merged,
         )
+
+    def _resolve_proxy(self, proxy: ProxyConfig) -> ProxyConfig:
+        """Bake the effective outbound-proxy URL onto a :class:`ProxyConfig`.
+
+        A per-proxy ``outbound_proxy`` override wins over the global
+        :attr:`Settings.outbound_proxy`; when neither is set the field stays
+        ``None`` and the proxy runner builds a direct (env-honoring) httpx client
+        / websockets connection. The proxy runner and ``bridge_websocket`` read
+        one authoritative URL off ``proxy.outbound_proxy`` with no settings
+        access of their own — mirroring how backend overrides land on
+        ``extra["outbound_proxy"]``.
+        """
+        effective = proxy.outbound_proxy or self.settings.outbound_proxy
+        if proxy.outbound_proxy == effective:
+            return proxy
+        return dataclasses.replace(proxy, outbound_proxy=effective)
 
     def _apply_pinned_models(self, provider: Provider, cfg: BackendConfig) -> None:
         # Honor an operator-pinned image model (BackendConfig.extra[

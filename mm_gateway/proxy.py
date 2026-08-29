@@ -39,7 +39,7 @@ import httpx
 from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 
-from mm_gateway.config import ProxyConfig
+from mm_gateway.config import ProxyConfig, _is_socks_proxy
 from mm_gateway.core.exceptions import (
     GatewayError,
     ProviderRequestError,
@@ -48,8 +48,19 @@ from mm_gateway.core.exceptions import (
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.observability.selection import STORE as SELECTION_STORE
+from mm_gateway.providers._http import proxy_kwargs
 
 log = get_logger("proxy")
+
+
+def _proxy_transport_kwargs(proxy_url: str | None) -> dict:
+    """httpx kwargs routing the forwarder's traffic through ``proxy_url``.
+
+    Thin pass-through to :func:`proxy_kwargs` (SOCKS needs ``socksio``; an
+    explicit proxy wins over ambient env vars; ``None`` -> direct, env-honoring
+    client). Kept local so the proxy layer reads one well-named call site.
+    """
+    return proxy_kwargs(proxy_url)
 
 
 # Header names that carry the *upstream* account credential, hop-by-hop
@@ -151,6 +162,7 @@ class ProxyRunner:
                 # the stream the proxy must hand to the client via aiter_raw().
                 event_hooks=backend_event_hooks(log_response=False),
                 follow_redirects=False,
+                **_proxy_transport_kwargs(proxy.outbound_proxy),
             )
             self._clients[proxy.host] = client
         return client
@@ -359,6 +371,37 @@ def _ws_url(base_url: str, path: str) -> str:
     return f"{scheme}://{host}/{tail}" if tail else f"{scheme}://{host}"
 
 
+def _ws_connect_proxy(proxy_url: str | None):
+    """Translate ``proxy.outbound_proxy`` to a ``websockets.connect`` value.
+
+    ``websockets`` accepts an explicit ``proxy=<url>`` for HTTP CONNECT proxies
+    (built in) and SOCKS proxies (needs the optional ``python-socks`` extra),
+    and otherwise honours ambient ``ALL_PROXY`` / ``HTTPS_PROXY`` env vars when
+    ``proxy`` is left at its default ``True`` — the same env-honouring posture
+    the httpx forwarder keeps via ``trust_env``. So:
+
+    * an explicit ``http://``/``socks5://`` URL is passed straight through and
+      wins over any ambient env var;
+    * ``None`` (no global and no per-proxy override) returns the ``True``
+      sentinel so websockets falls back to ambient env vars — i.e. leaving
+      ``outbound_proxy`` unset behaves the same as before this knob existed;
+    * a SOCKS URL whose ``python-socks`` extra is missing raises a clear
+      ``ProviderRequestError`` rather than an opaque handshake-time
+      ``ImportError``.
+    """
+    if not proxy_url:
+        return True
+    if _is_socks_proxy(proxy_url):
+        try:
+            import python_socks  # noqa: F401  — registering the websockets SOCKS shim
+        except ImportError as exc:  # pragma: no cover - config-time guard
+            raise ProviderRequestError(
+                f"SOCKS outbound proxy {proxy_url!r} for the WebSocket bridge "
+                "requires the 'python-socks' package (install websockets[socks])",
+            ) from exc
+    return proxy_url
+
+
 async def bridge_websocket(
     proxy: ProxyConfig,
     path: str,
@@ -396,6 +439,11 @@ async def bridge_websocket(
 
     upstream = None
     chosen_account: str | None = None
+    try:
+        ws_proxy = _ws_connect_proxy(proxy.outbound_proxy)
+    except ProviderRequestError as exc:
+        await _ws_reject(client_ws, 4503, f"outbound proxy misconfigured: {exc.message}")
+        return
     for index, (account_id, account_headers, _score) in enumerate(accounts):
         upstream_url = _ws_url(proxy.base_url, path)
         if query:
@@ -409,6 +457,7 @@ async def bridge_websocket(
                 additional_headers=headers,
                 subprotocols=subprotocols or None,
                 open_timeout=proxy.timeout,
+                proxy=ws_proxy,
             )
         except Exception as exc:  # noqa: BLE001
             latency = time.monotonic() - start

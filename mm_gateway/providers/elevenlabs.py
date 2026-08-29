@@ -26,6 +26,7 @@ from mm_gateway.core.exceptions import (
 )
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
+from mm_gateway.providers._http import proxy_kwargs
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 
 log = get_logger("provider.elevenlabs")
@@ -59,7 +60,8 @@ class ElevenLabsProvider(MusicProvider):
             api_key=backend.api_key,
             base_url=backend.base_url or None,
             timeout=240.0,
-            httpx_client=httpx.AsyncClient(event_hooks=backend_event_hooks()),
+            httpx_client=httpx.AsyncClient(event_hooks=backend_event_hooks(),
+                                            **proxy_kwargs(backend.extra.get("outbound_proxy"))),
         )
 
     @staticmethod

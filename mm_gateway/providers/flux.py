@@ -11,6 +11,7 @@ import asyncio
 import time
 from typing import Any
 
+import httpx
 from runapi.core.http_client import HttpClient
 from runapi.core.options import ClientOptions
 from runapi.flux_2 import Flux2Client
@@ -24,6 +25,7 @@ from mm_gateway.core.exceptions import (
 from mm_gateway.observability.httplog import backend_sync_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._dimensions import aspect_ratio, image_resolution
+from mm_gateway.providers._http import proxy_kwargs
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.image import (
     ImageData,
@@ -80,9 +82,19 @@ class FluxProvider(SyncImageTaskMixin, ImageProvider):
         # Inject an HttpClient whose httpx.Clients carry backend logging
         # hooks. ``ClientOptions`` resolves its own base_url fallback from the
         # global config set above, so passing base_url only when the operator
-        # pinned one mirrors the SDK's own defaulting.
+        # pinned one mirrors the SDK's own defaulting. The runapi SDK builds its
+        # ``httpx.Client`` instances from a single ``transport=`` argument, so an
+        # outbound proxy is applied by handing both clients an
+        # ``httpx.HTTPTransport(proxy=...)`` (HTTP CONNECT and SOCKS, the latter
+        # via socksio) instead of a plain client kwarg.
         options = ClientOptions(api_key=backend.api_key, base_url=backend.base_url or None)
-        self._client = Flux2Client(api_key=backend.api_key, http_client=_LoggedHttpClient(options))
+        transport = None
+        if backend.extra.get("outbound_proxy"):
+            transport = httpx.HTTPTransport(**proxy_kwargs(backend.extra["outbound_proxy"]))
+        self._client = Flux2Client(
+            api_key=backend.api_key,
+            http_client=_LoggedHttpClient(options, transport=transport),
+        )
 
     async def _generate_image(self, request: UnifiedImageRequest) -> UnifiedImageResponse:
         is_remix = request.model.endswith("remix-image") or bool(request.input_images())

@@ -28,6 +28,7 @@ from mm_gateway.core.exceptions import (
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._genai_media import GenaiImageVideoMixin
+from mm_gateway.providers._http import proxy_kwargs
 from mm_gateway.providers._lyria import (
     extract_lyria_output,
     lyria_body,
@@ -73,8 +74,12 @@ class GoogleProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
         # clients collapse unless an operator pins them apart.
         image_base = backend.base_url or None
         video_base = backend.extra.get("video_base_url") or image_base
-        self._client = self._build_genai_client(backend.api_key, image_base)
-        self._client_video = self._build_genai_client(backend.api_key, video_base)
+        # Resolved effective outbound proxy (backend override, else the global
+        # the registry folded in); shared by the genai SDK client and the Lyria
+        # REST client.
+        self._proxy_url = backend.extra.get("outbound_proxy")
+        self._client = self._build_genai_client(backend.api_key, image_base, self._proxy_url)
+        self._client_video = self._build_genai_client(backend.api_key, video_base, self._proxy_url)
         # Lyria REST surface. Prefer a music-specific base_url if the operator
         # split Google's modalities; otherwise the same host the SDK uses.
         self._music_base = (backend.extra.get("music_base_url")
@@ -82,12 +87,13 @@ class GoogleProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
         self._api_key = backend.api_key
 
     @staticmethod
-    def _build_genai_client(api_key: str, base_url: str | None):
+    def _build_genai_client(api_key: str, base_url: str | None, proxy_url: str | None = None):
         kwargs: dict[str, Any] = {"api_key": api_key}
         http_kwargs: dict[str, Any] = {
             # Inject an httpx client whose event hooks log the backend request/
             # response (curl format + masked sensitive headers).
-            "httpxAsyncClient": httpx.AsyncClient(event_hooks=backend_event_hooks()),
+            "httpxAsyncClient": httpx.AsyncClient(event_hooks=backend_event_hooks(),
+                                                  **proxy_kwargs(proxy_url)),
         }
         kwargs["http_options"] = types.HttpOptions(base_url=base_url, **http_kwargs) if base_url \
             else types.HttpOptions(**http_kwargs)
@@ -144,7 +150,8 @@ class GoogleProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
                 "Content-Type": "application/json",
                 "x-goog-api-key": self._api_key,
             }
-            async with httpx.AsyncClient(timeout=240.0, event_hooks=backend_event_hooks()) as c:
+            async with httpx.AsyncClient(timeout=240.0, event_hooks=backend_event_hooks(),
+                                         **proxy_kwargs(self._proxy_url)) as c:
                 resp = await c.post(url, json=body, headers=headers)
         except httpx.HTTPError as exc:
             rec["status"] = "failed"; rec["error"] = str(exc)
