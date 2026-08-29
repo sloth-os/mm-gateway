@@ -13,6 +13,8 @@ expects, e.g. ``authorization: Bearer ...`` or ``x-goog-api-key: ...``).
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 import respx
@@ -606,3 +608,95 @@ async def test_websocket_bridge_pumps_both_directions_to_a_live_upstream():
     # client's bearer token did not leak upstream.
     assert upstream_headers.get("authorization") == "Bearer upstream-key-a"
     assert upstream_headers.get("x-mm-gateway-proxy-account") == "a"
+
+
+class _CloseRecordingClientWS:
+    """Fake client WS that records the close code/reason the bridge forwards.
+
+    The no-op ``close`` in the opaque fake above hides whether the bridge sends
+    a close frame on upstream teardown — this one captures it, so a test can
+    assert the bridge forwards the upstream's close to the client (the 1006
+    regression: without it, an upstream close surfaced as a bare 1006).
+    """
+
+    def __init__(self):
+        self.subprotocol = None
+        self.closed_calls: list[tuple[int, str]] = []
+        self._disconnect_sent = False
+
+    @property
+    def headers(self):
+        return {"authorization": "Bearer t0pSecret"}
+
+    @property
+    def url(self):
+        class _U:
+            query = ""
+        return _U()
+
+    async def accept(self, subprotocol=None):
+        self.subprotocol = subprotocol
+
+    async def receive(self):
+        # The client sends nothing; block until cancelled so the upstream side
+        # drives the close we care about (FIRST_COMPLETED cancels us).
+        await asyncio.Event().wait()
+        return {"type": "websocket.disconnect", "code": 1000}
+
+    async def send_text(self, data):
+        pass
+
+    async def send_bytes(self, data):
+        pass
+
+    async def close(self, code=1000, reason=""):
+        self.closed_calls.append((int(code), str(reason or "")))
+
+
+async def test_websocket_bridge_forwards_upstream_close_to_client():
+    # Regression: when the UPSTREAM closes first, bridge_websocket must send a
+    # close frame to the client carrying the upstream's close code/reason.
+    # Before the fix the bridge only closed the upstream and returned, so the
+    # client's TCP dropped with no close frame — surfacing as an opaque 1006
+    # that hid why the upstream closed (e.g. Google rejecting a Live setup).
+    pytest.importorskip("websockets")
+    import asyncio
+    from websockets.asyncio.server import serve
+
+    from mm_gateway.proxy import bridge_websocket
+
+    async def upstream_handler(ws):
+        # Reject by sending an error then closing with a distinctive code+reason.
+        await ws.send('{"error": "bad setup"}')
+        await ws.close(code=1011, reason="setup rejected")
+        return
+
+    fake = _CloseRecordingClientWS()
+    async with serve(upstream_handler, "127.0.0.1", 0) as server:
+        port = server.socks[0].getsockname()[1] if hasattr(server, "socks") \
+            else server.sockets[0].getsockname()[1]
+        proxy = ProxyConfig(
+            base_url=f"ws://127.0.0.1:{port}",
+            accounts=[{"id": "a", "headers": {"Authorization": "Bearer upstream-key-a"}}],
+        )
+        await bridge_websocket(proxy, "rt", fake.url.query, fake.headers, fake)
+
+    # The bridge forwarded one close to the client with the upstream's code+reason.
+    assert fake.closed_calls, "bridge did not send a close frame to the client on upstream close"
+    code, reason = fake.closed_calls[-1]
+    assert code == 1011
+    assert reason == "setup rejected"
+
+
+async def test_websocket_bridge_maps_reserved_close_codes_to_1011():
+    # A reserved/absent close code (1006 "abnormal closure" must never be sent
+    # as a close frame per RFC 6455 §7.4) is forwarded as 1011 so the client
+    # still gets a clean, valid close frame rather than the gateway itself
+    # dropping to a bare 1006. Reserved and absent codes collapse to 1011;
+    # ordinary application/standard codes pass through unchanged.
+    from mm_gateway.proxy import _forwardable_close_code
+    for reserved in (None, 1004, 1005, 1006, 1015):
+        assert _forwardable_close_code(reserved) == 1011
+    assert _forwardable_close_code(4000) == 4000
+    assert _forwardable_close_code(1000) == 1000
+    assert _forwardable_close_code(1011) == 1011

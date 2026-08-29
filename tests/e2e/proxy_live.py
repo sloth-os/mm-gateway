@@ -236,7 +236,12 @@ def _relay_port(server: asyncio.base_events.Server) -> int:
 
 
 async def _live_turn_via_proxy(relay_port: int) -> str:
-    """Drive one text-in/text-out Gemini Live turn through the gateway proxy.
+    """Drive one Gemini Live turn through the gateway proxy.
+
+    The model is a native-audio Live model, so the turn is text-in / audio-out:
+    the SDK sends the prompt as text and the model replies with spoken audio,
+    with output transcription enabled so the e2e can assert on a readable reply
+    (``server_content.output_transcription.text``) without decoding PCM.
 
     The SDK client is pointed at the TLS relay so its forced-``wss`` connect
     hits ``wss://127.0.0.1:<relay>/proxy/<PROXY_DOMAIN>``; the relay terminates
@@ -269,9 +274,22 @@ async def _live_turn_via_proxy(relay_port: int) -> str:
 
     prompt = os.environ.get("PROXY_LIVE_PROMPT", "Say 'guest pass' and nothing else.")
     text: list[str] = []
+    # ``gemini-3.1-flash-live-preview`` is a NATIVE-AUDIO Live model: Google's
+    # docs ("the native audio models only support AUDIO response modality")
+    # and the canonical example both pin response_modalities to AUDIO.
+    # Requesting TEXT here is *rejected at setup* — Google returns 101 then
+    # closes the WS before setupComplete, which the google-genai SDK surfaces
+    # as an opaque 1006. So we run an AUDIO session (Google speaks with a
+    # default voice) and enable ``output_audio_transcription`` to get a
+    # readable text transcript back (the SDK maps
+    # serverContent.output_transcription) the e2e can assert on.
+    config = types.LiveConnectConfig(
+        response_modalities=["AUDIO"],
+        output_audio_transcription=types.AudioTranscriptionConfig(),
+    )
     async with client.aio.live.connect(
         model=PROXY_MODEL,
-        config={"response_modalities": ["TEXT"]},
+        config=config,
     ) as session:
         await session.send_client_content(
             turns=types.Content(
@@ -281,19 +299,21 @@ async def _live_turn_via_proxy(relay_port: int) -> str:
             turn_complete=True,
         )
         async for message in session.receive():
-            # The Live turn is text; a single modelTurn carries the reply. Stop
-            # once we have it so we never hang waiting for more frames than the
-            # model emits. ``message.text`` is None/sentinel until parts exist.
-            if getattr(message, "text", None):
-                text.append(message.text)
-            # server_content with a turn_complete flag ends the turn; the SDK
-            # surfaces it via .server_content when present.
+            # An AUDIO session emits PCM bytes (message.data) plus the
+            # transcription. We assert on the transcript text — the reply the
+            # model spoke — so the e2e has a real, verifiable payload without
+            # decoding raw audio. ``server_content.output_transcription.text``
+            # carries it, accumulating across frames until the turn ends.
             sc = getattr(message, "server_content", None)
-            if sc is not None and getattr(sc, "turn_complete", False):
-                break
+            if sc is not None:
+                ot = getattr(sc, "output_transcription", None)
+                if ot is not None and getattr(ot, "text", None):
+                    text.append(ot.text)
+                if getattr(sc, "turn_complete", False):
+                    break
     reply = "".join(text).strip()
     if not reply:
-        raise RuntimeError("Live turn completed but the model returned no text")
+        raise RuntimeError("Live turn completed but the model returned no transcription")
     return reply
 
 

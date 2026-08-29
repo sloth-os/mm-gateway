@@ -449,14 +449,33 @@ async def bridge_websocket(
         subprotocol=_negotiated_subprotocol(upstream, subprotocols)
     )
     log.info("proxy_ws_bridge_open", proxy=proxy.host, account=chosen_account)
+    ended_by = "client"
     try:
-        await _pump_ws(client_ws, upstream)
+        ended_by = await _pump_ws(client_ws, upstream)
     finally:
         try:
             await upstream.close()
         except Exception:  # noqa: BLE001
             pass
         log.info("proxy_ws_bridge_closed", proxy=proxy.host, account=chosen_account)
+
+    # If the *upstream* closed first, forward its close frame to the client.
+    # The client->upstream pump was cancelled mid-receive, so the socket is
+    # still open on our side; closing it here sends a real close frame so the
+    # caller sees the upstream's actual close code/reason. Without this the
+    # gateway drops the TCP and the client observes a bare ``1006`` (no close
+    # frame), which hides why the upstream closed — e.g. Google rejecting a
+    # Live setup surfaces as an opaque "1006 Abnormal closure" rather than the
+    # real error.
+    if ended_by == "upstream":
+        code, reason = _upstream_close_info(upstream)
+        log.info("proxy_ws_upstream_closed", proxy=proxy.host, account=chosen_account,
+                 code=code, reason=reason)
+        try:
+            await client_ws.close(code=_forwardable_close_code(code),
+                                   reason=(reason or "")[:125])
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _forward_headers_drop_auth(client_headers, proxy: ProxyConfig, account_id: str,
@@ -515,9 +534,18 @@ async def _ws_reject(client_ws, status: int, reason: str) -> None:
         pass
 
 
-async def _pump_ws(client_ws, upstream) -> None:
-    """Pump messages both directions until either side closes."""
+async def _pump_ws(client_ws, upstream) -> str:
+    """Pump messages both directions until either side closes.
+
+    Returns ``"upstream"`` if the upstream finished first (its recv iterator
+    exhausted — it sent a close frame or dropped the connection) and
+    ``"client"`` if the client side went away first. The bridge uses this to
+    decide whether to forward an upstream close frame back to the client.
+    """
     import asyncio
+
+    upstream_done = asyncio.Event()
+    client_done = asyncio.Event()
 
     async def client_to_upstream():
         # Starlette's WebSocket exposes no ``iter_data``: ``iter_text`` and
@@ -536,6 +564,8 @@ async def _pump_ws(client_ws, upstream) -> None:
                     await upstream.send(msg["bytes"])
         except Exception:  # noqa: BLE001
             pass
+        finally:
+            client_done.set()
 
     async def upstream_to_client():
         try:
@@ -546,12 +576,49 @@ async def _pump_ws(client_ws, upstream) -> None:
                     await client_ws.send_bytes(msg)
         except Exception:  # noqa: BLE001
             pass
+        finally:
+            upstream_done.set()
 
     tasks = [asyncio.create_task(client_to_upstream()),
              asyncio.create_task(upstream_to_client())]
     done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     for t in pending:
         t.cancel()
+    # The first task to finish flags which side ended. ``FIRST_COMPLETED`` may
+    # race both to done if they closed together, so prefer the explicit flag.
+    if upstream_done.is_set() and not client_done.is_set():
+        return "upstream"
+    return "client"
+
+
+def _upstream_close_info(upstream) -> tuple[int | None, str | None]:
+    """Read the close code/reason the upstream sent, if any.
+
+    ``websockets`` records the peer's close frame on the connection. Absent
+    values mean the upstream dropped the connection without a close frame
+    (the classic 1006), so the bridge reports code 1006 itself.
+    """
+    code = getattr(upstream, "close_code", None)
+    reason = getattr(upstream, "close_reason", None)
+    if code is None:
+        return None, reason
+    return int(code), reason
+
+
+def _forwardable_close_code(code: int | None) -> int:
+    """Map an upstream close code onto a code safe to forward to the client.
+
+    WebSocket close codes 1004, 1005, 1006 and 1015 are reserved — sending
+    them in a close frame is a protocol error (RFC 6455 §7.4). 1006 in
+    particular is "Abnormal Closure", reserved for an abnormal drop that must
+    *never* be sent as a close code. Surface one of those (and any unknown
+    code) as 1011 (internal error) so the client still gets a clean close
+    frame rather than the gateway itself dropping to 1006.
+    """
+    if code is None or code in (1004, 1005, 1006, 1015):
+        return 1011
+    return code
+
 
 
 __all__ = [
