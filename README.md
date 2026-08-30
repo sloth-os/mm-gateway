@@ -33,6 +33,32 @@ with the complete current task representation. The `Location` and
 until `status` is `succeeded`, `failed`, `cancelled`, or `expired`; non-terminal
 responses include `Retry-After`.
 
+Task observation is non-blocking. After a create has been accepted, the gateway
+owns provider polling in a background monitor and caches the newest task
+snapshot. A `GET` of the task URL reads that snapshot; it never starts
+generation and never waits for a provider generation or status request to
+finish. This remains true for providers that only offer a synchronous
+generation call: the adapter call runs inside the monitor while clients see a
+prompt `pending` or `running` response.
+
+The monitor applies one provider-neutral lifecycle mapping:
+
+| Provider observation | Cached public state | Monitor action |
+|---|---|---|
+| `pending` or `running` | same non-terminal state | poll again after the configured interval |
+| `succeeded`, `failed`, `cancelled`, or `expired` | same terminal state | stop polling |
+| transient poll error | last non-terminal snapshot | log/measure the error and retry |
+| three consecutive poll errors | `failed` with a sanitized error | stop polling |
+
+Background task submission, state transitions, poll failures, completion, and
+shutdown cancellation are emitted as structured logs and Prometheus counters /
+duration observations (`gateway_async_tasks_submitted_total`,
+`gateway_async_task_poll_errors_total`, `gateway_async_tasks_finished_total`,
+and `gateway_async_task_duration_seconds`). Background monitors are cancelled
+during graceful gateway shutdown; the default task state remains process-local,
+so deployments that require restart persistence should replace it with a
+durable worker and task store.
+
 Create requests accept an optional `Idempotency-Key` header. Retrying the same
 body with the same key returns the original task and does not start another
 generation; reusing the key with a different body returns `409 Conflict`.
@@ -40,7 +66,7 @@ Task responses include an `ETag`. Send it back as `If-None-Match` while polling;
 an unchanged representation returns `304 Not Modified` with no response body.
 
 There are no `/async` variants, `wait` query parameters, or provider-specific
-request fields.
+request fields: the canonical endpoints themselves are asynchronous.
 
 Every create body uses this strict envelope:
 

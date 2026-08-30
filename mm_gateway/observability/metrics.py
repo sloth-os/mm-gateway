@@ -57,6 +57,39 @@ def record_request(provider: str, modality: str, status: str, duration_s: float)
     STORE.observe("gateway_request_duration_seconds", duration_s, provider=provider, modality=modality)
 
 
+def record_async_task_submitted(provider: str, modality: str) -> None:
+    """Count a provider task handed to the background polling supervisor."""
+    STORE.inc_counter(
+        "gateway_async_tasks_submitted_total", provider=provider, modality=modality,
+    )
+
+
+def record_async_task_poll_error(provider: str, modality: str) -> None:
+    """Count a provider poll that failed before yielding a task snapshot."""
+    STORE.inc_counter(
+        "gateway_async_task_poll_errors_total", provider=provider, modality=modality,
+    )
+
+
+def record_async_task_finished(
+    provider: str, modality: str, status: str, duration_s: float,
+) -> None:
+    """Record the terminal outcome and monitor lifetime of an async task."""
+    STORE.inc_counter(
+        "gateway_async_tasks_finished_total",
+        provider=provider,
+        modality=modality,
+        status=status,
+    )
+    STORE.observe(
+        "gateway_async_task_duration_seconds",
+        duration_s,
+        provider=provider,
+        modality=modality,
+        status=status,
+    )
+
+
 def render_prometheus() -> str:
     return STORE.render_prometheus()
 

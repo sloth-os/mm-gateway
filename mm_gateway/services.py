@@ -23,6 +23,7 @@ from mm_gateway.schemas.image import UnifiedImageRequest, UnifiedImageTask
 from mm_gateway.schemas.music import UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 from mm_gateway.services_selection import retry_across_backends
+from mm_gateway.tasks.supervisor import AsyncTaskSupervisor
 
 log = get_logger("service")
 
@@ -51,6 +52,9 @@ class ImageService:
         self.max_sync_wait = max_sync_wait
         self.poll_interval = poll_interval
         self.sync_default = sync_default
+        self._supervisor = AsyncTaskSupervisor[UnifiedImageTask](
+            "image", poll_interval=poll_interval,
+        )
 
     async def create(
         self,
@@ -103,6 +107,7 @@ class ImageService:
                 # polling uses the correct credential.
                 if want_sync:
                     task = await self._await_or_timeout(prov, task)
+                self._start_monitor(prov, backend, task)
                 return task
 
             return await retry_across_backends(
@@ -130,10 +135,17 @@ class ImageService:
         task.provider = backend
         if want_sync:
             task = await self._await_or_timeout(provider_obj, task)
+        self._start_monitor(provider_obj, backend, task)
         return task
 
     async def get(self, task_id: str, backend_name: str | None = None) -> UnifiedImageTask:
+        cached = self._supervisor.snapshot(task_id, provider=backend_name)
+        if cached is not None:
+            return cached
         provider_obj = self._find_provider_for(task_id, backend_name)
+        return await self._poll(provider_obj, task_id)
+
+    async def _poll(self, provider_obj: ImageProvider, task_id: str) -> UnifiedImageTask:
         with timed(provider_obj.name, "image"):
             try:
                 task = await provider_obj.get_image_task(task_id)
@@ -143,6 +155,18 @@ class ImageService:
                 raise GatewayError(f"image poll failed: {exc}", provider=provider_obj.name,
                                    code="provider_error", status_code=502) from exc
         return task
+
+    def _start_monitor(
+        self, provider_obj: ImageProvider, backend: str, task: UnifiedImageTask,
+    ) -> None:
+        self._supervisor.start(
+            provider=backend,
+            task=task,
+            poll=lambda: self._poll(provider_obj, task.task_id),
+        )
+
+    async def aclose(self) -> None:
+        await self._supervisor.aclose()
 
     async def _await_or_timeout(self, provider: ImageProvider, task: UnifiedImageTask) -> UnifiedImageTask:
         deadline = time.monotonic() + self.max_sync_wait
@@ -173,6 +197,9 @@ class VideoService:
         self.max_sync_wait = max_sync_wait
         self.poll_interval = poll_interval
         self.sync_default = sync_default
+        self._supervisor = AsyncTaskSupervisor[UnifiedVideoTask](
+            "video", poll_interval=poll_interval,
+        )
 
     async def create(
         self,
@@ -220,6 +247,7 @@ class VideoService:
                 # the task, so polling uses the correct credential.
                 if want_sync:
                     task = await self._await_or_timeout(prov, task)
+                self._start_monitor(prov, backend, task)
                 return task
 
             return await retry_across_backends(
@@ -247,10 +275,17 @@ class VideoService:
         task.provider = backend
         if want_sync:
             task = await self._await_or_timeout(provider_obj, task)
+        self._start_monitor(provider_obj, backend, task)
         return task
 
     async def get(self, task_id: str, backend_name: str | None = None) -> UnifiedVideoTask:
+        cached = self._supervisor.snapshot(task_id, provider=backend_name)
+        if cached is not None:
+            return cached
         provider_obj = self._find_provider_for(task_id, backend_name)
+        return await self._poll(provider_obj, task_id)
+
+    async def _poll(self, provider_obj: VideoProvider, task_id: str) -> UnifiedVideoTask:
         with timed(provider_obj.name, "video"):
             try:
                 task = await provider_obj.get_video_task(task_id)
@@ -260,6 +295,18 @@ class VideoService:
                 raise GatewayError(f"video poll failed: {exc}", provider=provider_obj.name,
                                    code="provider_error", status_code=502) from exc
         return task
+
+    def _start_monitor(
+        self, provider_obj: VideoProvider, backend: str, task: UnifiedVideoTask,
+    ) -> None:
+        self._supervisor.start(
+            provider=backend,
+            task=task,
+            poll=lambda: self._poll(provider_obj, task.task_id),
+        )
+
+    async def aclose(self) -> None:
+        await self._supervisor.aclose()
 
     async def _await_or_timeout(self, provider: VideoProvider, task: UnifiedVideoTask) -> UnifiedVideoTask:
         deadline = time.monotonic() + self.max_sync_wait
@@ -297,6 +344,9 @@ class MusicService:
         self.max_sync_wait = max_sync_wait
         self.poll_interval = poll_interval
         self.sync_default = sync_default
+        self._supervisor = AsyncTaskSupervisor[UnifiedMusicTask](
+            "music", poll_interval=poll_interval,
+        )
 
     async def create(
         self,
@@ -344,6 +394,7 @@ class MusicService:
                 # polling uses the correct credential.
                 if want_sync:
                     task = await self._await_or_timeout(prov, task)
+                self._start_monitor(prov, backend, task)
                 return task
 
             return await retry_across_backends(
@@ -371,10 +422,17 @@ class MusicService:
         task.provider = backend
         if want_sync:
             task = await self._await_or_timeout(provider_obj, task)
+        self._start_monitor(provider_obj, backend, task)
         return task
 
     async def get(self, task_id: str, backend_name: str | None = None) -> UnifiedMusicTask:
+        cached = self._supervisor.snapshot(task_id, provider=backend_name)
+        if cached is not None:
+            return cached
         provider_obj = self._find_provider_for(task_id, backend_name)
+        return await self._poll(provider_obj, task_id)
+
+    async def _poll(self, provider_obj: MusicProvider, task_id: str) -> UnifiedMusicTask:
         with timed(provider_obj.name, "music"):
             try:
                 task = await provider_obj.get_music_task(task_id)
@@ -384,6 +442,18 @@ class MusicService:
                 raise GatewayError(f"music poll failed: {exc}", provider=provider_obj.name,
                                    code="provider_error", status_code=502) from exc
         return task
+
+    def _start_monitor(
+        self, provider_obj: MusicProvider, backend: str, task: UnifiedMusicTask,
+    ) -> None:
+        self._supervisor.start(
+            provider=backend,
+            task=task,
+            poll=lambda: self._poll(provider_obj, task.task_id),
+        )
+
+    async def aclose(self) -> None:
+        await self._supervisor.aclose()
 
     async def _await_or_timeout(self, provider: MusicProvider, task: UnifiedMusicTask) -> UnifiedMusicTask:
         deadline = time.monotonic() + self.max_sync_wait

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
+
 from mm_gateway.core.exceptions import ProviderRequestError
+from mm_gateway.schemas.music import UnifiedMusicTask
 
 
 def _poll_until_done(client, url: str) -> dict:
@@ -12,6 +17,9 @@ def _poll_until_done(client, url: str) -> dict:
         body = response.json()
         if body["status"] in {"succeeded", "failed", "cancelled", "expired"}:
             return body
+        # Provider polling is owned by a background monitor; give it a turn
+        # rather than making the read request itself advance provider state.
+        time.sleep(0.01)
     raise AssertionError(f"task at {url} did not reach a terminal state")
 
 
@@ -266,7 +274,12 @@ def test_poll_supports_etag_revalidation(client):
         "/v1/images", json={"model": "fake-image-1", "input": _text("a cat")}
     )
     first = client.get(created.headers["location"])
-    completed = client.get(created.headers["location"])
+    completed = first
+    for _ in range(10):
+        if completed.json()["status"] == "succeeded":
+            break
+        time.sleep(0.01)
+        completed = client.get(created.headers["location"])
     assert first.json()["created_at"] == completed.json()["created_at"]
     assert completed.json()["status"] == "succeeded"
 
@@ -434,6 +447,33 @@ def test_music_poll_returns_audio_lyrics_and_usage(client):
         "output_count": 1,
         "duration_seconds": 8.0,
     }
+
+
+def test_music_status_read_is_prompt_while_provider_generation_is_running(
+    client, fake_provider, monkeypatch,
+):
+    entered = threading.Event()
+
+    async def slow_generation(task_id: str) -> UnifiedMusicTask:
+        entered.set()
+        await asyncio.sleep(60)
+        raise AssertionError("the app lifespan should cancel this monitor")
+
+    monkeypatch.setattr(fake_provider, "get_music_task", slow_generation)
+    created = client.post(
+        "/v1/music",
+        json={"model": "fake-music-1", "input": _text("a long symphony")},
+    )
+    assert created.status_code == 202
+    assert entered.wait(timeout=1)
+
+    started = time.monotonic()
+    status = client.get(created.headers["location"])
+    elapsed = time.monotonic() - started
+
+    assert status.status_code == 200
+    assert status.json()["status"] in {"pending", "running"}
+    assert elapsed < 0.5
 
 
 # -- Validation ------------------------------------------------------------- #

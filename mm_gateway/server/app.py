@@ -91,6 +91,9 @@ def create_app(
                  providers=list(registry.providers.keys()),
                  proxies=list(registry.proxy_names()))
         yield
+        await image_service.aclose()
+        await video_service.aclose()
+        await music_service.aclose()
         await proxy_runner.aclose()
         log.info("gateway_stopping")
 

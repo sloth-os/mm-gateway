@@ -178,5 +178,9 @@ def app(settings, fake_provider):
 
 
 @pytest.fixture
-def client(app) -> TestClient:
-    return TestClient(app)
+def client(app):
+    # Keep one ASGI event loop alive for the whole test. Background provider
+    # monitors are intentionally longer-lived than the POST request that starts
+    # them and are cancelled by the app lifespan on fixture teardown.
+    with TestClient(app) as test_client:
+        yield test_client
