@@ -508,7 +508,19 @@ mm-gateway
 The unit suite uses in-memory providers and makes no network calls. The live
 smoke client in `tests/e2e/smoke.py` exercises every fully configured modality.
 See [`examples/client.py`](examples/client.py) for a runnable Python client and
-[`docs/openapi.json`](docs/openapi.json) for the generated API specification.
+[`docs/openapi.json`](docs/openapi.json) for the generated API specification. The
+same spec drives three generated client SDKs, republished automatically whenever
+routes or schemas change:
+
+| Language | Repo | Install |
+|---|---|---|
+| Go | [`sloth-os/mm-gateway-go`](https://github.com/sloth-os/mm-gateway-go) | `go get github.com/sloth-os/mm-gateway-go` |
+| Python | [`sloth-os/mm-gateway-py`](https://github.com/sloth-os/mm-gateway-py) | `pip install git+https://github.com/sloth-os/mm-gateway-py.git` |
+| Node.js | [`sloth-os/mm-gateway-js`](https://github.com/sloth-os/mm-gateway-js) | `npm install @sloth-os/mm-gateway-js` |
+
+Each SDK is regenerated from the published OpenAPI spec by the
+`openapi.yml` workflow (via `openapi-generator-cli`), verified to compile, and
+pushed to its repo on every merge to `main`.
 
 The implementation path is:
 

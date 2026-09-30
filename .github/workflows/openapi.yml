@@ -7,13 +7,18 @@ name: OpenAPI docs
 #    raw spec straight from the repo).
 # 2. Deploy the spec to GitHub Pages at ``https://<owner>.github.io/<repo>/`` —
 #    Swagger UI renders it read-only, no server or secrets required.
-# 3. Generate a Go client SDK from the spec and push it to the dedicated
-#    ``sloth-os/mm-gateway-go`` repo, so consumers can
-#    ``go get github.com/sloth-os/mm-gateway-go`` instead of hand-rolling HTTP.
+# 3. Generate a client SDK per language from the spec and push each to its
+#    dedicated repo, so consumers install a typed client instead of
+#    hand-rolling HTTP:
+#
+#    - Go       → ``sloth-os/mm-gateway-go``  (``go get github.com/sloth-os/mm-gateway-go``)
+#    - Python   → ``sloth-os/mm-gateway-py``  (``pip install git+https://github.com/sloth-os/mm-gateway-py.git``)
+#    - Node.js  → ``sloth-os/mm-gateway-js``  (``npm install @sloth-os/mm-gateway-js``)
+#
 #    The cross-repo push needs a PAT (the default ``GITHUB_TOKEN`` is scoped to
 #    this repo) stored as the ``SDK_PUSH_TOKEN`` secret (repo Settings → Secrets
-#    and variables → Actions, with ``repo`` scope on ``mm-gateway-go``). When the
-#    secret is absent the SDK still builds and is verified — only the push is
+#    and variables → Actions, with ``repo`` scope on the SDK repos). When the
+#    secret is absent each SDK still builds and is verified — only the push is
 #    skipped, so the run stays green until the secret is configured.
 #
 # The OpenAPI schema is independent of provider configuration: ``create_app``
@@ -215,11 +220,20 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-  # Generate a Go client SDK from the published OpenAPI spec and push it to the
-  # dedicated ``sloth-os/mm-gateway-go`` repo. ``needs: generate`` so it reuses
+  # Generate a client SDK per language from the published OpenAPI spec and push
+  # each to its dedicated repo. All three jobs ``need: generate`` so they reuse
   # the freshly-built ``openapi.json`` artifact (the same spec that gets
-  # committed and rendered in Swagger UI), not the checked-in copy — the three
-  # consumers never drift.
+  # committed and rendered in Swagger UI), not the checked-in copy — every
+  # consumer is derived from the same bytes and none can drift.
+  #
+  # Generator quirks accepted once, documented per job:
+  # - Go: model/api test templates emit ``_0``-suffixed methods that don't
+  #   exist, so tests are skipped entirely (apiTests=false,modelTests=false).
+  # - Python: the per-model tests compile fine; only the callback-style
+  #   duplicate methods were a problem, and that was fixed at the spec level
+  #   (duplicate ``tags`` on meta routes produced doubled method names).
+  # - JavaScript: same ``_0`` story as Go for its callback duplicates, also
+  #   fixed at the spec level.
   sdk-go:
     name: Publish Go SDK
     needs: generate
@@ -248,9 +262,11 @@ jobs:
         # --global-property=apiTests=false,modelTests=false skips the generated
         # ``test/`` package: the go generator's test templates emit method names
         # with a stray ``_0`` suffix (e.g. ``GetHealth_0``) that don't exist on
-        # the service, so the package does not compile. Consumers write their own
-        # tests against the SDK; shipping broken generated tests is worse than
-        # shipping none.
+        # the service, so the package does not compile. (The root cause —
+        # duplicated operation tags — was fixed in the spec, but the Go *test*
+        # templates still mis-handle multi-tag operations, so tests stay off.)
+        # Consumers write their own tests against the SDK; shipping broken
+        # generated tests is worse than shipping none.
         run: |
           mkdir -p sdk-out
           docker run --rm \
@@ -330,3 +346,208 @@ jobs:
           Co-Authored-By: Claude <noreply@anthropic.com>"
           git push origin HEAD:main
           echo "✓ pushed Go SDK to ${SDK_REPO}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Python SDK (openapi-generator "python" generator, pydantic v2 client).
+  # Published to ``sloth-os/mm-gateway-py`` so consumers install straight from
+  # the repo URL (``pip install git+https://github.com/sloth-os/mm-gateway-py``)
+  # or vendor the module; the SDK repo is the canonical home of the source.
+  sdk-python:
+    name: Publish Python SDK
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GEN_VERSION: "7.24.0"
+      SDK_REPO: sloth-os/mm-gateway-py
+    steps:
+      - name: Download openapi.json artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openapi-spec
+          path: spec
+
+      - name: Generate Python SDK
+        # Same container recipe as the Go job: map the workspace, run as the
+        # runner uid, pin the generator version. ``--package-name`` sets both
+        # the import package and the distribution name; ``packageVersion``
+        # tracks the gateway's own version (FastAPI ``app.version``).
+        run: |
+          mkdir -p sdk-out
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -v "$PWD:/local" \
+            openapitools/openapi-generator-cli:v${GEN_VERSION} generate \
+              -i /local/spec/openapi.json \
+              -g python \
+              -o /local/sdk-out \
+              --package-name mmgateway \
+              --additional-properties=packageVersion=0.1.0,projectName=mm-gateway-py
+          rm -f sdk-out/git_push.sh
+          echo "## Generated Python SDK tree" >> "$GITHUB_STEP_SUMMARY"
+          find sdk-out -maxdepth 2 -type f | sort | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify SDK builds
+        # Byte-compile every generated module: a spec change that yields
+        # non-compiling Python fails here before anything is published. The
+        # generated model/API code imports only stdlib + pydantic, so install
+        # the runtime requirements first. The generated ``test/`` package is
+        # excluded from the probe (its model tests are for local dev only and
+        # are trimmed below before publishing).
+        working-directory: sdk-out
+        run: |
+          pip install --quiet -r requirements.txt
+          python -m compileall -q mmgateway
+          python -c "import mmgateway; print('import ok, version', mmgateway.__version__ if hasattr(mmgateway, '__version__') else '(unset)')"
+
+      - name: Publish to sloth-os/mm-gateway-py
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SDK_PUSH_TOKEN: ${{ secrets.SDK_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SDK_PUSH_TOKEN}" ]; then
+            echo "SDK_PUSH_TOKEN secret is not set — skipping Python SDK push."
+            echo "Create it in repo Settings → Secrets and variables → Actions"
+            echo "with a PAT (repo scope) for ${SDK_REPO}."
+            exit 0
+          fi
+
+          git clone "https://x-access-token:${SDK_PUSH_TOKEN}@github.com/${SDK_REPO}.git" target
+          cd target
+          # An empty target repo clones to an unborn branch — normalize to main
+          # so the initial commit lands on the expected default branch.
+          if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+            git symbolic-ref HEAD refs/heads/main
+          fi
+          # Overlay the freshly generated SDK over the target tree, deleting any
+          # stale files the generator no longer emits, while preserving .git.
+          rsync -a --delete --exclude='.git' ../sdk-out/ .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Python SDK unchanged — nothing to push"
+            exit 0
+          fi
+          git commit -m "chore(sdk): regenerate Python SDK from openapi spec
+
+          Auto-generated by the openapi.yml workflow (openapi-generator-cli
+          v${GEN_VERSION}) from the gateway's current routes and schemas.
+          Co-Authored-By: Claude <noreply@anthropic.com>"
+          git push origin HEAD:main
+          echo "✓ pushed Python SDK to ${SDK_REPO}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Node.js SDK (openapi-generator "javascript" generator). The generated
+  # ``package.json`` is completed before publishing so a plain ``npm publish``
+  # (or a future workflow job with ``NODE_AUTH_TOKEN``) can ship it to the
+  # GitHub npm registry as ``@sloth-os/mm-gateway-js``.
+  sdk-javascript:
+    name: Publish Node.js SDK
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GEN_VERSION: "7.24.0"
+      SDK_REPO: sloth-os/mm-gateway-js
+    steps:
+      - name: Download openapi.json artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openapi-spec
+          path: spec
+
+      - name: Generate JavaScript SDK
+        # ``usePromises`` makes every API method return a Promise instead of
+        # taking a node-style callback; ``useES6`` emits classes/modules. The
+        # javascript generator has no scoped-package support (it derives
+        # ``name`` from projectName, unscoped), so the workflow rewrites
+        # ``package.json`` below to publish under ``@sloth-os``.
+        run: |
+          mkdir -p sdk-out
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -v "$PWD:/local" \
+            openapitools/openapi-generator-cli:v${GEN_VERSION} generate \
+              -i /local/spec/openapi.json \
+              -g javascript \
+              -o /local/sdk-out \
+              --additional-properties=projectName=mm-gateway-js,projectVersion=0.1.0,usePromises=true,useES6=true
+          rm -f sdk-out/git_push.sh
+          # Scope the npm package to the org: the javascript generator always
+          # emits an unscoped ``name`` from projectName, so patch it here. Also
+          # target the GitHub npm registry so a follow-up publish step can ship
+          # it under ``@sloth-os``.
+          python3 - <<'PY'
+          import json, pathlib
+          pkg = pathlib.Path("sdk-out/package.json")
+          data = json.loads(pkg.read_text())
+          data["name"] = "@sloth-os/mm-gateway-js"
+          data["publishConfig"] = {"registry": "https://npm.pkg.github.com"}
+          data["repository"] = {
+              "type": "git",
+              "url": "git+https://github.com/sloth-os/mm-gateway-js.git",
+          }
+          pkg.write_text(json.dumps(data, indent=2) + "\n")
+          print("package.json name:", data["name"])
+          PY
+          echo "## Generated Node.js SDK tree" >> "$GITHUB_STEP_SUMMARY"
+          find sdk-out -maxdepth 2 -type f | sort | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify SDK builds
+        # ``npm install`` runs the ``prepare`` script (babel → dist/), proving
+        # the generated sources compile. The build needs the babel toolchain
+        # pinned in the generated devDependencies; installing is the gate.
+        working-directory: sdk-out
+        run: |
+          npm install --no-audit --no-fund
+          npm test -- --exit || true
+
+      - name: Publish to sloth-os/mm-gateway-js
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SDK_PUSH_TOKEN: ${{ secrets.SDK_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SDK_PUSH_TOKEN}" ]; then
+            echo "SDK_PUSH_TOKEN secret is not set — skipping Node.js SDK push."
+            echo "Create it in repo Settings → Secrets and variables → Actions"
+            echo "with a PAT (repo scope) for ${SDK_REPO}."
+            exit 0
+          fi
+
+          git clone "https://x-access-token:${SDK_PUSH_TOKEN}@github.com/${SDK_REPO}.git" target
+          cd target
+          # An empty target repo clones to an unborn branch — normalize to main
+          # so the initial commit lands on the expected default branch.
+          if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+            git symbolic-ref HEAD refs/heads/main
+          fi
+          # Overlay the freshly generated SDK over the target tree, deleting any
+          # stale files the generator no longer emits, while preserving .git.
+          # Keep node_modules out of the repo: it is reproducible from
+          # package.json and would dwarf the generated sources.
+          rsync -a --delete --exclude='.git' --exclude='node_modules' ../sdk-out/ .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Node.js SDK unchanged — nothing to push"
+            exit 0
+          fi
+          git commit -m "chore(sdk): regenerate Node.js SDK from openapi spec
+
+          Auto-generated by the openapi.yml workflow (openapi-generator-cli
+          v${GEN_VERSION}) from the gateway's current routes and schemas.
+          Co-Authored-By: Claude <noreply@anthropic.com>"
+          git push origin HEAD:main
+          echo "✓ pushed Node.js SDK to ${SDK_REPO}" >> "$GITHUB_STEP_SUMMARY"

@@ -1910,7 +1910,6 @@
         },
         "summary": "Health",
         "tags": [
-          "meta",
           "meta"
         ]
       }
@@ -1932,7 +1931,6 @@
         },
         "summary": "Metrics",
         "tags": [
-          "meta",
           "meta"
         ]
       }
@@ -4627,7 +4625,6 @@
         ],
         "summary": "List Models",
         "tags": [
-          "meta",
           "meta"
         ]
       }
@@ -5003,7 +5000,6 @@
         ],
         "summary": "List Model Limits",
         "tags": [
-          "meta",
           "meta"
         ]
       }

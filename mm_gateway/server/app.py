@@ -215,7 +215,7 @@ def create_app(
         proxy_routes,
         video_routes,
     )
-    app.include_router(meta_routes.router, tags=["meta"])
+    app.include_router(meta_routes.router)
     app.include_router(image_routes.router)
     app.include_router(video_routes.router)
     app.include_router(music_routes.router)
@@ -469,6 +469,19 @@ def _install_openapi_customization(app: FastAPI) -> None:
                     seen_op_ids.add(op["operationId"])
                 else:
                     seen_op_ids.add(op_id)
+        # A route inherits its tags from both the APIRouter and, at include
+        # time, any ``include_router(tags=...)`` — so an operation that already
+        # carries per-decorator tags ends up with the same tag twice (e.g.
+        # ``["meta", "meta"]``). The duplicate is valid OpenAPI but leaks into
+        # every generated SDK as a doubled tag list, so de-duplicate while
+        # preserving order.
+        for path, item in spec.get("paths", {}).items():
+            for method, op in item.items():
+                if method not in ("get", "post", "put", "patch", "delete", "head", "options"):
+                    continue
+                op_tags = op.get("tags")
+                if isinstance(op_tags, list) and len(op_tags) != len(set(op_tags)):
+                    op["tags"] = list(dict.fromkeys(op_tags))
         for path, item in spec.get("paths", {}).items():
             for method, op in item.items():
                 # Same method set as the operationId-dedup pass above: the proxy

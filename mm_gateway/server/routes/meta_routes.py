@@ -17,12 +17,11 @@ from mm_gateway.server.routes._resources import (
     render_conditional_json,
 )
 
-router = APIRouter()
+router = APIRouter(tags=["meta"])
 
 
 @router.get(
     "/health",
-    tags=["meta"],
     operation_id="getHealth",
     response_model=HealthResponse,
     responses={200: {"description": "Gateway is healthy"}},
@@ -33,7 +32,6 @@ async def health() -> dict:
 
 @router.get(
     "/v1/models",
-    tags=["meta"],
     operation_id="listModels",
     response_model=ModelListResponse,
     responses={
@@ -89,7 +87,6 @@ async def list_models(
 
 @router.get(
     "/v1/models/limits",
-    tags=["meta"],
     operation_id="listModelLimits",
     response_model=ModelLimitsListResponse,
     responses={
@@ -153,7 +150,6 @@ async def list_model_limits(
 
 @router.get(
     "/metrics",
-    tags=["meta"],
     operation_id="getMetrics",
     response_class=PlainTextResponse,
     responses={200: {"description": "Prometheus exposition"}},
