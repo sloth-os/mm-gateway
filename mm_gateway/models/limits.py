@@ -92,6 +92,13 @@ class ModelLimits:
     # music). ``False`` = documented silent; the router never sends an
     # ``include_audio`` request there (docs/design/auto-mode.md#capabilities-native-audio).
     supports_audio_output: bool | None = None
+    # Multi-shot video models render several shots, separated by hard cuts, in one request (the prompt lists the
+    # shots); ``max_shots`` is how many. Enhancement models take a ``reference_video`` and return it upscaled to the
+    # requested ``dimensions`` and/or interpolated to the requested ``fps``
+    # (docs/design/auto-mode.md#capabilities-multi-shot-and-enhancement).
+    max_shots: int | None = None
+    supports_upscale: bool | None = None
+    supports_frame_interpolation: bool | None = None
     # Model lifecycle (ISO dates, UTC). From ``retired_on`` the model is never
     # auto-routed and a pinned request fails with ``model_retired`` unless it
     # allows a fallback; ``deprecated_on`` ranks it after active models.
@@ -123,7 +130,7 @@ class ModelLimits:
         for key in (
             "max_prompt_chars", "max_prompt_tokens", "max_input_images",
             "max_output_count", "max_duration_seconds", "min_duration_seconds",
-            "max_fps", "max_output_longest_side",
+            "max_fps", "max_output_longest_side", "max_shots",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -138,7 +145,8 @@ class ModelLimits:
             "supports_image_to_image", "supports_first_frame", "supports_last_frame",
             "supports_reference_video", "supports_reference_audio",
             "supports_continuation_audio", "supports_lyrics", "supports_reference_image",
-            "supports_audio_output", "deprecated_on", "retired_on", "replacement",
+            "supports_audio_output", "supports_upscale", "supports_frame_interpolation",
+            "deprecated_on", "retired_on", "replacement",
         ):
             value = getattr(self, key)
             if value is not None:

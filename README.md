@@ -111,7 +111,9 @@ client can consult when crafting a prompt for a specific model (accepted input
 modalities, max prompt length, max output count, supported sizes/durations, and
 per-role support flags such as image-to-image, first-frame, or lyrics). Unknown
 models fall back to a permissive entry with no documented constraint. Limits
-also carry `supports_audio_output` (video models that render sound) and the
+also carry `supports_audio_output` (video models that render sound), `max_shots`
+(multi-shot models), `supports_upscale` / `supports_frame_interpolation` (video
+enhancement models), and the
 model lifecycle (`lifecycle`, `deprecated_on`, `retired_on`, `replacement`):
 retired models are omitted from `GET /v1/models` and never auto-routed, but
 stay listed here so clients can migrate pinned ids.

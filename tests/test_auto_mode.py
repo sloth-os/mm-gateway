@@ -175,6 +175,23 @@ def test_catalog_overrides_retire_price_and_flag_models():
     assert catalog.public_limits("my-ltx", "video")["price"] == {"currency": "USD", "per_second": 0.01}
 
 
+def test_catalog_declares_multi_shot_and_enhancement_models():
+    catalog = Catalog(parse_overrides({
+        "my-multishot": {"modality": "video", "max_shots": 4, "max_duration_seconds": 20},
+        "my-upscaler": {"modality": "video", "supports_upscale": True, "supports_frame_interpolation": True,
+                        "max_fps": 60},
+    }), today=lambda: TODAY)
+    assert catalog.limits_for("my-multishot", "video").max_shots == 4
+    public = catalog.public_limits("my-multishot", "video")
+    assert public["max_shots"] == 4 and public["max_duration_seconds"] == 20
+    upscaler = catalog.public_limits("my-upscaler", "video")
+    assert upscaler["supports_upscale"] is True
+    assert upscaler["supports_frame_interpolation"] is True
+    assert upscaler["max_fps"] == 60
+    # undocumented fields stay out of the public object
+    assert "max_shots" not in catalog.public_limits("veo-3.1-generate-preview", "video")
+
+
 @pytest.mark.parametrize("raw", [
     {"m": {"retired_on": "next tuesday"}},
     {"m": {"unknown_field": 1}},

@@ -83,6 +83,24 @@ Combined with the existing role checks, this is how a client asks for **lip-sync
 line in the prompt, `include_audio: true`, and the speaker's voice as a `reference_audio` part; only models
 that accept reference audio and render audio remain candidates.
 
+## Capabilities: multi-shot and enhancement
+
+Some video models render a whole sequence in one request: several shots separated by hard cuts, described in the
+prompt. The catalogue records how many as `max_shots`; clients (Rideo groups a scene's shots by it) keep the
+request within `max_shots` and `max_duration_seconds`.
+
+Enhancement models take a `reference_video` and return it upscaled to the requested `dimensions`
+(`supports_upscale`) or interpolated to the requested `fps` (`supports_frame_interpolation`, up to `max_fps`).
+Clients find them in `GET /v1/models/limits` and pin them. None of the built-in providers documents these yet;
+operators declare their own (self-hosted or proxied) models in `catalog.models`:
+
+```yaml
+catalog:
+  models:
+    my-multishot-model: {modality: video, max_shots: 4, max_duration_seconds: 20}
+    my-upscaler: {modality: video, supports_upscale: true, supports_frame_interpolation: true, max_fps: 60}
+```
+
 ## Model lifecycle
 
 The catalogue records when a model stops being offered:

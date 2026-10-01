@@ -24,7 +24,8 @@ _OVERRIDABLE = {
     "deprecated_on", "retired_on", "replacement", "supports_audio_output",
     "supports_reference_audio", "supports_reference_image", "supports_reference_video",
     "supports_first_frame", "supports_last_frame", "min_duration_seconds",
-    "max_duration_seconds", "max_input_images", "notes",
+    "max_duration_seconds", "max_input_images", "notes", "max_shots", "max_fps",
+    "supports_upscale", "supports_frame_interpolation",
 }
 _DATES = {"deprecated_on", "retired_on"}
 
