@@ -20,6 +20,10 @@ each backend adapter translates those concepts to its native SDK or REST shape.
 | `GET` | `/v1/music/{music_id}` | Retrieve a music task |
 | `GET` | `/v1/models?modality=image\|video\|music` | List usable models |
 | `GET` | `/v1/models/limits?modality=image\|video\|music` | List usable models with documented input/output limits |
+| `POST` | `/v1/images/estimate` | Estimate the cost and routing of an image request without creating a task |
+| `POST` | `/v1/videos/estimate` | Estimate the cost and routing of a video request without creating a task |
+| `POST` | `/v1/music/estimate` | Estimate the cost and routing of a music request without creating a task |
+| `GET` | `/v1/usage` | Spend, reservations and budgets of the authenticated key |
 | `GET` | `/health` | Liveness check |
 | `GET` | `/metrics` | Prometheus metrics |
 
@@ -89,8 +93,14 @@ Every create body uses this strict envelope:
 - `input` is always a non-empty ordered list of typed parts. There is no string
   shorthand.
 - `parameters` contains only provider-neutral generation controls.
-- `routing.profile` optionally selects a server-defined policy such as
-  `quality`, `fast`, or `eu`; provider and backend names are never accepted.
+- `routing` optionally steers auto mode: `profile` selects a server-defined
+  policy such as `quality`, `fast`, or `eu` (provider and backend names are
+  never accepted), `optimize` orders candidates by `balanced`, `cost`, or
+  `latency`, `max_cost_usd` caps the estimated cost of the task, `fallback`
+  (`none`, `same_model`, `any`) lets a pinned model fall back when it is
+  retired or unavailable, and `budget` (`{scope, limit_usd}`) tracks and caps
+  spend per client-chosen scope. See
+  [`docs/design/auto-mode.md`](docs/design/auto-mode.md).
 - `metadata` is client-owned JSON returned unchanged with the task.
 
 `GET /v1/models` is scoped to the authenticated key, privately cacheable for 60
@@ -100,7 +110,11 @@ object — the neutral input/output caps the auto-router reasons about and that 
 client can consult when crafting a prompt for a specific model (accepted input
 modalities, max prompt length, max output count, supported sizes/durations, and
 per-role support flags such as image-to-image, first-frame, or lyrics). Unknown
-models fall back to a permissive entry with no documented constraint.
+models fall back to a permissive entry with no documented constraint. Limits
+also carry `supports_audio_output` (video models that render sound) and the
+model lifecycle (`lifecycle`, `deprecated_on`, `retired_on`, `replacement`):
+retired models are omitted from `GET /v1/models` and never auto-routed, but
+stay listed here so clients can migrate pinned ids.
 
 Unknown envelope and parameter fields return a normalized `422` error. This is
 intentional: adding a backend does not silently add its private wire options to
@@ -218,13 +232,20 @@ the output schema are modality-specific.
   "outputs": [
     {"uri": "https://cdn.example/video.mp4", "mime_type": "video/mp4"}
   ],
-  "usage": {"output_count": 1, "duration_seconds": 8},
+  "usage": {"output_count": 1, "duration_seconds": 8, "cost": 3.2, "cost_source": "estimate", "currency": "USD"},
+  "routing": {"requested_model": "gateway-video-pro", "fallback": false, "attempts": 1, "optimize": "balanced", "estimated_cost": 3.2},
   "metadata": {"job_id": "job-123"},
   "created_at": "2026-08-11T12:00:00Z",
   "completed_at": "2026-08-11T12:00:20Z",
   "links": {"self": "https://gateway.example/v1/videos/vid_01HZX4J3K7NQ8X2V9Y6R5W4T3P"}
 }
 ```
+
+`usage.cost` is the provider-reported cost when the provider returns one, else
+the gateway's estimate from its price catalogue (`cost_source` says which).
+`routing` reports how auto mode served the task: the requested model, whether a
+fallback happened and why, the number of attempts, the estimate, and the budget
+scope's state.
 
 Every output contains one `uri`; inline results are base64 data URIs. Image
 outputs may also contain `mime_type` and `revised_prompt`, video outputs may
@@ -343,9 +364,9 @@ use the same underlying generation service. Health and metrics are open.
 
 ## MCP
 
-Set `mcp.enabled: true` to expose the same contract through eight MCP tools:
+Set `mcp.enabled: true` to expose the same contract through ten MCP tools:
 `list_models`, `list_model_limits`, `create_image`, `get_image`, `create_video`,
-`get_video`, `create_music`, and `get_music`. `model` is optional on the create
+`get_video`, `create_music`, `get_music`, `estimate_cost`, and `get_usage`. `model` is optional on the create
 tools; omit it (or pass `auto`) to auto-route to a fitting backend.
 
 Create tools take `model`, typed `input`, a modality-specific `parameters`
@@ -396,6 +417,29 @@ keys:
 
 Provider credentials, endpoints, model pins, and adapter-only options belong in
 operator configuration. They do not change the public request schemas.
+
+Auto mode is configured in three optional sections: `routing` (the default
+`optimize` mode and named `profiles`), `catalog.models` (per-model overrides of
+lifecycle dates, `supports_audio_output`, and prices), and `budget`
+(`allow_unpriced`). A key may carry `budget: {limit_usd, period, scopes_limit_usd}`
+(`period` is `day`, `month`, or `total`). Over-budget creates fail with `402
+budget_exceeded`; requests above `max_cost_usd` with `422 cost_limit_exceeded`;
+retired pinned models with `410 model_retired`. See
+[`docs/design/auto-mode.md`](docs/design/auto-mode.md) for the full pipeline.
+
+```yaml
+routing:
+  default_optimize: balanced
+  profiles:
+    cheap: {optimize: cost}
+catalog:
+  models:
+    my-self-hosted-model: {supports_audio_output: true, price: {per_second: 0.01}}
+keys:
+  - id: application
+    key: ${GATEWAY_API_KEY}
+    budget: {limit_usd: 500, period: month}
+```
 
 The `proxies:` section configures the general pass-through proxy surface
 described under [General pass-through proxy](#general-pass-through-proxy) above.

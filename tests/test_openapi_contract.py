@@ -16,6 +16,11 @@ EXPECTED_OPERATIONS = {
     ("/v1/videos/{video_id}", "get"): "getVideo",
     ("/v1/music", "post"): "createMusic",
     ("/v1/music/{music_id}", "get"): "getMusic",
+    # Auto mode's cost control (docs/design/auto-mode.md).
+    ("/v1/images/estimate", "post"): "estimateImage",
+    ("/v1/videos/estimate", "post"): "estimateVideo",
+    ("/v1/music/estimate", "post"): "estimateMusic",
+    ("/v1/usage", "get"): "getUsage",
 }
 
 # The general pass-through proxy is a separate public surface: one catch-all
@@ -314,8 +319,13 @@ def test_model_catalogue_does_not_expose_backend_details():
 def test_routing_and_errors_do_not_expose_backend_identity():
     schemas = _spec()["components"]["schemas"]
     routing = schemas["RoutingDirective"]
-    assert set(routing["properties"]) == {"profile"}
-    assert routing["required"] == ["profile"]
+    # Auto mode's policy members (docs/design/auto-mode.md); none names a backend.
+    assert set(routing["properties"]) == {"profile", "optimize", "max_cost_usd", "fallback", "budget"}
+    assert routing["required"] == []  # every member is optional
+    assert set(schemas["BudgetDirective"]["properties"]) == {"scope", "limit_usd"}
+    # What a task or an estimate reports about routing stays provider-neutral too.
+    for name in ("RoutingInfo", "EstimateCandidate", "EstimateResponse", "BudgetState"):
+        assert not {"provider", "backend", "account"} & set(schemas[name]["properties"]), name
     problem_properties = schemas["ProblemDetail"]["properties"]
     assert "provider" not in problem_properties
     assert {

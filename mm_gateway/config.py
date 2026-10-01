@@ -232,6 +232,83 @@ class ProxyConfig:
         return out
 
 
+OPTIMIZE_MODES = ("balanced", "cost", "latency")
+FALLBACK_MODES = ("none", "same_model", "any")
+BUDGET_PERIODS = ("day", "month", "total")
+
+
+@dataclass(frozen=True)
+class KeyBudget:
+    """An operator-set spend cap for a key (docs/design/auto-mode.md#budgets-and-the-ledger).
+
+    ``limit_usd`` caps the key's spend per ``period`` (``day``/``month`` are UTC
+    calendar periods; ``total`` never resets). ``scopes_limit_usd`` caps every
+    client-chosen ``routing.budget.scope`` of the key (lifetime totals).
+    """
+
+    limit_usd: float | None = None
+    period: str = "month"
+    scopes_limit_usd: float | None = None
+
+
+@dataclass(frozen=True)
+class RoutingProfile:
+    """A named, server-defined routing policy selected by ``routing.profile``."""
+
+    name: str
+    tags: list[str] = field(default_factory=list)
+    optimize: str | None = None
+    max_cost_usd: float | None = None
+    fallback: str | None = None
+
+
+def _key_budget(raw: Any, key_id: str) -> KeyBudget | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"keys[{key_id}].budget must be a mapping")
+    period = str(raw.get("period") or "month")
+    if period not in BUDGET_PERIODS:
+        raise ValueError(f"keys[{key_id}].budget.period must be one of {', '.join(BUDGET_PERIODS)}")
+
+    def amount(name: str) -> float | None:
+        value = raw.get(name)
+        if value is None:
+            return None
+        number = float(value)
+        if number < 0:
+            raise ValueError(f"keys[{key_id}].budget.{name} must not be negative")
+        return number
+
+    return KeyBudget(limit_usd=amount("limit_usd"), period=period,
+                     scopes_limit_usd=amount("scopes_limit_usd"))
+
+
+def _routing_profiles(raw: Any) -> dict[str, RoutingProfile]:
+    profiles: dict[str, RoutingProfile] = {}
+    for name, spec in ((raw or {}).items() if isinstance(raw, dict) else []):
+        spec = spec or {}
+        if not isinstance(spec, dict):
+            raise ValueError(f"routing.profiles.{name} must be a mapping")
+        optimize = spec.get("optimize")
+        if optimize is not None and optimize not in OPTIMIZE_MODES:
+            raise ValueError(f"routing.profiles.{name}.optimize must be one of {', '.join(OPTIMIZE_MODES)}")
+        fallback = spec.get("fallback")
+        if fallback is not None and fallback not in FALLBACK_MODES:
+            raise ValueError(f"routing.profiles.{name}.fallback must be one of {', '.join(FALLBACK_MODES)}")
+        max_cost = spec.get("max_cost_usd")
+        if max_cost is not None and float(max_cost) <= 0:
+            raise ValueError(f"routing.profiles.{name}.max_cost_usd must be positive")
+        profiles[str(name)] = RoutingProfile(
+            name=str(name),
+            tags=[str(t) for t in (spec.get("tags") or [])],
+            optimize=optimize,
+            max_cost_usd=float(max_cost) if max_cost is not None else None,
+            fallback=fallback,
+        )
+    return profiles
+
+
 @dataclass(frozen=True)
 class KeyConfig:
     """A front-end API key with routing rules.
@@ -255,6 +332,8 @@ class KeyConfig:
     default_video_backend: str | None = None
     default_music_backend: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    # Operator spend cap for this key (None = unlimited).
+    budget: KeyBudget | None = None
 
 
 @dataclass(frozen=True)
@@ -299,6 +378,14 @@ class Settings:
     mcp_session_idle_timeout: float = field(
         default_factory=lambda: float(_env("MCP_SESSION_IDLE_TIMEOUT", "1800") or "1800")
     )
+
+    # Auto mode (docs/design/auto-mode.md): the default candidate ordering,
+    # named routing profiles, per-model catalogue overrides (lifecycle, native
+    # audio, prices) and whether unpriced models may serve budgeted requests.
+    routing_default_optimize: str = "balanced"
+    routing_profiles: dict[str, RoutingProfile] = field(default_factory=dict)
+    catalog_models: dict[str, Any] = field(default_factory=dict)
+    budget_allow_unpriced: bool = False
 
     backends: list[BackendConfig] = field(default_factory=list)
     keys: list[KeyConfig] = field(default_factory=list)
@@ -400,6 +487,7 @@ class Settings:
                 default_video_backend=k.get("default_video_backend"),
                 default_music_backend=k.get("default_music_backend"),
                 extra=dict(k.get("extra") or {}),
+                budget=_key_budget(k.get("budget"), str(k["id"])),
             )
             for k in (raw.get("keys") or [])
         ]
@@ -427,6 +515,9 @@ class Settings:
         image = _section("image")
         defaults = _section("defaults")
         mcp = _section("mcp")
+        routing = _section("routing")
+        catalog = _section("catalog")
+        budget = _section("budget")
         return cls(
             host=str(server.get("host", _env("HOST", "0.0.0.0") or "0.0.0.0")),
             port=int(server.get("port", _env("PORT", "8000") or "8000")),
@@ -451,6 +542,10 @@ class Settings:
                 raw.get("outbound_proxy") if isinstance(raw, dict) else None,
                 env_fallback=True,
             ),
+            routing_default_optimize=_default_optimize(routing.get("default_optimize")),
+            routing_profiles=_routing_profiles(routing.get("profiles")),
+            catalog_models=dict(catalog.get("models") or {}),
+            budget_allow_unpriced=_bool(budget.get("allow_unpriced", False)),
         )
 
     @classmethod
@@ -712,6 +807,13 @@ class Settings:
             backends=backends, keys=keys, proxies=proxies,
             outbound_proxy=_env("OUTBOUND_PROXY"),
         )
+
+
+def _default_optimize(value: Any) -> str:
+    mode = str(value or "balanced")
+    if mode not in OPTIMIZE_MODES:
+        raise ValueError(f"routing.default_optimize must be one of {', '.join(OPTIMIZE_MODES)}")
+    return mode
 
 
 def _find_config_file() -> str | None:

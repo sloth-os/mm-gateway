@@ -27,6 +27,7 @@ from mm_gateway.observability.logging import (
     get_logger,
     new_request_id,
 )
+from mm_gateway.billing import CostLedger
 from mm_gateway.proxy import ProxyRunner
 from mm_gateway.registry import Registry
 from mm_gateway.services import ImageService, MusicService, VideoService
@@ -42,6 +43,7 @@ def _problem_response(
     code: str,
     detail: str,
     errors: list[dict] | None = None,
+    extensions: dict | None = None,
 ) -> JSONResponse:
     payload = {
         "type": f"urn:mm-gateway:problem:{code}",
@@ -54,6 +56,10 @@ def _problem_response(
     }
     if errors:
         payload["errors"] = errors
+    # Structured client-error details (e.g. the binding budget of a 402) are
+    # RFC 9457 extension members; they never override the standard members.
+    for name, value in (extensions or {}).items():
+        payload.setdefault(name, value)
     return JSONResponse(
         status_code=status,
         content=payload,
@@ -65,22 +71,28 @@ def create_app(
     settings: Settings | None = None,
     *,
     task_store: TaskStore | None = None,
+    ledger: CostLedger | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     configure_logging(level=settings.log_level, fmt=settings.log_format)
 
     registry = Registry(settings)
+    # One spend ledger for every modality (docs/design/auto-mode.md#budgets-and-the-ledger).
+    ledger = ledger or CostLedger()
     image_service = ImageService(
         registry, max_sync_wait=settings.max_sync_wait,
         poll_interval=settings.poll_interval, sync_default=settings.image_sync_default,
+        ledger=ledger,
     )
     video_service = VideoService(
         registry, max_sync_wait=settings.max_sync_wait,
         poll_interval=settings.poll_interval, sync_default=settings.video_sync_default,
+        ledger=ledger,
     )
     music_service = MusicService(
         registry, max_sync_wait=settings.max_sync_wait,
         poll_interval=settings.poll_interval, sync_default=settings.music_sync_default,
+        ledger=ledger,
     )
     task_store = task_store or TaskStore()
     proxy_runner = ProxyRunner()
@@ -108,6 +120,7 @@ def create_app(
     app.state.video_service = video_service
     app.state.music_service = music_service
     app.state.task_store = task_store
+    app.state.ledger = ledger
     app.state.proxy_runner = proxy_runner
 
     @app.middleware("http")
@@ -182,6 +195,7 @@ def create_app(
             status=exc.status_code,
             code=exc.public_code,
             detail=exc.public_message,
+            extensions=exc.details if exc.status_code < 500 else None,
         )
 
     @app.exception_handler(RequestValidationError)
@@ -209,6 +223,7 @@ def create_app(
 
     # Register routes.
     from mm_gateway.server.routes import (
+        billing_routes,
         image_routes,
         meta_routes,
         music_routes,
@@ -219,6 +234,7 @@ def create_app(
     app.include_router(image_routes.router)
     app.include_router(video_routes.router)
     app.include_router(music_routes.router)
+    app.include_router(billing_routes.router)
     app.include_router(proxy_routes.router)
 
     # Optionally mount the HTTP MCP endpoint (no-op when mcp_enabled is false).

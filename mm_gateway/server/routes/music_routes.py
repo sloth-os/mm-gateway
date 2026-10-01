@@ -21,7 +21,7 @@ from mm_gateway.server.routes._resources import (
     render_resource,
     replay_resource,
     request_fingerprint,
-    stamped_model,
+    served_model,
 )
 from mm_gateway.translators.rest import from_music_request, to_music_response
 
@@ -76,13 +76,13 @@ async def create_music(
         task = await request.app.state.music_service.create(
             from_music_request(body),
             key=key,
-            tag=routing.profile if routing else None,
+            routing=routing,
             wait=False,
         )
         record = new_record(
             "mus",
             task,
-            model=stamped_model(body.model, task.model),
+            model=served_model(body.model, task),
             modality="music",
             metadata=body.metadata,
             owner_key_id=key.id,

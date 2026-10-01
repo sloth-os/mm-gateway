@@ -141,6 +141,28 @@ proxies:
         headers:
           x-goog-api-key: ${GOOGLE_API_KEY:}
 
+# Auto mode (docs/design/auto-mode.md): how candidates are ordered, named
+# routing profiles clients select with routing.profile, per-model catalogue
+# overrides (lifecycle, native audio, prices in USD), and whether unpriced
+# models may serve budgeted requests.
+routing:
+  default_optimize: balanced          # balanced | cost | latency
+  profiles:
+    cheap: {optimize: cost}
+    fast: {optimize: latency}
+    capped: {optimize: cost, max_cost_usd: 2.0, fallback: any}
+
+catalog:
+  models:
+    # Retire a model the day the provider switches it off (built in for sora-2).
+    sora-2: {retired_on: "2026-09-24"}
+    # A contract price overrides the built-in list price.
+    veo-3.1-generate-preview:
+      price: {per_second_tiers: [{max_longest_side: 1920, per_second: 0.32}, {max_longest_side: 3840, per_second: 0.48}]}
+
+budget:
+  allow_unpriced: false
+
 # Front-end API keys. A request authenticated with a key may use any backend
 # whose tags intersect allow_tags OR whose name is in allow_backends (hybrid),
 # and never any backend named in deny_tags.
@@ -150,6 +172,9 @@ keys:
     allow_tags: [prod]                 # any prod backend
     default_image_backend: openai-default
     default_video_backend: volcengine-prod
+    # Spend cap per UTC month; every client scope (routing.budget.scope) is
+    # capped at 100 USD on top of the client's own limit_usd.
+    budget: {limit_usd: 500, period: month, scopes_limit_usd: 100}
   - id: bob
     key: ${FRONTEND_KEY_BOB}
     allow_backends: [openai-default]   # pinned to one backend by name

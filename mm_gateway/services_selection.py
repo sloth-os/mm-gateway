@@ -17,6 +17,11 @@ second-guess it.
 
 Every attempt records its outcome (success/failure, latency, rate-limit) in the
 selection store so the next request's ranking reflects what just happened.
+
+The services run their attempts through :func:`mm_gateway.auto_mode.execute_plan`,
+which applies the same retry classification (:func:`_is_retryable`) and also
+holds each candidate's estimated cost in the ledger; ``retry_across_backends``
+remains the minimal, ledger-free form of that loop.
 """
 
 from __future__ import annotations

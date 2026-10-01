@@ -31,7 +31,7 @@ from mm_gateway.core.exceptions import (
     ProviderNotFoundError,
     ValidationError,
 )
-from mm_gateway.models.limits import limits_for
+from mm_gateway.models.catalog import Catalog, parse_overrides
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.observability.selection import STORE as SELECTION_STORE
 import mm_gateway.router as router
@@ -110,7 +110,23 @@ class Registry:
         self._aliases = dict(_MODEL_ALIASES)
         # proxy domain -> ProxyConfig (the configured, pass-through proxies).
         self._proxies: dict[str, ProxyConfig] = {}
+        # Limits, lifecycle and prices, with the operator's catalog overrides
+        # (docs/design/auto-mode.md). Shared by routing, estimates and listings.
+        self._catalog = Catalog(parse_overrides(settings.catalog_models))
         self._build()
+
+    @property
+    def catalog(self) -> Catalog:
+        # Lazily built for registries assembled without __init__ (test doubles).
+        cat = self.__dict__.get("_catalog")
+        if cat is None:
+            cat = Catalog(parse_overrides(getattr(self.settings, "catalog_models", {}) or {}))
+            self.__dict__["_catalog"] = cat
+        return cat
+
+    @catalog.setter
+    def catalog(self, value: Catalog) -> None:
+        self.__dict__["_catalog"] = value
 
     def _build(self) -> None:
         for cfg in self.settings.backends:
@@ -333,6 +349,10 @@ class Registry:
             if identity in seen:
                 continue
             seen.add(identity)
+            # Retired models cannot serve requests; /v1/models/limits still
+            # lists them (with lifecycle) so clients can migrate pinned ids.
+            if self.model_lifecycle(model["id"], model["modality"]) == "retired":
+                continue
             public.append({
                 "id": model["id"],
                 "object": "model",
@@ -363,7 +383,7 @@ class Registry:
             underlying = model["id"]
             if underlying in self._aliases:
                 _btype, underlying = self._aliases[underlying]
-            limits = limits_for(underlying, modality).to_public_dict()
+            limits = self.catalog.public_limits(underlying, modality)
             entries.append({
                 "id": model["id"],
                 "object": "model",
@@ -525,7 +545,9 @@ class Registry:
             default_backend_rank = 0 if name == default_backend else 1
             default_tag_rank = 0 if (default_tag and default_tag in cfg_tags) else 1
             for m_index, model in enumerate(self._modality_models(prov, modality)):
-                limits = limits_for(model, modality)
+                limits = self.catalog.limits_for(model, modality)
+                if limits.lifecycle(self.catalog.today()) == "retired":
+                    continue
                 s = router.score(profile, limits, backend_index=b_index,
                                  model_index=m_index)
                 if not s.fits:
@@ -616,7 +638,9 @@ class Registry:
             default_backend_rank = 0 if name == default_backend else 1
             default_tag_rank = 0 if (default_tag and default_tag in cfg_tags) else 1
             for m_index, model in enumerate(self._modality_models(prov, modality)):
-                limits = limits_for(model, modality)
+                limits = self.catalog.limits_for(model, modality)
+                if limits.lifecycle(self.catalog.today()) == "retired":
+                    continue
                 s = router.score(profile, limits, backend_index=b_index,
                                  model_index=m_index)
                 if not s.fits:
@@ -663,6 +687,93 @@ class Registry:
                 expanded.append((health_key, prov, account_id, model, name))
         expanded.sort(key=lambda item: (item[0][0], item[0][1], item[0][2]))
         return [(p, aid, m, n) for (_, p, aid, m, n) in expanded]
+
+    # -- auto-mode planner helpers (mm_gateway.auto_mode) ------------------- #
+
+    def model_lifecycle(self, model: str, modality: str) -> str:
+        """Lifecycle of a public model id (aliases resolve to their underlying model)."""
+        underlying = self._aliases[model][1] if model in self._aliases else model
+        return self.catalog.lifecycle(underlying, modality)
+
+    def resolve_model_id(self, model: str, usable: list[str]) -> tuple[str | None, str]:
+        """``(alias backend type or None, real model id)`` for a pinned model id."""
+        if model in self._aliases:
+            return self._aliases[model]
+        if "/" in model:
+            prefix, rest = model.split("/", 1)
+            if prefix in (self._configs[n].type for n in usable if n in self._configs):
+                return prefix, rest
+        return None, model
+
+    def backends_serving(self, model: str, key: KeyConfig | None, *, modality: str,
+                         backend_name: str | None = None) -> tuple[str, list[str]]:
+        """``(real model, usable backends serving it)`` in :meth:`resolve`'s preference order.
+
+        Same ``serves`` rule as :meth:`resolve` (explicit backend pin, modality
+        support, known model / alias type / dynamic catalogue), ordered by the
+        explicit backend, the key's per-modality default backend and tag, then
+        the configuration order. Raises like :meth:`resolve` when the key may
+        use no backend or none serves the model.
+        """
+        usable = self.usable_backends(key) if key else list(self._backends)
+        if key and not usable:
+            raise ForbiddenError(f"API key '{key.id}' is not allowed to use any backend.")
+        alias_type, real_model = self.resolve_model_id(model, usable)
+
+        def serves(name: str) -> bool:
+            prov = self._backends[name]
+            if backend_name and name == backend_name:
+                return True
+            if not self._serves_modality(prov, modality):
+                return False
+            known = self._modality_models(prov, modality)
+            return real_model in known or alias_type == self._configs[name].type or not known
+
+        candidates = [n for n in usable if serves(n)]
+        if not candidates:
+            raise ModelNotFoundError(f"No backend configured for model '{model}'.")
+        default_backend = self._key_default_backend(key, modality)
+        default_tag = self._key_default_tag(key, modality)
+
+        def rank(name: str) -> tuple[int, int, int, int]:
+            tags = self._configs[name].tags
+            return (
+                0 if backend_name and name == backend_name else 1,
+                0 if name == default_backend else 1,
+                0 if default_tag and default_tag in tags else 1,
+                candidates.index(name),
+            )
+
+        return real_model, sorted(candidates, key=rank)
+
+    def usable_for_modality(self, key: KeyConfig | None, modality: str,
+                            backend_name: str | None = None) -> list[str]:
+        """Usable backends (config order) that implement ``modality``."""
+        usable = self.usable_backends(key) if key else list(self._backends)
+        if key and not usable:
+            raise ForbiddenError(f"API key '{key.id}' is not allowed to use any backend.")
+        if backend_name and backend_name in usable:
+            usable = [backend_name]
+        return [n for n in usable if self._serves_modality(self._backends[n], modality)]
+
+    def models_of(self, backend: str, modality: str) -> list[str]:
+        return list(self._modality_models(self._backends[backend], modality))
+
+    def tags_of(self, backend: str) -> list[str]:
+        cfg = self._configs.get(backend)
+        return list(cfg.tags) if cfg else []
+
+    def accounts_of(self, backend: str) -> list[tuple[str, Provider]]:
+        """``(account id, provider)`` per credential of ``backend``."""
+        out: list[tuple[str, Provider]] = []
+        for account_id in self._backend_accounts.get(backend, ["default"]):
+            prov = self._accounts.get((backend, account_id)) or self._backends.get(backend)
+            if prov is not None:
+                out.append((account_id, prov))
+        return out
+
+    def key_defaults(self, key: KeyConfig | None, modality: str) -> tuple[str | None, str | None]:
+        return self._key_default_backend(key, modality), self._key_default_tag(key, modality)
 
     # -- helpers ------------------------------------------------------------ #
 

@@ -193,6 +193,8 @@ class UnifiedMusicTask(BaseModel):
     error: str | None = None
     usage: MusicUsage | None = None
     # Provider-native raw response, for clients that want the full envelope.
+    # How auto mode served the task (stamped at create; docs/design/auto-mode.md).
+    routing: dict[str, Any] | None = None
     raw: dict[str, Any] | None = None
     created_at: int | None = None
     completed_at: int | None = None

@@ -31,6 +31,8 @@ class TaskRecord:
     idempotency_key: str | None = None
     request_fingerprint: str | None = None
     create_response: dict[str, Any] | None = None
+    # How auto mode served the task (requested model, fallback, estimate, budget).
+    routing: dict[str, Any] | None = None
 
 
 class TaskStore:

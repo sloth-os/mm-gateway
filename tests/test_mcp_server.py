@@ -1,9 +1,10 @@
 """Tests for the HTTP MCP server (``/mcp``).
 
 These exercise the full stack — FastAPI app lifespan, the
-``StreamableHTTPSessionManager``, the delegating ``/mcp`` route, and the eight
+``StreamableHTTPSessionManager``, the delegating ``/mcp`` route, and the ten
 gateway tools (``list_models``, ``list_model_limits``, ``create_image``,
-``get_image``, ``create_video``, ``get_video``, ``create_music``, ``get_music``)
+``get_image``, ``create_video``, ``get_video``, ``create_music``, ``get_music``,
+``estimate_cost``, ``get_usage``)
 — over an in-process httpx ASGI
 transport talking the real MCP Streamable-HTTP client protocol. No sockets, no
 network.
@@ -179,7 +180,7 @@ async def test_lists_all_gateway_tools(mcp_app):
         tools = await sess.list_tools()
     names = sorted(t.name for t in tools.tools)
     assert names == ["create_image", "create_music", "create_video",
-                     "get_image", "get_music", "get_video",
+                     "estimate_cost", "get_image", "get_music", "get_usage", "get_video",
                      "list_model_limits", "list_models"]
 
 
@@ -356,6 +357,32 @@ async def test_create_video_returns_task_id(mcp_app):
     assert body["id"].startswith("vid_")
     assert body["object"] == "video"
     assert body["status"] == "pending"
+
+
+async def test_estimate_cost_tool_explains_the_route_without_a_task(mcp_app):
+    is_error, text = await _call(mcp_app, "alice-token", "estimate_cost", {
+        "modality": "video",
+        "input": [{"type": "text", "text": "a cat playing"}],
+        "parameters": {"duration_seconds": 5},
+        "routing": {"optimize": "cost"},
+    })
+    assert not is_error, text
+    body = json.loads(text)
+    assert body["object"] == "estimate"
+    assert body["modality"] == "video"
+    assert body["model"] == "fake-video-1"
+    # The fake model has no price: admissible without a cap, but unpriced.
+    assert "estimated_cost" not in body
+    assert body["candidates"][0]["admissible"] is True
+
+
+async def test_get_usage_tool_reports_the_calling_key(mcp_app):
+    is_error, text = await _call(mcp_app, "alice-token", "get_usage", {})
+    assert not is_error, text
+    body = json.loads(text)
+    assert body["object"] == "usage"
+    assert body["currency"] == "USD"
+    assert body["key"]["spent_usd"] == 0.0
 
 
 async def test_get_video_polls_to_succeeded(mcp_app):

@@ -89,6 +89,7 @@ def new_record(
         owner_key_id=owner_key_id,
         idempotency_key=idempotency_key,
         request_fingerprint=request_fingerprint,
+        routing=getattr(task, "routing", None),
     )
 
 
@@ -112,16 +113,24 @@ def request_fingerprint(body: BaseModel) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def stamped_model(requested: str | None, resolved: str) -> str:
+def stamped_model(requested: str | None, resolved: str, *, fallback: bool = False) -> str:
     """The model id to stamp on a task record.
 
     A client that omits ``model`` or sends ``auto`` gets the auto-router's
     resolved id back (so they can see which model served the request); a client
-    that named a model (or alias) gets that id echoed unchanged.
+    that named a model (or alias) gets that id echoed unchanged — unless a
+    fallback served the task with another model, which is then stamped (the
+    original stays in ``routing.requested_model``).
     """
-    if requested and requested.lower() != "auto":
+    if requested and requested.lower() != "auto" and not fallback:
         return requested
     return resolved
+
+
+def served_model(requested: str | None, task: Any) -> str:
+    """:func:`stamped_model` for a freshly created task (reads its routing info)."""
+    routing = getattr(task, "routing", None) or {}
+    return stamped_model(requested, task.model, fallback=bool(routing.get("fallback")))
 
 
 async def find_idempotent_record(
@@ -252,5 +261,6 @@ __all__ = [
     "render_resource",
     "replay_resource",
     "request_fingerprint",
+    "served_model",
     "stamped_model",
 ]

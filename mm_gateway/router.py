@@ -50,6 +50,8 @@ class RequestProfile:
     wants_continuation_audio: bool = False
     wants_reference_image: bool = False
     wants_lyrics: bool = False
+    # Video: ``include_audio: true`` (native sound: dialogue, effects, music).
+    wants_audio_output: bool = False
     # Numeric controls the router checks against documented ceilings.
     input_image_count: int = 0
     output_count: int | None = None
@@ -120,6 +122,8 @@ def _video_profile(request: UnifiedVideoRequest) -> RequestProfile:
         wants_last_frame=last,
         wants_reference_video=bool(ref_videos),
         wants_reference_audio=bool(ref_audios),
+        wants_reference_image=bool(ref_images),
+        wants_audio_output=bool(request.generate_audio),
         input_image_count=len([p for p in request.content
                                if getattr(p.root, "type", None) == "image_url"]),
         output_count=None,
@@ -272,8 +276,15 @@ def _fits(profile: RequestProfile, limits: ModelLimits) -> tuple[bool, int]:
                  profile.wants_reference_video, profile.wants_reference_audio):
         if flag:
             optional_hits += 1
+    # Native audio (video): never route an include_audio request to a model
+    # documented as silent; prefer one documented to render sound.
+    if profile.wants_audio_output:
+        if limits.supports_audio_output is False:
+            return False, 0
+        if limits.supports_audio_output:
+            optional_hits += 1
 
-    # Music role flags.
+    # Music role flags (reference images apply to video too).
     if profile.wants_lyrics and limits.supports_lyrics is False:
         return False, 0
     if profile.wants_continuation_audio and limits.supports_continuation_audio is False:
@@ -291,6 +302,19 @@ def _fits(profile: RequestProfile, limits: ModelLimits) -> tuple[bool, int]:
             optional_hits += 1
 
     return True, optional_hits
+
+
+def longest_side(profile: RequestProfile) -> int | None:
+    """The requested output's longest side in pixels (for size-tiered prices)."""
+    side = _longest_side(profile.width, profile.height, profile.size)
+    if side is None and profile.resolution:
+        digits = "".join(ch for ch in profile.resolution if ch.isdigit())
+        if profile.resolution.lower().endswith("k") and digits:
+            return int(digits) * 960
+        if digits:
+            short = int(digits)
+            return round(short * 16 / 9)
+    return side
 
 
 def _longest_side(width: int | None, height: int | None, size: str | None) -> int | None:
@@ -320,4 +344,4 @@ def best(scores: list[_Score]) -> _Score | None:
     return fitting[0]
 
 
-__all__ = ["RequestProfile", "profile_for", "score", "best"]
+__all__ = ["RequestProfile", "best", "longest_side", "profile_for", "score"]

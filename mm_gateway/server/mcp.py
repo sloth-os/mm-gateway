@@ -35,6 +35,7 @@ from mm_gateway.config import Settings
 from mm_gateway.core.exceptions import GatewayError, TaskNotFoundError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.schemas.api import (
+    EstimateResponse,
     ImageInputList,
     ImageParameters,
     ImageRequest,
@@ -44,6 +45,7 @@ from mm_gateway.schemas.api import (
     MusicRequest,
     MusicTaskResponse,
     RoutingDirective,
+    UsageResponse,
     VideoInputList,
     VideoParameters,
     VideoRequest,
@@ -56,7 +58,7 @@ from mm_gateway.server.routes._resources import (
     remember_create_response,
     replay_resource,
     request_fingerprint,
-    stamped_model,
+    served_model,
 )
 from mm_gateway.translators.rest import (
     from_image_request,
@@ -255,13 +257,13 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
             task = await image_service.create(
                 from_image_request(body),
                 key=key,
-                tag=routing.profile if routing else None,
+                routing=routing,
                 wait=False,
             )
             record = new_record(
                 "img",
                 task,
-                model=stamped_model(model, task.model),
+                model=served_model(model, task),
                 modality="image",
                 metadata=body.metadata,
                 owner_key_id=key.id,
@@ -336,13 +338,13 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
             task = await video_service.create(
                 from_video_request(body),
                 key=key,
-                tag=routing.profile if routing else None,
+                routing=routing,
                 wait=False,
             )
             record = new_record(
                 "vid",
                 task,
-                model=stamped_model(model, task.model),
+                model=served_model(model, task),
                 modality="video",
                 metadata=body.metadata,
                 owner_key_id=key.id,
@@ -414,13 +416,13 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
             task = await music_service.create(
                 from_music_request(body),
                 key=key,
-                tag=routing.profile if routing else None,
+                routing=routing,
                 wait=False,
             )
             record = new_record(
                 "mus",
                 task,
-                model=stamped_model(model, task.model),
+                model=served_model(model, task),
                 modality="music",
                 metadata=body.metadata,
                 owner_key_id=key.id,
@@ -450,6 +452,46 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
         )
         resource = to_music_response(task, record, self_url=f"/v1/music/{id}")
         return resource.model_dump_json(by_alias=True, exclude_none=True)
+
+    @mcp.tool()
+    @_tool
+    async def estimate_cost(
+        ctx: Context,
+        modality: Literal["image", "video", "music"],
+        input: list[dict[str, Any]],
+        parameters: dict[str, Any] | None = None,
+        model: str | None = None,
+        routing: RoutingDirective | None = None,
+    ) -> str:
+        """Estimate how auto mode would route a request and what it would cost, without creating a task.
+
+        Takes the same ``input``/``parameters``/``model``/``routing`` as the
+        matching create tool. Returns the first-choice model, its estimated
+        cost in USD, every candidate with its lifecycle and why it is or is not
+        admissible, and the budget scope's state.
+        """
+        from mm_gateway.auto_mode import estimate_route, resolve_policy
+
+        key = _key(ctx)
+        payload = {"model": model, "input": input, "parameters": parameters or {},
+                   "routing": routing.model_dump(exclude_none=True) if routing else None}
+        if modality == "image":
+            unified = from_image_request(ImageRequest.model_validate(payload))
+        elif modality == "video":
+            unified = from_video_request(VideoRequest.model_validate(payload))
+        else:
+            unified = from_music_request(MusicRequest.model_validate(payload))
+        body = estimate_route(registry, app.state.ledger, unified, key=key, modality=modality,
+                              policy=resolve_policy(settings, routing))
+        return EstimateResponse.model_validate(body).model_dump_json(exclude_none=True)
+
+    @mcp.tool()
+    @_tool
+    async def get_usage(ctx: Context, scope: str | None = None) -> str:
+        """Spend, reservations and budgets of the calling key for the current period (optionally one scope)."""
+        key = _key(ctx)
+        usage = app.state.ledger.usage(key, scope)
+        return UsageResponse.model_validate(usage).model_dump_json(exclude_none=True)
 
     return mcp
 

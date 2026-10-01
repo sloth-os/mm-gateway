@@ -21,7 +21,7 @@ from mm_gateway.server.routes._resources import (
     render_resource,
     replay_resource,
     request_fingerprint,
-    stamped_model,
+    served_model,
 )
 from mm_gateway.translators.rest import from_image_request, to_image_response
 
@@ -76,13 +76,13 @@ async def create_image(
         task = await request.app.state.image_service.create(
             from_image_request(body),
             key=key,
-            tag=routing.profile if routing else None,
+            routing=routing,
             wait=False,
         )
         record = new_record(
             "img",
             task,
-            model=stamped_model(body.model, task.model),
+            model=served_model(body.model, task),
             modality="image",
             metadata=body.metadata,
             owner_key_id=key.id,

@@ -47,6 +47,8 @@ class _Entry(Generic[TaskT]):
     poll: Callable[[], Awaitable[TaskT]]
     monitor: asyncio.Task[None] | None = None
     consecutive_errors: int = 0
+    # Called once with the terminal snapshot (auto mode settles the task's cost).
+    on_terminal: Callable[[TaskT], None] | None = None
 
 
 class AsyncTaskSupervisor(Generic[TaskT]):
@@ -64,8 +66,13 @@ class AsyncTaskSupervisor(Generic[TaskT]):
         provider: str,
         task: TaskT,
         poll: Callable[[], Awaitable[TaskT]],
+        on_terminal: Callable[[TaskT], None] | None = None,
     ) -> None:
-        """Cache ``task`` and start exactly one monitor for its provider id."""
+        """Cache ``task`` and start exactly one monitor for its provider id.
+
+        ``on_terminal`` runs once with the terminal snapshot (from the monitor,
+        or at once when ``task`` is already terminal).
+        """
         if self._closed:
             raise RuntimeError("task supervisor is closed")
         key = (provider, task.task_id)
@@ -74,7 +81,7 @@ class AsyncTaskSupervisor(Generic[TaskT]):
             # Idempotent registration is useful for replay-safe service code;
             # never replace a live monitor with a duplicate poller.
             return
-        entry = _Entry(snapshot=task.model_copy(deep=True), poll=poll)
+        entry = _Entry(snapshot=task.model_copy(deep=True), poll=poll, on_terminal=on_terminal)
         self._entries[key] = entry
         record_async_task_submitted(provider, self.modality)
         log.info(
@@ -201,6 +208,14 @@ class AsyncTaskSupervisor(Generic[TaskT]):
             raise
 
     def _finish(self, provider: str, task_id: str, status: str, started: float) -> None:
+        entry = self._entries.get((provider, task_id))
+        if entry is not None and entry.on_terminal is not None:
+            callback, entry.on_terminal = entry.on_terminal, None
+            try:
+                callback(entry.snapshot.model_copy(deep=True))
+            except Exception as exc:  # noqa: BLE001 - accounting must never break polling
+                log.warning("async_task_terminal_callback_failed", provider=provider,
+                            modality=self.modality, task_id=task_id, error=str(exc))
         duration = time.monotonic() - started
         record_async_task_finished(provider, self.modality, status, duration)
         log.info(

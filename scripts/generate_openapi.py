@@ -42,6 +42,11 @@ EXPECTED_PATHS = {
     "/v1/videos/{video_id}",
     "/v1/music",
     "/v1/music/{music_id}",
+    # Auto mode's cost control (docs/design/auto-mode.md).
+    "/v1/images/estimate",
+    "/v1/videos/estimate",
+    "/v1/music/estimate",
+    "/v1/usage",
     "/proxy/{domain}/{path}",
     "/metrics",
 }

@@ -154,9 +154,13 @@ async def list_model_limits(
     response_class=PlainTextResponse,
     responses={200: {"description": "Prometheus exposition"}},
 )
-async def metrics() -> str:
+async def metrics(request: Request) -> str:
     # Request counters/histograms first, then the per-backend selection health
     # (success rate, latency EWMA, rate-limit cooldown, attempts) that drives
-    # auto-routing — the two share the same Prometheus exposition.
+    # auto-routing, then the key budget gauges of the cost ledger — all share
+    # the same Prometheus exposition.
     parts = [render_prometheus(), SELECTION_STORE.render_prometheus()]
+    ledger = getattr(request.app.state, "ledger", None)
+    if ledger is not None:
+        parts.append(ledger.render_prometheus(request.app.state.settings.keys))
     return "\n".join(p for p in parts if p)

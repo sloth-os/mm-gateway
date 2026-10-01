@@ -357,7 +357,8 @@ def test_video_poll_returns_normalized_outputs_and_usage(client):
     body = _poll_until_done(client, created.headers["location"])
     assert body["object"] == "video"
     assert body["outputs"] == [{"uri": "https://example.test/out.mp4"}]
-    assert body["usage"] == {"cost": 0.01, "output_count": 1}
+    # A provider-reported cost is marked as such (docs/design/auto-mode.md#prices-and-estimates).
+    assert body["usage"] == {"cost": 0.01, "cost_source": "provider", "currency": "USD", "output_count": 1}
 
 
 def test_task_id_cannot_be_used_on_a_different_collection(client):
@@ -444,6 +445,8 @@ def test_music_poll_returns_audio_lyrics_and_usage(client):
     assert body["lyrics"] == "la la la"
     assert body["usage"] == {
         "cost": 0.01,
+        "cost_source": "provider",
+        "currency": "USD",
         "output_count": 1,
         "duration_seconds": 8.0,
     }

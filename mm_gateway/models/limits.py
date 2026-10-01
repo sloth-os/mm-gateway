@@ -27,9 +27,20 @@ here once the upstream publishes the limits.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any
+from datetime import date
+from typing import Any, Literal
 
 # The part ``type`` values the public request envelope accepts, per modality.
+Lifecycle = Literal["active", "deprecated", "retired"]
+
+
+def utc_today() -> date:
+    """Today's date in UTC (the lifecycle clock; tests patch it)."""
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).date()
+
+
 _TEXT = "text"
 _IMAGE = "image"
 _LYRICS = "lyrics"
@@ -77,16 +88,36 @@ class ModelLimits:
     supports_reference_image: bool | None = None
     # Audio output geometry (music).
     supported_sample_rates: tuple[int, ...] = ()
+    # Video models that render sound with the picture (dialogue, effects,
+    # music). ``False`` = documented silent; the router never sends an
+    # ``include_audio`` request there (docs/design/auto-mode.md#capabilities-native-audio).
+    supports_audio_output: bool | None = None
+    # Model lifecycle (ISO dates, UTC). From ``retired_on`` the model is never
+    # auto-routed and a pinned request fails with ``model_retired`` unless it
+    # allows a fallback; ``deprecated_on`` ranks it after active models.
+    deprecated_on: str | None = None
+    retired_on: str | None = None
+    replacement: str | None = None
     notes: str = ""
     source_urls: tuple[str, ...] = ()
 
-    def to_public_dict(self) -> dict[str, Any]:
+    def lifecycle(self, today: date | None = None) -> Lifecycle:
+        """``active``, ``deprecated`` or ``retired`` on ``today`` (UTC)."""
+        day = today or utc_today()
+        if self.retired_on and day >= date.fromisoformat(self.retired_on):
+            return "retired"
+        if self.deprecated_on and day >= date.fromisoformat(self.deprecated_on):
+            return "deprecated"
+        return "active"
+
+    def to_public_dict(self, today: date | None = None) -> dict[str, Any]:
         """Return the additive, client-facing limits object.
 
         Omits ``None``/empty fields so the spec stays small; clients ignore
-        unknown members, so adding fields later is safe.
+        unknown members, so adding fields later is safe. ``lifecycle`` is always
+        present so clients can tell a deprecated or retired model at a glance.
         """
-        out: dict[str, Any] = {"modality": self.modality}
+        out: dict[str, Any] = {"modality": self.modality, "lifecycle": self.lifecycle(today)}
         if self.input_modalities:
             out["input_modalities"] = list(self.input_modalities)
         for key in (
@@ -107,6 +138,7 @@ class ModelLimits:
             "supports_image_to_image", "supports_first_frame", "supports_last_frame",
             "supports_reference_video", "supports_reference_audio",
             "supports_continuation_audio", "supports_lyrics", "supports_reference_image",
+            "supports_audio_output", "deprecated_on", "retired_on", "replacement",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -169,15 +201,26 @@ _LIMITS["dall-e-3"] = ModelLimits(
                  "https://platform.openai.com/docs/models/dall-e-3"),
 )
 # Sora 2: durations 4/8/12/16/20s; i2v via a single input_reference image.
+# OpenAI announced the Sora 2 API shutdown on 2026-03-24; the Videos API and
+# every Sora 2 model id were removed on 2026-09-24 (no successor was named).
+_SORA_RETIREMENT = dict(
+    deprecated_on="2026-03-24", retired_on="2026-09-24",
+)
+_SORA_SHUTDOWN_SOURCES = (
+    "https://heydev.us/blog/openai-model-shutdowns-september-2026-audit-your-app",
+    "https://note.com/ai__worker/n/nac92877ddbf6",
+)
 _LIMITS["sora-2"] = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE),
     supports_first_frame=True, supports_last_frame=False,
     supports_reference_video=False, supports_reference_audio=False,
     max_input_images=1, min_duration_seconds=4, max_duration_seconds=20,
     supported_sizes=("720x1280", "1280x720"),
-    notes="Durations 4/8/12/16/20s (default 4); 720p only.",
+    supports_audio_output=True, **_SORA_RETIREMENT,
+    notes="Durations 4/8/12/16/20s (default 4); 720p only; synchronized audio. Removed from the API on 2026-09-24.",
     source_urls=("https://platform.openai.com/docs/guides/video-generation",
-                 "https://developers.openai.com/cookbook/examples/sora/sora2_prompting_guide"),
+                 "https://developers.openai.com/cookbook/examples/sora/sora2_prompting_guide",
+                 *_SORA_SHUTDOWN_SOURCES),
 )
 _LIMITS["sora-2-pro"] = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE),
@@ -186,9 +229,11 @@ _LIMITS["sora-2-pro"] = ModelLimits(
     max_input_images=1, min_duration_seconds=4, max_duration_seconds=20,
     supported_sizes=("720x1280", "1280x720", "1024x1792", "1792x1024",
                     "1080x1920", "1920x1080"),
-    notes="Adds 1080p and 1024x1792/1792x1024 exports.",
+    supports_audio_output=True, **_SORA_RETIREMENT,
+    notes="Adds 1080p and 1024x1792/1792x1024 exports. Removed from the API on 2026-09-24.",
     source_urls=("https://platform.openai.com/docs/guides/video-generation",
-                 "https://developers.openai.com/cookbook/examples/sora/sora2_prompting_guide"),
+                 "https://developers.openai.com/cookbook/examples/sora/sora2_prompting_guide",
+                 *_SORA_SHUTDOWN_SOURCES),
 )
 
 # --------------------------------------------------------------------------- #
@@ -219,7 +264,7 @@ _LIMITS["veo-2.0-generate-001"] = ModelLimits(
     supports_first_frame=True, supports_last_frame=True,
     supports_reference_video=False, max_input_images=1, max_output_count=2,
     min_duration_seconds=5, max_duration_seconds=8,
-    aspect_ratios=("16:9", "9:16"),
+    aspect_ratios=("16:9", "9:16"), supports_audio_output=False,
     notes="Silent (no audio); durations 5/6/8s; 720p only.",
     source_urls=("https://ai.google.dev/gemini-api/docs/models/veo-2.0-generate-001",
                  "https://ai.google.dev/gemini-api/docs/veo"),
@@ -229,7 +274,7 @@ _LIMITS["veo-3.0-generate-001"] = ModelLimits(
     supports_first_frame=True, supports_last_frame=True,
     supports_reference_video=False, max_input_images=1, max_output_count=1,
     max_prompt_tokens=1024, min_duration_seconds=4, max_duration_seconds=8,
-    aspect_ratios=("16:9", "9:16"),
+    aspect_ratios=("16:9", "9:16"), supports_audio_output=True,
     notes="Always generates audio; durations 4/6/8s; 720p/1080p; 1 video per request.",
     source_urls=("https://ai.google.dev/gemini-api/docs/veo",
                  "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-0-generate"),
@@ -239,7 +284,7 @@ _LIMITS["veo-3.1-generate-preview"] = ModelLimits(
     supports_first_frame=True, supports_last_frame=True,
     supports_reference_video=True, max_input_images=3, max_output_count=1,
     max_prompt_tokens=1024, min_duration_seconds=4, max_duration_seconds=8,
-    aspect_ratios=("16:9", "9:16"),
+    aspect_ratios=("16:9", "9:16"), supports_audio_output=True,
     notes="Audio on; supports video extension + up to 3 reference images; 1 video per request.",
     source_urls=("https://ai.google.dev/gemini-api/docs/veo",
                  "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate"),
@@ -284,7 +329,7 @@ _LIMITS["grok-imagine-video"] = ModelLimits(
 _LIMITS["grok-imagine-video-1.5-preview"] = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE, _AUDIO),
     supports_first_frame=True, min_duration_seconds=1, max_duration_seconds=15,
-    supports_reference_audio=True,
+    supports_reference_audio=True, supports_audio_output=True,
     aspect_ratios=("1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"),
     notes="480p/720p/1080p; up to 7 reference images and 3 preset voices.",
     source_urls=("https://docs.x.ai/developers/model-capabilities/video/generation",
@@ -332,8 +377,8 @@ _LIMITS["stable-image-ultra"] = ModelLimits(
 )
 _svd = ModelLimits(
     modality="video", input_modalities=(_IMAGE,),
-    supports_first_frame=True, max_fps=25,
-    notes="Image-to-video only (init_image required, no text-to-video); motion_bucket_id 1-255.",
+    supports_first_frame=True, max_fps=25, supports_audio_output=False,
+    notes="Image-to-video only (init_image required, no text-to-video); silent; motion_bucket_id 1-255.",
     source_urls=("https://platform.stability.ai/docs/api-reference",
                  "https://docs.api.nvidia.com/nim/reference/stabilityai-stable-video-diffusion"),
 )
@@ -404,9 +449,9 @@ _LIMITS["doubao-seedance-2-0-260128"] = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE, _VIDEO, _AUDIO),
     supports_first_frame=True, supports_last_frame=True,
     supports_reference_video=True, supports_reference_audio=True,
-    min_duration_seconds=4, max_duration_seconds=15,
+    min_duration_seconds=4, max_duration_seconds=15, supports_audio_output=True,
     aspect_ratios=("16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"),
-    notes="Omni (T2V/I2V/r2v/edit/extend); up to 3 reference videos + 3 reference audios; 4k is 10-bit.",
+    notes="Omni (T2V/I2V/r2v/edit/extend) with generated audio; up to 3 reference videos + 3 reference audios; 4k is 10-bit.",
     source_urls=("https://docs.volcengine.com/docs/6492/2595411",
                  "https://www.volcengine.com/docs/82379/1330310"),
 )
@@ -452,7 +497,7 @@ _LIMITS["wan2.6-image"] = ModelLimits(
 )
 _wanx21_t2v = ModelLimits(
     modality="video", input_modalities=(_TEXT,),
-    max_duration_seconds=5,
+    max_duration_seconds=5, supports_audio_output=False,
     notes="T2V, silent; 5s fixed, 30 fps, MP4 (H.264).",
     source_urls=("https://help.aliyun.com/en/model-studio/video-generate-edit-model",
                  "https://help.aliyun.com/en/model-studio/text-to-video-guide"),
@@ -462,6 +507,7 @@ _LIMITS["wanx2.1-t2v-plus"] = replace(_wanx21_t2v, supported_sizes=("720P",))
 _wanx21_i2v = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE),
     supports_first_frame=True, min_duration_seconds=3, max_duration_seconds=5,
+    supports_audio_output=False,
     notes="I2V (first-frame image via img_url), silent; 30 fps, MP4.",
     source_urls=("https://help.aliyun.com/en/model-studio/video-generate-edit-model",
                  "https://help.aliyun.com/en/model-studio/text-to-video-guide"),
@@ -610,4 +656,9 @@ def limits_for(model: str, modality: str) -> ModelLimits:
     return entry
 
 
-__all__ = ["ModelLimits", "limits_for"]
+def builtin_limits() -> dict[str, ModelLimits]:
+    """The built-in catalogue (a copy; :class:`mm_gateway.models.catalog.Catalog` merges overrides)."""
+    return dict(_LIMITS)
+
+
+__all__ = ["Lifecycle", "ModelLimits", "builtin_limits", "limits_for", "utc_today"]

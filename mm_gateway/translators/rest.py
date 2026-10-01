@@ -15,6 +15,7 @@ from mm_gateway.schemas.api import (
     MusicRequest,
     MusicTaskResponse,
     ResourceLinks,
+    RoutingInfo,
     TaskError,
     TextInput,
     Usage,
@@ -168,6 +169,22 @@ def _error(task: UnifiedImageTask | UnifiedVideoTask | UnifiedMusicTask
     return TaskError(code=f"generation_{task.status}", message=task.error)
 
 
+def _routing(record: TaskRecord) -> RoutingInfo | None:
+    return RoutingInfo.model_validate(record.routing) if record.routing else None
+
+
+def _with_cost(usage: Usage | None, task: UnifiedImageTask | UnifiedVideoTask | UnifiedMusicTask,
+               record: TaskRecord) -> Usage | None:
+    """Mark a provider-reported cost, or fill in auto mode's estimate for a succeeded task."""
+    if usage is not None and usage.cost is not None:
+        return usage.model_copy(update={"cost_source": "provider", "currency": "USD"})
+    estimate = (record.routing or {}).get("estimated_cost")
+    if task.status != "succeeded" or estimate is None:
+        return usage
+    base = usage or Usage()
+    return base.model_copy(update={"cost": estimate, "cost_source": "estimate", "currency": "USD"})
+
+
 def to_image_response(task: UnifiedImageTask, record: TaskRecord, *, self_url: str
                       ) -> ImageTaskResponse:
     outputs = [
@@ -195,7 +212,8 @@ def to_image_response(task: UnifiedImageTask, record: TaskRecord, *, self_url: s
         status=task.status,
         outputs=outputs,
         error=_error(task),
-        usage=usage,
+        usage=_with_cost(usage, task, record),
+        routing=_routing(record),
         metadata=record.metadata,
         created_at=_created_at(task, record),
         completed_at=_completed_at(task),
@@ -225,7 +243,8 @@ def to_video_response(task: UnifiedVideoTask, record: TaskRecord, *, self_url: s
         status=task.status,
         outputs=outputs,
         error=_error(task),
-        usage=usage,
+        usage=_with_cost(usage, task, record),
+        routing=_routing(record),
         metadata=record.metadata,
         created_at=_created_at(task, record),
         completed_at=_completed_at(task),
@@ -257,7 +276,8 @@ def to_music_response(task: UnifiedMusicTask, record: TaskRecord, *, self_url: s
         outputs=outputs,
         lyrics=task.lyrics,
         error=_error(task),
-        usage=usage,
+        usage=_with_cost(usage, task, record),
+        routing=_routing(record),
         metadata=record.metadata,
         created_at=_created_at(task, record),
         completed_at=_completed_at(task),

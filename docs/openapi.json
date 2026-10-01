@@ -1,6 +1,101 @@
 {
   "components": {
     "schemas": {
+      "BudgetDirective": {
+        "additionalProperties": false,
+        "description": "A client-chosen spend bucket within the key, optionally self-capped.",
+        "properties": {
+          "limit_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Self-imposed cap for the scope in USD (the operator's scope cap still applies).",
+            "title": "Limit Usd"
+          },
+          "scope": {
+            "description": "Spend bucket name (a project, a customer, a batch).",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:/-]+$",
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "BudgetDirective",
+        "type": "object"
+      },
+      "BudgetState": {
+        "additionalProperties": true,
+        "description": "The state of one budget (a key's period or a client scope).",
+        "properties": {
+          "limit_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Usd"
+          },
+          "remaining_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Usd"
+          },
+          "reserved_usd": {
+            "default": 0.0,
+            "title": "Reserved Usd",
+            "type": "number"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "spent_usd": {
+            "default": 0.0,
+            "title": "Spent Usd",
+            "type": "number"
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tasks"
+          }
+        },
+        "required": [],
+        "title": "BudgetState",
+        "type": "object"
+      },
       "Dimensions": {
         "additionalProperties": false,
         "description": "Exact output dimensions in pixels.",
@@ -21,6 +116,129 @@
           "height"
         ],
         "title": "Dimensions",
+        "type": "object"
+      },
+      "EstimateCandidate": {
+        "additionalProperties": true,
+        "properties": {
+          "admissible": {
+            "default": true,
+            "title": "Admissible",
+            "type": "boolean"
+          },
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "lifecycle": {
+            "default": "active",
+            "enum": [
+              "active",
+              "deprecated",
+              "retired"
+            ],
+            "title": "Lifecycle",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the candidate is not admissible: limits, retired, max_cost, unpriced or budget.",
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "title": "EstimateCandidate",
+        "type": "object"
+      },
+      "EstimateResponse": {
+        "additionalProperties": true,
+        "description": "The routing and cost a create would get, without creating a task.",
+        "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/EstimateCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "currency": {
+            "const": "USD",
+            "default": "USD",
+            "title": "Currency",
+            "type": "string"
+          },
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "modality": {
+            "enum": [
+              "image",
+              "video",
+              "music"
+            ],
+            "title": "Modality",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "object": {
+            "const": "estimate",
+            "default": "estimate",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "modality"
+        ],
+        "title": "EstimateResponse",
         "type": "object"
       },
       "HealthResponse": {
@@ -415,6 +633,16 @@
             "title": "Outputs",
             "type": "array"
           },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "enum": [
               "pending",
@@ -580,6 +808,40 @@
           "data"
         ],
         "title": "ModelListResponse",
+        "type": "object"
+      },
+      "ModelSpend": {
+        "additionalProperties": true,
+        "properties": {
+          "modality": {
+            "enum": [
+              "image",
+              "video",
+              "music"
+            ],
+            "title": "Modality",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "spent_usd": {
+            "default": 0.0,
+            "title": "Spent Usd",
+            "type": "number"
+          },
+          "tasks": {
+            "default": 0,
+            "title": "Tasks",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "model",
+          "modality"
+        ],
+        "title": "ModelSpend",
         "type": "object"
       },
       "MusicAudioInput": {
@@ -1124,6 +1386,16 @@
             "title": "Outputs",
             "type": "array"
           },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "enum": [
               "pending",
@@ -1259,19 +1531,143 @@
       },
       "RoutingDirective": {
         "additionalProperties": false,
-        "description": "Select a server-defined, provider-neutral routing policy.",
+        "description": "Steer auto mode: policy, ordering, cost ceiling, fallbacks and budget scope.\n\nSee docs/design/auto-mode.md. Every member is optional.",
         "properties": {
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetDirective"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fallback": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "same_model",
+                  "any"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pinned models only: `none` (default) tries one backend, `same_model` every backend/account serving the model, `any` also the replacement and the auto candidates when the model is retired or unavailable.",
+            "title": "Fallback"
+          },
+          "max_cost_usd": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hard per-task ceiling on the estimated cost in USD; unpriced models are excluded.",
+            "title": "Max Cost Usd"
+          },
+          "optimize": {
+            "anyOf": [
+              {
+                "enum": [
+                  "balanced",
+                  "cost",
+                  "latency"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How admissible candidates are ordered (default: the gateway's default, `balanced`).",
+            "title": "Optimize"
+          },
           "profile": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "description": "Gateway-defined routing profile, such as `quality`, `fast`, or `eu`. It never names a provider or backend.",
-            "minLength": 1,
-            "title": "Profile",
+            "title": "Profile"
+          }
+        },
+        "required": [],
+        "title": "RoutingDirective",
+        "type": "object"
+      },
+      "RoutingInfo": {
+        "additionalProperties": true,
+        "description": "How auto mode served a task (docs/design/auto-mode.md#fallbacks).",
+        "properties": {
+          "attempts": {
+            "default": 1,
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BudgetState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "fallback": {
+            "default": false,
+            "title": "Fallback",
+            "type": "boolean"
+          },
+          "fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Reason"
+          },
+          "optimize": {
+            "default": "balanced",
+            "title": "Optimize",
+            "type": "string"
+          },
+          "requested_model": {
+            "title": "Requested Model",
             "type": "string"
           }
         },
         "required": [
-          "profile"
+          "requested_model"
         ],
-        "title": "RoutingDirective",
+        "title": "RoutingInfo",
         "type": "object"
       },
       "TaskError": {
@@ -1328,6 +1724,33 @@
               }
             ],
             "title": "Cost"
+          },
+          "cost_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "provider",
+                  "estimate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Source"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "const": "USD",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
           },
           "duration_seconds": {
             "anyOf": [
@@ -1387,6 +1810,93 @@
         },
         "required": [],
         "title": "Usage",
+        "type": "object"
+      },
+      "UsagePeriod": {
+        "additionalProperties": true,
+        "properties": {
+          "end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "kind": {
+            "enum": [
+              "day",
+              "month",
+              "total"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "UsagePeriod",
+        "type": "object"
+      },
+      "UsageResponse": {
+        "additionalProperties": true,
+        "description": "Spend, reservations and budgets of the authenticated key.",
+        "properties": {
+          "currency": {
+            "const": "USD",
+            "default": "USD",
+            "title": "Currency",
+            "type": "string"
+          },
+          "key": {
+            "$ref": "#/components/schemas/BudgetState"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelSpend"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "object": {
+            "const": "usage",
+            "default": "usage",
+            "title": "Object",
+            "type": "string"
+          },
+          "period": {
+            "$ref": "#/components/schemas/UsagePeriod"
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/BudgetState"
+            },
+            "title": "Scopes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "period",
+          "key"
+        ],
+        "title": "UsageResponse",
         "type": "object"
       },
       "VideoAudioInput": {
@@ -1839,6 +2349,16 @@
             },
             "title": "Outputs",
             "type": "array"
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RoutingInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
             "enum": [
@@ -3977,6 +4497,244 @@
         ]
       }
     },
+    "/v1/images/estimate": {
+      "post": {
+        "operationId": "estimateImage",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateResponse"
+                }
+              }
+            },
+            "description": "How auto mode would route the request, and its estimated cost."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/v1/images/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/images/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/v1/images/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to perform the request (forbidden)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/images/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/images/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/v1/images/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service returned an error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/images/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/v1/images/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Estimate an image request",
+        "tags": [
+          "images"
+        ]
+      }
+    },
     "/v1/images/{image_id}": {
       "get": {
         "operationId": "getImage",
@@ -5334,6 +6092,244 @@
         ]
       }
     },
+    "/v1/music/estimate": {
+      "post": {
+        "operationId": "estimateMusic",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MusicRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateResponse"
+                }
+              }
+            },
+            "description": "How auto mode would route the request, and its estimated cost."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/v1/music/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/music/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/v1/music/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to perform the request (forbidden)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/music/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/music/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/v1/music/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service returned an error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/music/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/v1/music/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Estimate a music request",
+        "tags": [
+          "music"
+        ]
+      }
+    },
     "/v1/music/{music_id}": {
       "get": {
         "operationId": "getMusic",
@@ -5638,6 +6634,257 @@
         "summary": "Retrieve a music task",
         "tags": [
           "music"
+        ]
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "operationId": "getUsage",
+        "parameters": [
+          {
+            "description": "Report only this budget scope.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9._:/-]+$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Report only this budget scope.",
+              "title": "Scope"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResponse"
+                }
+              }
+            },
+            "description": "Spend, reservations and budgets for the current period."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/v1/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/v1/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to perform the request (forbidden)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/v1/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service returned an error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/v1/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Spend and budgets of the authenticated key",
+        "tags": [
+          "usage"
         ]
       }
     },
@@ -5966,6 +7213,244 @@
           }
         ],
         "summary": "Create a video task",
+        "tags": [
+          "videos"
+        ]
+      }
+    },
+    "/v1/videos/estimate": {
+      "post": {
+        "operationId": "estimateVideo",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VideoRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateResponse"
+                }
+              }
+            },
+            "description": "How auto mode would route the request, and its estimated cost."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Invalid request",
+                    "value": {
+                      "code": "invalid_request_error",
+                      "detail": "The routing profile is unavailable.",
+                      "instance": "/v1/videos/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 400,
+                      "title": "Invalid Request Error",
+                      "type": "urn:mm-gateway:problem:invalid_request_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Invalid request (invalid_request_error / unsupported_feature)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/videos/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Forbidden",
+                    "value": {
+                      "code": "forbidden",
+                      "detail": "The API key is not allowed to perform this request.",
+                      "instance": "/v1/videos/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 403,
+                      "title": "Forbidden",
+                      "type": "urn:mm-gateway:problem:forbidden"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Key not allowed to perform the request (forbidden)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/videos/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/videos/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service error",
+                    "value": {
+                      "code": "generation_service_error",
+                      "detail": "The generation service returned an error.",
+                      "instance": "/v1/videos/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 502,
+                      "title": "Generation Service Error",
+                      "type": "urn:mm-gateway:problem:generation_service_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service returned an error."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/videos/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          },
+          "504": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service timeout",
+                    "value": {
+                      "code": "generation_service_timeout",
+                      "detail": "The generation service timed out.",
+                      "instance": "/v1/videos/estimate",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 504,
+                      "title": "Generation Service Timeout",
+                      "type": "urn:mm-gateway:problem:generation_service_timeout"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Generation service timed out."
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Estimate a video request",
         "tags": [
           "videos"
         ]
