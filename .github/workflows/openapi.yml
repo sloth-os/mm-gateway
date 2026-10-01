@@ -452,13 +452,23 @@ jobs:
   # install from the repo URL; the generated ``package.json`` is completed
   # before publishing so a follow-up job (with ``NODE_AUTH_TOKEN``) can ship it
   # to the GitHub npm registry as ``@sloth-os/mm-gateway-ts``.
+  #
+  # Note GEN_VERSION is per-job: the TypeScript job pins 7.25.0 (all others
+  # 7.24.0) because the v7.24 typescript-axios template emits an untyped
+  # ``createRequestFunction`` whose inferred return type references axios's
+  # internal ``unique symbol`` declarations — fine with the axios ^1.7 pin the
+  # template shipped, but not with the ^1.16 it also emitted once that version
+  # existed (tsc fails with TS2527). v7.25 annotates the return type
+  # (``Promise<R>``) and bumps its axios template pin, so it compiles as-is.
   sdk-typescript:
     name: Publish TypeScript SDK
     needs: generate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      GEN_VERSION: "7.24.0"
+      # Overrides nothing — this job keeps its own version; see the comment
+      # above for why it differs from the Go/Python jobs' 7.24.0 pin.
+      GEN_VERSION: "7.25.0"
       SDK_REPO: sloth-os/mm-gateway-ts
     steps:
       - name: Download openapi.json artifact
@@ -473,11 +483,6 @@ jobs:
         # classes/modules. The generated ``package.json`` is completed below
         # (scoped name, GitHub npm registry, SDK repo URL) so a follow-up
         # publish step can ship it under ``@sloth-os`` without regenerating.
-        # axios is pinned to a 1.7.x line afterwards: the generated sources
-        # reference axios's internal ``unique symbol`` types, and newer axios
-        # (≥1.8) moves those into an inaccessible declaration that fails
-        # ``tsc`` with TS2527 on the inferred return type of
-        # ``createRequestFunction``.
         run: |
           mkdir -p sdk-out
           docker run --rm \
@@ -498,7 +503,6 @@ jobs:
           pkg = pathlib.Path("sdk-out/package.json")
           data = json.loads(pkg.read_text())
           data["name"] = "@sloth-os/mm-gateway-ts"
-          data["dependencies"]["axios"] = "^1.7.9"
           data["publishConfig"] = {"registry": "https://npm.pkg.github.com"}
           data["repository"] = {
               "type": "git",
