@@ -516,7 +516,7 @@ routes or schemas change:
 |---|---|---|
 | Go | [`sloth-os/mm-gateway-go`](https://github.com/sloth-os/mm-gateway-go) | `go get github.com/sloth-os/mm-gateway-go` |
 | Python | [`sloth-os/mm-gateway-py`](https://github.com/sloth-os/mm-gateway-py) | `pip install git+https://github.com/sloth-os/mm-gateway-py.git` |
-| Node.js | [`sloth-os/mm-gateway-js`](https://github.com/sloth-os/mm-gateway-js) | `npm install @sloth-os/mm-gateway-js` |
+| TypeScript | [`sloth-os/mm-gateway-ts`](https://github.com/sloth-os/mm-gateway-ts) | `npm install @sloth-os/mm-gateway-ts` |
 
 Each SDK is regenerated from the published OpenAPI spec by the
 `openapi.yml` workflow (via `openapi-generator-cli`), verified to compile, and

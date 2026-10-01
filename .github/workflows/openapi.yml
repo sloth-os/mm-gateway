@@ -11,9 +11,9 @@ name: OpenAPI docs
 #    dedicated repo, so consumers install a typed client instead of
 #    hand-rolling HTTP:
 #
-#    - Go       → ``sloth-os/mm-gateway-go``  (``go get github.com/sloth-os/mm-gateway-go``)
-#    - Python   → ``sloth-os/mm-gateway-py``  (``pip install git+https://github.com/sloth-os/mm-gateway-py.git``)
-#    - Node.js  → ``sloth-os/mm-gateway-js``  (``npm install @sloth-os/mm-gateway-js``)
+#    - Go        → ``sloth-os/mm-gateway-go``  (``go get github.com/sloth-os/mm-gateway-go``)
+#    - Python    → ``sloth-os/mm-gateway-py``  (``pip install git+https://github.com/sloth-os/mm-gateway-py.git``)
+#    - TypeScript → ``sloth-os/mm-gateway-ts`` (``npm install @sloth-os/mm-gateway-ts``)
 #
 #    The cross-repo push needs a PAT (the default ``GITHUB_TOKEN`` is scoped to
 #    this repo) stored as the ``SDK_PUSH_TOKEN`` secret (repo Settings → Secrets
@@ -232,8 +232,9 @@ jobs:
   # - Python: the per-model tests compile fine; only the callback-style
   #   duplicate methods were a problem, and that was fixed at the spec level
   #   (duplicate ``tags`` on meta routes produced doubled method names).
-  # - JavaScript: same ``_0`` story as Go for its callback duplicates, also
-  #   fixed at the spec level.
+  # - TypeScript: uses the ``typescript-axios`` generator (the ``typescript``
+  #   generator's output needs a hand-written build harness), which emits a
+  #   ready-to-compile ``tsconfig.json`` + ``package.json``.
   sdk-go:
     name: Publish Go SDK
     needs: generate
@@ -442,18 +443,23 @@ jobs:
           git push origin HEAD:main
           echo "✓ pushed Python SDK to ${SDK_REPO}" >> "$GITHUB_STEP_SUMMARY"
 
-  # Node.js SDK (openapi-generator "javascript" generator). The generated
-  # ``package.json`` is completed before publishing so a plain ``npm publish``
-  # (or a future workflow job with ``NODE_AUTH_TOKEN``) can ship it to the
-  # GitHub npm registry as ``@sloth-os/mm-gateway-js``.
-  sdk-javascript:
-    name: Publish Node.js SDK
+  # TypeScript SDK (openapi-generator ``typescript-axios`` generator). The
+  # plain ``typescript`` generator (``-g typescript``) emits sources that need
+  # a hand-rolled build harness before they compile, so the workflow uses
+  # ``typescript-axios`` instead: it ships a ready-made ``tsconfig.json`` and
+  # ``package.json``, so the verification step only needs ``npm install`` +
+  # ``npm run build``. Published to ``sloth-os/mm-gateway-ts`` so consumers
+  # install from the repo URL; the generated ``package.json`` is completed
+  # before publishing so a follow-up job (with ``NODE_AUTH_TOKEN``) can ship it
+  # to the GitHub npm registry as ``@sloth-os/mm-gateway-ts``.
+  sdk-typescript:
+    name: Publish TypeScript SDK
     needs: generate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       GEN_VERSION: "7.24.0"
-      SDK_REPO: sloth-os/mm-gateway-js
+      SDK_REPO: sloth-os/mm-gateway-ts
     steps:
       - name: Download openapi.json artifact
         uses: actions/download-artifact@v4
@@ -461,12 +467,17 @@ jobs:
           name: openapi-spec
           path: spec
 
-      - name: Generate JavaScript SDK
-        # ``usePromises`` makes every API method return a Promise instead of
-        # taking a node-style callback; ``useES6`` emits classes/modules. The
-        # javascript generator has no scoped-package support (it derives
-        # ``name`` from projectName, unscoped), so the workflow rewrites
-        # ``package.json`` below to publish under ``@sloth-os``.
+      - name: Generate TypeScript SDK
+        # Same container recipe as the Go job: map the workspace, run as the
+        # runner uid, pin the generator version. ``supportsES6`` emits modern
+        # classes/modules. The generated ``package.json`` is completed below
+        # (scoped name, GitHub npm registry, SDK repo URL) so a follow-up
+        # publish step can ship it under ``@sloth-os`` without regenerating.
+        # axios is pinned to a 1.7.x line afterwards: the generated sources
+        # reference axios's internal ``unique symbol`` types, and newer axios
+        # (≥1.8) moves those into an inaccessible declaration that fails
+        # ``tsc`` with TS2527 on the inferred return type of
+        # ``createRequestFunction``.
         run: |
           mkdir -p sdk-out
           docker run --rm \
@@ -474,28 +485,29 @@ jobs:
             -v "$PWD:/local" \
             openapitools/openapi-generator-cli:v${GEN_VERSION} generate \
               -i /local/spec/openapi.json \
-              -g javascript \
+              -g typescript-axios \
               -o /local/sdk-out \
-              --additional-properties=projectName=mm-gateway-js,projectVersion=0.1.0,usePromises=true,useES6=true
+              --additional-properties=npmName=mm-gateway-ts,npmVersion=0.1.0,supportsES6=true
           rm -f sdk-out/git_push.sh
-          # Scope the npm package to the org: the javascript generator always
-          # emits an unscoped ``name`` from projectName, so patch it here. Also
-          # target the GitHub npm registry so a follow-up publish step can ship
-          # it under ``@sloth-os``.
+          # Scope the npm package to the org and point the repository field at
+          # the SDK repo so a follow-up publish step can ship it under
+          # ``@sloth-os`` to the GitHub npm registry. The generator derives
+          # ``name`` from npmName but always emits it unscoped, so patch it.
           python3 - <<'PY'
           import json, pathlib
           pkg = pathlib.Path("sdk-out/package.json")
           data = json.loads(pkg.read_text())
-          data["name"] = "@sloth-os/mm-gateway-js"
+          data["name"] = "@sloth-os/mm-gateway-ts"
+          data["dependencies"]["axios"] = "^1.7.9"
           data["publishConfig"] = {"registry": "https://npm.pkg.github.com"}
           data["repository"] = {
               "type": "git",
-              "url": "git+https://github.com/sloth-os/mm-gateway-js.git",
+              "url": "git+https://github.com/sloth-os/mm-gateway-ts.git",
           }
           pkg.write_text(json.dumps(data, indent=2) + "\n")
           print("package.json name:", data["name"])
           PY
-          echo "## Generated Node.js SDK tree" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Generated TypeScript SDK tree" >> "$GITHUB_STEP_SUMMARY"
           find sdk-out -maxdepth 2 -type f | sort | sed 's/^/    /' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Node
@@ -504,22 +516,23 @@ jobs:
           node-version: "22"
 
       - name: Verify SDK builds
-        # ``npm install`` runs the ``prepare`` script (babel → dist/), proving
-        # the generated sources compile. The build needs the babel toolchain
-        # pinned in the generated devDependencies; installing is the gate.
+        # ``npm install`` pulls the dev toolchain pinned in the generated
+        # devDependencies (typescript); ``npm run build`` runs the generated
+        # ``tsc`` build (CJS + ESM), proving the emitted ``.ts`` sources
+        # compile.
         working-directory: sdk-out
         run: |
           npm install --no-audit --no-fund
-          npm test -- --exit || true
+          npm run build
 
-      - name: Publish to sloth-os/mm-gateway-js
+      - name: Publish to sloth-os/mm-gateway-ts
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           SDK_PUSH_TOKEN: ${{ secrets.SDK_PUSH_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${SDK_PUSH_TOKEN}" ]; then
-            echo "SDK_PUSH_TOKEN secret is not set — skipping Node.js SDK push."
+            echo "SDK_PUSH_TOKEN secret is not set — skipping TypeScript SDK push."
             echo "Create it in repo Settings → Secrets and variables → Actions"
             echo "with a PAT (repo scope) for ${SDK_REPO}."
             exit 0
@@ -541,13 +554,13 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "Node.js SDK unchanged — nothing to push"
+            echo "TypeScript SDK unchanged — nothing to push"
             exit 0
           fi
-          git commit -m "chore(sdk): regenerate Node.js SDK from openapi spec
+          git commit -m "chore(sdk): regenerate TypeScript SDK from openapi spec
 
           Auto-generated by the openapi.yml workflow (openapi-generator-cli
           v${GEN_VERSION}) from the gateway's current routes and schemas.
           Co-Authored-By: Claude <noreply@anthropic.com>"
           git push origin HEAD:main
-          echo "✓ pushed Node.js SDK to ${SDK_REPO}" >> "$GITHUB_STEP_SUMMARY"
+          echo "✓ pushed TypeScript SDK to ${SDK_REPO}" >> "$GITHUB_STEP_SUMMARY"
