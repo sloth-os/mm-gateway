@@ -103,6 +103,10 @@ class ModelLimits:
     # video of the same length, size and frame rate, white where the subject is
     # (docs/design/auto-mode.md#capabilities-segmentation).
     supports_segmentation: bool | None = None
+    # Performance models take a driving ``reference_video`` (a person's performance: expressions, lips, head and body
+    # motion, timing) and a ``first_frame`` with the character, and return the character performing it
+    # (docs/design/auto-mode.md#capabilities-performance).
+    supports_performance: bool | None = None
     # Model lifecycle (ISO dates, UTC). From ``retired_on`` the model is never
     # auto-routed and a pinned request fails with ``model_retired`` unless it
     # allows a fallback; ``deprecated_on`` ranks it after active models.
@@ -150,7 +154,7 @@ class ModelLimits:
             "supports_reference_video", "supports_reference_audio",
             "supports_continuation_audio", "supports_lyrics", "supports_reference_image",
             "supports_audio_output", "supports_upscale", "supports_frame_interpolation",
-            "supports_segmentation", "deprecated_on", "retired_on", "replacement",
+            "supports_segmentation", "supports_performance", "deprecated_on", "retired_on", "replacement",
         ):
             value = getattr(self, key)
             if value is not None:

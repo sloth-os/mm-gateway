@@ -202,6 +202,17 @@ def test_catalog_declares_segmentation_models():
     assert "supports_segmentation" not in catalog.public_limits("veo-3.1-generate-preview", "video")
 
 
+def test_catalog_declares_performance_models():
+    catalog = Catalog(parse_overrides({
+        "my-act": {"modality": "video", "supports_first_frame": True, "supports_reference_video": True,
+                   "supports_performance": True, "max_duration_seconds": 30},
+    }), today=lambda: TODAY)
+    assert catalog.limits_for("my-act", "video").supports_performance is True
+    public = catalog.public_limits("my-act", "video")
+    assert public["supports_performance"] is True and public["supports_first_frame"] is True
+    assert "supports_performance" not in catalog.public_limits("veo-3.1-generate-preview", "video")
+
+
 @pytest.mark.parametrize("raw", [
     {"m": {"retired_on": "next tuesday"}},
     {"m": {"unknown_field": 1}},

@@ -114,6 +114,20 @@ catalog:
     my-matting-model: {modality: video, supports_reference_video: true, supports_segmentation: true}
 ```
 
+## Capabilities: performance
+
+Performance models animate a character from a person's performance (Runway Act-Two, Wan Animate and the like): they
+take a driving `reference_video` (expressions, lip movements, head and body motion, timing) and a `first_frame` with
+the character, and return the character performing it for the requested length (up to `max_duration_seconds`). They
+are listed with `supports_performance`; operators declare theirs in `catalog.models`:
+
+```yaml
+catalog:
+  models:
+    my-performance-model:
+      {modality: video, supports_first_frame: true, supports_reference_video: true, supports_performance: true}
+```
+
 ## Model lifecycle
 
 The catalogue records when a model stops being offered:
