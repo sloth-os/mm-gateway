@@ -192,6 +192,16 @@ def test_catalog_declares_multi_shot_and_enhancement_models():
     assert "max_shots" not in catalog.public_limits("veo-3.1-generate-preview", "video")
 
 
+def test_catalog_declares_segmentation_models():
+    catalog = Catalog(parse_overrides({
+        "my-matting": {"modality": "video", "supports_reference_video": True, "supports_segmentation": True},
+    }), today=lambda: TODAY)
+    assert catalog.limits_for("my-matting", "video").supports_segmentation is True
+    public = catalog.public_limits("my-matting", "video")
+    assert public["supports_segmentation"] is True and public["supports_reference_video"] is True
+    assert "supports_segmentation" not in catalog.public_limits("veo-3.1-generate-preview", "video")
+
+
 @pytest.mark.parametrize("raw", [
     {"m": {"retired_on": "next tuesday"}},
     {"m": {"unknown_field": 1}},

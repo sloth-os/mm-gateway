@@ -101,6 +101,19 @@ catalog:
     my-upscaler: {modality: video, supports_upscale: true, supports_frame_interpolation: true, max_fps: 60}
 ```
 
+## Capabilities: segmentation
+
+Segmentation models take a `reference_video` and a text prompt naming the subject ("the person", "the red car") and
+return a **matte**: a grayscale video of the same length, size and frame rate, white where the subject is and black
+elsewhere, which editors use as an alpha channel (Rideo's *Remove the background*). They are listed with
+`supports_segmentation`; operators declare theirs in `catalog.models`:
+
+```yaml
+catalog:
+  models:
+    my-matting-model: {modality: video, supports_reference_video: true, supports_segmentation: true}
+```
+
 ## Model lifecycle
 
 The catalogue records when a model stops being offered:
