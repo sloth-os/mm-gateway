@@ -96,6 +96,16 @@ backends:
       voice_presets:
         narrator: alloy
         warm: coral
+  - name: azure-speech
+    type: azure
+    api_key: ${AZURE_AUDIO_API_KEY:}
+    tags: [prod, speech]
+    extra:
+      region: ${AZURE_AUDIO_REGION:eastus}
+      # For a custom endpoint, set backend.base_url to the full SDK endpoint.
+      voice_presets:
+        default: en-US-AvaMultilingualNeural
+        narrator: en-US-JennyNeural
 
 # General pass-through proxies. A proxy forwards the *raw* request verbatim
 # (method, path, query, body, headers) to an upstream root URL, injecting one

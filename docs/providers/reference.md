@@ -243,6 +243,14 @@ differs.
   - Audio delivery = streamed bytes (`async for chunk in client.music.compose(**kwargs)` joined with `b"".join`), base64-encoded into `audio_b64`. `_media_type` maps `audio_format` → MIME (`mp3`→`audio/mpeg`, `wav`→`audio/wav`, `ogg`→`audio/ogg`, `aac`→`audio/aac`, default `audio/mpeg`). `usage = MusicUsage(duration=request.duration)`.
   - Errors: any `Exception` from the stream → `ProviderRequestError(502)`; no audio bytes → `TaskFailedError`; unknown task id → 404; missing prompt (no text part) → `ProviderRequestError(400)`.
 
+## azure — official `azure-cognitiveservices-speech` SDK
+
+- **Client**: `azure.cognitiveservices.speech.SpeechConfig(subscription=api_key, region=extra.region)` or `SpeechConfig(subscription=api_key, endpoint=base_url)`. A key and region/endpoint are required. The SDK is imported when a configured backend is built. Model `azure-tts` (alias `gateway-audio-azure`) selects the Azure speech service; `extra.voice_presets` maps gateway voices to native voice names, defaulting to `en-US-AvaMultilingualNeural`.
+- **Synthesis**: each request builds its own `SpeechSynthesizer(speech_config=config, audio_config=None)` and calls `speak_text_async(text).get()`. Locale/speed controls use escaped SSML and `speak_ssml_async(ssml).get()`. Blocking SDK work runs in `asyncio.to_thread`; the existing speech monitor caches terminal results without resubmission.
+- **Output**: `SpeechSynthesisOutputFormat` maps MP3, RIFF WAV, raw mono S16LE PCM and Ogg Opus to SDK formats. Completed `result.audio_data` becomes an inline data URI with sample rate, one channel and `result.audio_duration`; usage includes input characters and duration. Encoding combinations and the 64 KiB UTF-8 message limit are preflighted for routing and estimates.
+- **Configuration**: environment `AZURE_AUDIO_API_KEY` / `AZURE_AUDIO_REGION` (also `SPEECH_KEY` / `SPEECH_REGION`); a custom SDK endpoint uses `AZURE_AUDIO_BASE_URL` / `SPEECH_ENDPOINT`. Optional deployed custom-voice `extra.endpoint_id` and `extra.language` are applied to the SDK config. Named credential accounts inherit/override region and endpoint. HTTP proxies use `SpeechConfig.set_proxy` on Linux/Windows; SOCKS and HTTPS proxy URLs are rejected.
+- **Errors and capabilities**: missing key or region/endpoint skips the backend; canceled/incomplete results, empty bytes and SDK exceptions become cached failed speech tasks. Gateway cloning, separate instructions, seeds, remote delivery and unsupported encoding combinations are excluded before a paid operation. See [speech research and mappings](../design/audio.md) for official sources and format details.
+
 ## minimax — REST over `https://api.minimax.io`
 
 - **Speech and voice cloning** use `/v1/t2a_v2`, `/v1/files/upload` and

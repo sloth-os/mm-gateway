@@ -272,7 +272,7 @@ supports them.
 ### Speech and voice cloning
 
 `POST /v1/audio` synthesizes the text parts in order. Omit `model` to route
-by the speech limits. OpenAI, ElevenLabs and MiniMax speech adapters are
+by the speech limits. OpenAI, ElevenLabs, MiniMax and Azure speech adapters are
 available; the existing music endpoints keep their music-generation semantics.
 
 ```json
@@ -289,6 +289,33 @@ include `instructions`, ISO `language`, `sample_rate_hz`, `bitrate_kbps`, `seed`
 and `delivery`. Unsupported controls and encoding combinations exclude a
 candidate before any upstream generation. `inline` is the default delivery;
 MiniMax also supports `remote`. Instructions are separate from the spoken text.
+
+Azure Text to Speech uses the official `azure-cognitiveservices-speech` SDK.
+Configure a Speech resource key and region, then select `azure-tts` (or the
+`gateway-audio-azure` alias):
+
+```yaml
+backends:
+  - name: azure-speech
+    type: azure
+    api_key: ${AZURE_AUDIO_API_KEY}
+    tags: [speech]
+    extra:
+      region: ${AZURE_AUDIO_REGION}
+      voice_presets:
+        default: en-US-AvaMultilingualNeural
+        narrator: en-US-JennyNeural
+```
+
+Azure supports inline MP3, WAV, raw 16-bit mono PCM, and Ogg Opus. Speed is
+0.5–2; `language` accepts locales such as `fr-FR`. Switching a voice to another
+locale requires multilingual support.
+For a custom endpoint, set `base_url` to its full SDK endpoint URL instead of
+`extra.region`. Existing named credential accounts can each override the region
+or endpoint. Azure speech does not expose cloning through `/v1/voices`.
+Environment-only configuration accepts `AZURE_AUDIO_API_KEY` and
+`AZURE_AUDIO_REGION`, or the SDK quickstart's `SPEECH_KEY` and `SPEECH_REGION`.
+Set `DEFAULT_AUDIO_PROVIDER=azure-audio` to make it the default backend.
 
 Clone an authorized speaker with `POST /v1/voices`:
 
@@ -562,7 +589,7 @@ ownership checks, and idempotency keys remain valid across instances. A custom
 store can be injected with `create_app(settings, task_store=...)`.
 
 Supported adapter types are `openai`, `google`, `vertex`, `xai`, `volcengine`,
-`flux`, `openrouter`, `dashscope`, `stability`, `elevenlabs`, `minimax`,
+`flux`, `openrouter`, `dashscope`, `stability`, `elevenlabs`, `minimax`, `azure`,
 `udioapi`, `mureka`, and `acestep`. See
 [`docs/providers/reference.md`](docs/providers/reference.md) for backend wire
 details and [`examples/mm-gateway.yaml`](examples/mm-gateway.yaml) for a larger
@@ -590,7 +617,9 @@ authenticated with the ADC bearer token instead of an `x-goog-api-key`.
 
 Every backend provider's outbound SDK/httpx traffic **and** every pass-through
 proxy's HTTP forwarder and WebSocket bridge can be routed through an HTTP or
-SOCKS5 proxy. Set the global default once, then override it per backend or per
+SOCKS5 proxy. Azure's native Speech SDK supports HTTP proxies only (on Linux
+and Windows); unsupported proxy schemes are rejected when its backend is built.
+Set the global default once, then override it per backend or per
 proxy:
 
 ```yaml

@@ -12,6 +12,7 @@ audio model identifies its hosting speech service.
 | OpenAI | `POST /v1/audio/speech`; binary audio | Upload a consent recording to `/v1/audio/voice_consents`, then submit `audio_sample` and its consent id to `/v1/audio/voices` | 4,096 text characters; speed 0.25–4; MP3, Opus, AAC, FLAC, WAV, PCM. Separate instructions on GPT speech models. PCM is fixed 24 kHz mono S16LE. |
 | ElevenLabs | `POST /v1/text-to-speech/{voice_id}`; binary audio | Multipart `/v1/voices/add`, with one or more `files`, returns a voice id and verification flag | Multilingual v2: 10,000 characters; Flash/Turbo v2.5: 40,000; v3: 5,000. Speed 0.7–1.2; language and seed where supported. Encoding combines codec, sample rate and bitrate. |
 | MiniMax | `POST /v1/t2a_v2`; completed hex audio or a temporary URL | Upload a file with purpose `voice_clone`, then call `/v1/voice_clone` using the uploaded file id and a gateway-generated native voice id | Under 10,000 characters; speed 0.5–2; MP3, PCM, FLAC, WAV, Opus. Rates 8/16/22.05/24/32/44.1 kHz; MP3 bitrates 32/64/128/256 kbps. |
+| Azure | Official Speech SDK `SpeechSynthesizer.speak_text_async` / `speak_ssml_async`; in-memory `audio_data` | Not exposed by this adapter | 64 KiB escaped UTF-8 synthesis message; speed 0.5–2; MP3, WAV, mono S16LE PCM, Ogg Opus. Locale control via SSML on compatible multilingual voices. |
 
 OpenAI custom voices require approved account access, a matching speaker sample
 and consent recording, samples no longer than 30 seconds, and uploads no larger
@@ -51,6 +52,34 @@ same synthesis again. See [speech](https://platform.minimax.io/docs/api-referenc
 [file uploads](https://platform.minimax.io/docs/api-reference/file-management-upload),
 and the machine-readable [speech](https://platform.minimax.io/docs/api-reference/speech/t2a/api/openapi.json)
 and [cloning](https://platform.minimax.io/docs/api-reference/speech/voice-cloning/api/openapi.json) schemas.
+
+Azure uses `type: azure` and the gateway model id `azure-tts`; the
+`gateway-audio-azure` alias resolves to it. Authentication uses `api_key` plus
+`extra.region`, or `api_key` plus a full SDK endpoint in `base_url`. The SDK
+wait runs in a worker thread, and each request has its own config and
+synthesizer with `audio_config=None`. Synthesis runs once through the shared
+background monitor; cancellation, SDK exceptions and empty audio become
+cached failures. Output includes mono channel count, the chosen sample rate,
+audio duration, and input character usage.
+
+The default voice is `en-US-AvaMultilingualNeural`, with operator aliases in
+`extra.voice_presets`. `language` accepts locales such as `fr-FR`; changing a
+voice's language requires multilingual support. Speed uses escaped SSML prosody. Spoken text remains text,
+including angle brackets and ampersands. MP3 defaults to 24 kHz / 48 kbps and
+supports 16 kHz at 32/64/128 kbps, 24 kHz at 48/96/160 kbps, or 48 kHz at
+96/192 kbps. WAV/PCM support 8/16/22.05/24/44.1/48 kHz. Ogg Opus supports
+16/24/48 kHz with fixed codec bitrate. WAV/PCM/Opus default to 24 kHz.
+Separate instructions, seeds, remote delivery and gateway cloning are rejected
+before synthesis. A deployed custom voice can be configured as a preset with
+`extra.endpoint_id` and `extra.language` where required by its endpoint.
+The native SDK supports HTTP outbound proxies on Linux and Windows via
+`SpeechConfig.set_proxy`; other proxy schemes are rejected. For local Linux
+installations, install the SDK's required OpenSSL and ALSA libraries.
+See Microsoft's [synthesis guide](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/how-to-speech-synthesis),
+[SSML controls](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice),
+[output formats](https://learn.microsoft.com/en-us/python/api/azure-cognitiveservices-speech/azure.cognitiveservices.speech.speechsynthesisoutputformat),
+[quotas](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-services-quotas-and-limits),
+and [SDK installation](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/quickstarts/setup-platform?pivots=programming-language-python).
 
 ## Contract
 
@@ -147,12 +176,22 @@ keys:
 
 Named accounts use existing `credentials` configuration; their voice clones
 remain private to that credential. `extra.audio_model` extends the served
-catalogue, `extra.audio_base_url` overrides the shared endpoint, and the existing
+catalogue. REST speech adapters accept `extra.audio_base_url` to override the
+shared endpoint; Azure uses `base_url` for its SDK endpoint. The existing
 outbound proxy applies to speech calls and sample downloads. Environment-only
 deployments support `OPENAI_AUDIO_*`, `ELEVENLABS_AUDIO_*`, and `MINIMAX_AUDIO_*`
 (`API_KEY`/`API_KEYS`, `BASE_URL`, `MODEL`, `OUTBOUND_PROXY`). A split audio key
 creates a separate `<provider>-audio` backend; legacy shared provider keys also
 serve audio. Set `DEFAULT_AUDIO_PROVIDER` to select the default backend.
+
+Azure accepts `AZURE_AUDIO_API_KEY`/`AZURE_AUDIO_API_KEYS`,
+`AZURE_AUDIO_REGION`, `AZURE_AUDIO_BASE_URL`, `AZURE_AUDIO_MODEL`, and
+`AZURE_AUDIO_OUTBOUND_PROXY`, creating `azure-audio`. Shared `AZURE_API_KEY` /
+`AZURE_API_KEYS`, `AZURE_REGION`, `AZURE_BASE_URL`, and `AZURE_OUTBOUND_PROXY`
+are fallbacks. The official SDK quickstart variables `SPEECH_KEY`,
+`SPEECH_REGION`, and `SPEECH_ENDPOINT` are also accepted. Named credentials can
+override `extra.region` and `base_url` per account. Azure prices remain unknown
+until the operator configures the applicable `azure-tts` character/request rate.
 
 Prices vary by model and contract. Operators set `catalog.models.<id>.price`
 using `per_character` and/or `per_request` for speech and `per_clone` for voice

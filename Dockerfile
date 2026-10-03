@@ -74,6 +74,13 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     HOST=0.0.0.0 \
     PORT=8000
 
+# Azure's native Speech SDK needs ALSA and OpenSSL even for in-memory TTS.
+# The development package names work across Debian slim releases, including
+# releases where the runtime packages gained a t64 suffix.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libasound2-dev libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root user for the running process.
 RUN groupadd -r app && useradd -r -g app -d /app app \
     && mkdir -p /app/data && chown app:app /app/data

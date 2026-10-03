@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from mm_gateway.core.base import VoiceCloneProvider
+from mm_gateway.core.base import AudioProvider, VoiceCloneProvider
 from mm_gateway.core.exceptions import ProviderRequestError, ValidationError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._http import _map_status, make_client
@@ -33,7 +33,7 @@ def inline_audio(blob: bytes, fmt: str, **details: Any) -> AudioOutput:
                        mime_type=mime, **details)
 
 
-class SpeechTaskMixin(VoiceCloneProvider):
+class SpeechAudioTaskMixin(AudioProvider):
     """Each adapter/account owns its tasks. Failed synthesis is never re-issued."""
 
     default_voice = ""
@@ -82,23 +82,10 @@ class SpeechTaskMixin(VoiceCloneProvider):
         if reason := self.audio_request_error(request, request.model):
             raise ValidationError(reason)
 
-    async def _verification_required(self, native_voice_id: str) -> bool:
-        """Adapters that require upstream verification observe it without re-cloning."""
-        return True
-
     async def create_audio_task(self, request: UnifiedAudioRequest) -> UnifiedAudioTask:
         self._validate_request(request)
         task = UnifiedAudioTask(task_id=f"speech-{uuid.uuid4().hex}", provider=self.name,
                                 model=request.model, status="pending", created_at=int(time.time()))
-        self._state()[task.task_id] = {"request": request.model_copy(deep=True), "task": task, "lock": asyncio.Lock()}
-        return task.model_copy(deep=True)
-
-    async def create_voice_task(self, request: UnifiedVoiceRequest) -> UnifiedVoiceTask:
-        self._validate_request(request)
-        task = UnifiedVoiceTask(task_id=f"clone-{uuid.uuid4().hex}", provider=self.name,
-                                model=request.model, name=request.parameters.name, status="pending",
-                                account_id=self.backend.extra.get("__account_id", "default"),
-                                created_at=int(time.time()))
         self._state()[task.task_id] = {"request": request.model_copy(deep=True), "task": task, "lock": asyncio.Lock()}
         return task.model_copy(deep=True)
 
@@ -138,6 +125,23 @@ class SpeechTaskMixin(VoiceCloneProvider):
 
     async def get_audio_task(self, task_id: str) -> UnifiedAudioTask:
         return await self._observe(task_id, UnifiedAudioTask)
+
+
+class SpeechTaskMixin(SpeechAudioTaskMixin, VoiceCloneProvider):
+    """Speech task execution with reusable voice creation and verification."""
+
+    async def _verification_required(self, native_voice_id: str) -> bool:
+        """Adapters that require upstream verification observe it without re-cloning."""
+        return True
+
+    async def create_voice_task(self, request: UnifiedVoiceRequest) -> UnifiedVoiceTask:
+        self._validate_request(request)
+        task = UnifiedVoiceTask(task_id=f"clone-{uuid.uuid4().hex}", provider=self.name,
+                                model=request.model, name=request.parameters.name, status="pending",
+                                account_id=self.backend.extra.get("__account_id", "default"),
+                                created_at=int(time.time()))
+        self._state()[task.task_id] = {"request": request.model_copy(deep=True), "task": task, "lock": asyncio.Lock()}
+        return task.model_copy(deep=True)
 
     async def get_voice_task(self, task_id: str) -> UnifiedVoiceTask:
         return await self._observe(task_id, UnifiedVoiceTask)

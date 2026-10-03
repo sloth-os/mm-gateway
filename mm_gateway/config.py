@@ -791,21 +791,29 @@ class Settings:
                 base_url=base_url, tags=[], extra=extra,
                 credentials=creds,
             ))
-        for speech_type in ("openai", "elevenlabs", "minimax"):
+        for speech_type in ("openai", "elevenlabs", "minimax", "azure"):
             prefix = speech_type.upper()
             speech_key = _env(f"{prefix}_AUDIO_API_KEY")
             speech_creds = _credential_list(_env(f"{prefix}_AUDIO_API_KEYS"))
+            if speech_type == "azure" and not speech_key and not speech_creds:
+                speech_key = _env("AZURE_API_KEY") or _env("SPEECH_KEY")
+                speech_creds = _credential_list(_env("AZURE_API_KEYS"))
             if not speech_key and speech_creds:
                 speech_key = _cred_api_key(speech_creds[0])
             speech_model = _env(f"{prefix}_AUDIO_MODEL")
             speech_extra = {"audio_only": True}
+            if speech_type == "azure":
+                region = _env("AZURE_AUDIO_REGION") or _env("AZURE_REGION") or _env("SPEECH_REGION")
+                if region:
+                    speech_extra["region"] = region
             if speech_model:
                 speech_extra["audio_model"] = speech_model
             _with_outbound_proxy(speech_extra, _env(f"{prefix}_AUDIO_OUTBOUND_PROXY") or _env(f"{prefix}_OUTBOUND_PROXY"))
             if speech_key:
                 backends.append(BackendConfig(
                     name=f"{speech_type}-audio", type=speech_type, api_key=speech_key,
-                    base_url=_env(f"{prefix}_AUDIO_BASE_URL") or _env(f"{prefix}_BASE_URL"),
+                    base_url=_env(f"{prefix}_AUDIO_BASE_URL") or _env(f"{prefix}_BASE_URL")
+                             or (_env("SPEECH_ENDPOINT") if speech_type == "azure" else None),
                     extra=speech_extra, credentials=speech_creds,
                 ))
             elif not speech_creds:

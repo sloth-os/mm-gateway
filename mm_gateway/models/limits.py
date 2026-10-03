@@ -664,6 +664,17 @@ _LIMITS["ace-step-1.5"] = _acestep
 
 
 # Speech constraints checked against official APIs on 2026-10-03.
+_LIMITS["azure-tts"] = ModelLimits(
+    modality="audio", input_modalities=(_TEXT,), supports_voice_cloning=False,
+    supports_instructions=False, min_speed=0.5, max_speed=2,
+    supported_file_formats=("mp3", "wav", "pcm", "opus"),
+    supported_sample_rates=(8000, 16000, 22050, 24000, 44100, 48000),
+    source_urls=("https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-services-quotas-and-limits",
+                 "https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-synthesis-markup-voice",
+                 "https://learn.microsoft.com/en-us/python/api/azure-cognitiveservices-speech/azure.cognitiveservices.speech.speechsynthesisoutputformat"),
+    notes="Official Speech SDK; 64 KiB escaped synthesis message, up to 10 minutes of audio. "
+          "MP3 and Ogg Opus have format-specific sample rates; language requires a locale and a compatible multilingual voice.",
+)
 _openai_speech = ModelLimits(
     modality="audio", input_modalities=(_TEXT,), max_prompt_chars=4096,
     supports_voice_cloning=True, max_voice_samples=1, supports_instructions=True,
