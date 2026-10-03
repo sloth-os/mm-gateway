@@ -30,7 +30,7 @@ from mm_gateway.observability.logging import (
 from mm_gateway.billing import CostLedger
 from mm_gateway.proxy import ProxyRunner
 from mm_gateway.registry import Registry
-from mm_gateway.services import ImageService, MusicService, VideoService
+from mm_gateway.services import AudioService, ImageService, MusicService, VideoService, VoiceService
 from mm_gateway.tasks.store import TaskStore
 
 log = get_logger("app")
@@ -95,6 +95,11 @@ def create_app(
         ledger=ledger,
     )
     task_store = task_store or TaskStore()
+    voice_service = VoiceService(registry, max_sync_wait=settings.max_sync_wait,
+                                 poll_interval=settings.poll_interval, sync_default=False, ledger=ledger)
+    audio_service = AudioService(registry, task_store=task_store, voice_service=voice_service,
+                                 max_sync_wait=settings.max_sync_wait, poll_interval=settings.poll_interval,
+                                 sync_default=False, ledger=ledger)
     proxy_runner = ProxyRunner()
 
     @asynccontextmanager
@@ -106,12 +111,14 @@ def create_app(
         await image_service.aclose()
         await video_service.aclose()
         await music_service.aclose()
+        await audio_service.aclose()
+        await voice_service.aclose()
         await proxy_runner.aclose()
         log.info("gateway_stopping")
 
     app = FastAPI(
         title="mm-gateway",
-        description="Unified image, video, and music gateway with separate REST APIs.",
+        description="Provider-neutral image, video, music, speech and voice cloning gateway.",
         version="0.1.0", lifespan=lifespan,
     )
     app.state.settings = settings
@@ -119,6 +126,8 @@ def create_app(
     app.state.image_service = image_service
     app.state.video_service = video_service
     app.state.music_service = music_service
+    app.state.audio_service = audio_service
+    app.state.voice_service = voice_service
     app.state.task_store = task_store
     app.state.ledger = ledger
     app.state.proxy_runner = proxy_runner
@@ -223,6 +232,7 @@ def create_app(
 
     # Register routes.
     from mm_gateway.server.routes import (
+        audio_routes,
         billing_routes,
         image_routes,
         meta_routes,
@@ -234,6 +244,7 @@ def create_app(
     app.include_router(image_routes.router)
     app.include_router(video_routes.router)
     app.include_router(music_routes.router)
+    app.include_router(audio_routes.router)
     app.include_router(billing_routes.router)
     app.include_router(proxy_routes.router)
 
@@ -518,7 +529,7 @@ def _install_openapi_customization(app: FastAPI) -> None:
                     # set the schema/example on the media block directly rather
                     # than setdefault-ing the whole response block.
                     error_codes = ["400", "401", "403", "404", "422", "502", "503", "504"]
-                    if method == "post" and path in {"/v1/images", "/v1/videos", "/v1/music"}:
+                    if method == "post" and path in {"/v1/images", "/v1/videos", "/v1/music", "/v1/audio", "/v1/voices"}:
                         error_codes.append("409")
                     for code in error_codes:
                         resp = responses.setdefault(

@@ -1,4 +1,4 @@
-"""Public REST wire models for the image, video, and music APIs.
+"""Public REST wire models for media generation and reusable voices.
 
 Each modality has its own collection and item endpoints, while sharing the same
 resource lifecycle and top-level request vocabulary:
@@ -12,11 +12,13 @@ the adapters; upstream-specific option names never cross this boundary.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import datetime
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 TaskStatus = Literal["pending", "running", "succeeded", "failed", "cancelled", "expired"]
 Prompt = Annotated[str, Field(min_length=1)]
@@ -148,6 +150,7 @@ class Usage(BaseModel):
     cost: float | None = None
     cost_source: Literal["provider", "estimate"] | None = None
     currency: Literal["USD"] | None = None
+    input_characters: int | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
@@ -520,6 +523,171 @@ class MusicTaskResponse(BaseModel):
     links: ResourceLinks
 
 
+# Speech and reusable voice clones use the same envelope and task lifecycle.
+AudioFileFormat = Literal["mp3", "wav", "pcm", "flac", "opus", "aac"]
+AudioInputList = Annotated[list[TextInput], Field(min_length=1)]
+
+
+class AudioParameters(BaseModel):
+    model_config = _STRICT
+
+    voice: str = Field("default", min_length=1, max_length=128,
+                       pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                       description="A gateway voice id from GET /v1/voices.")
+    instructions: str | None = Field(None, min_length=1, max_length=4096)
+    language: str | None = Field(None, pattern=r"^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
+    speed: float | None = Field(None, ge=0.25, le=4, allow_inf_nan=False)
+    file_format: AudioFileFormat | None = None
+    sample_rate_hz: int | None = Field(None, ge=8000, le=48000)
+    bitrate_kbps: int | None = Field(None, ge=8, le=320)
+    delivery: Literal["inline", "remote"] | None = None
+    seed: int | None = Field(None, ge=0, le=4294967295)
+
+
+class AudioRequest(_RequestBase):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"example": {"model": "gateway-audio-pro",
+            "input": [{"type": "text", "text": "Welcome to the gateway."}],
+            "parameters": {"voice": "default", "file_format": "mp3"}}},
+    )
+    input: AudioInputList
+    parameters: AudioParameters = Field(default_factory=AudioParameters)
+
+    @model_validator(mode="after")
+    def _spoken_text(self) -> "AudioRequest":
+        if not any(part.text.strip() for part in self.input):
+            raise ValueError("speech input must contain spoken text")
+        return self
+
+
+class AudioOutput(BaseModel):
+    model_config = _RESPONSE
+
+    uri: MediaUri
+    mime_type: str | None = None
+    sample_rate_hz: int | None = None
+    channels: int | None = None
+    duration_seconds: float | None = None
+
+
+class AudioTaskResponse(BaseModel):
+    model_config = _RESPONSE
+
+    id: str
+    object: Literal["audio"] = "audio"
+    model: str
+    status: TaskStatus
+    outputs: list[AudioOutput] = Field(default_factory=list)
+    error: TaskError | None = None
+    usage: Usage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    completed_at: datetime | None = None
+    routing: RoutingInfo | None = None
+    links: ResourceLinks
+
+
+def _validate_voice_uri(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme == "data":
+        header, _, payload = value.partition(",")
+        if not header.lower().startswith("data:audio/"):
+            raise ValueError("voice samples must be audio data URIs")
+        # Bound memory before decoding; each sample is limited to 20 MiB.
+        if len(payload) > 4 * ((20 * 1024 * 1024 + 2) // 3):
+            raise ValueError("voice sample exceeds 20 MiB")
+        try:
+            blob = base64.b64decode(payload, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("voice sample contains invalid base64") from exc
+        if not blob or len(blob) > 20 * 1024 * 1024:
+            raise ValueError("voice sample must contain 1 byte to 20 MiB")
+    elif parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("voice samples require an HTTP(S) URL or audio data URI")
+    return value
+
+
+VoiceMediaUri = Annotated[MediaUri, AfterValidator(_validate_voice_uri)]
+
+
+class VoiceSampleInput(BaseModel):
+    model_config = _STRICT
+
+    type: Literal["audio"]
+    uri: VoiceMediaUri
+
+
+VoiceInputList = Annotated[list[VoiceSampleInput], Field(min_length=1, max_length=10)]
+
+
+class VoiceConsent(BaseModel):
+    model_config = _STRICT
+
+    granted: Literal[True] = Field(..., description="The speaker authorized creation and use of this voice.")
+    recording_uri: VoiceMediaUri | None = None
+    language: str | None = Field(None, pattern=r"^[a-z]{2,3}$")
+
+    @field_validator("granted", mode="before")
+    @classmethod
+    def _explicit_consent(cls, value: Any) -> bool:
+        if value is not True:
+            raise ValueError("consent.granted must be true")
+        return value
+
+    @model_validator(mode="after")
+    def _recording_language(self) -> "VoiceConsent":
+        if bool(self.recording_uri) != bool(self.language):
+            raise ValueError("consent recording_uri and language must be supplied together")
+        return self
+
+
+class VoiceParameters(BaseModel):
+    model_config = _STRICT
+
+    name: str = Field(..., min_length=1, max_length=128, pattern=r".*\S.*")
+    description: str | None = Field(None, max_length=1000)
+    remove_background_noise: bool | None = None
+
+
+class VoiceCloneRequest(_RequestBase):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"example": {
+            "input": [{"type": "audio", "uri": "data:audio/wav;base64,c2FtcGxl"}],
+            "parameters": {"name": "Narrator"}, "consent": {"granted": True}}},
+    )
+    input: VoiceInputList
+    parameters: VoiceParameters
+    consent: VoiceConsent
+
+
+class VoiceResponse(BaseModel):
+    model_config = _RESPONSE
+
+    id: str
+    object: Literal["voice"] = "voice"
+    kind: Literal["preset", "cloned"] = "cloned"
+    name: str
+    model: str | None = None
+    status: TaskStatus
+    verification_required: bool = False
+    error: TaskError | None = None
+    usage: Usage | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
+    routing: RoutingInfo | None = None
+    links: ResourceLinks
+
+
+class VoiceListResponse(BaseModel):
+    model_config = _RESPONSE
+
+    object: Literal["list"] = "list"
+    data: list[VoiceResponse]
+
+
 # --------------------------------------------------------------------------- #
 # Meta API
 # --------------------------------------------------------------------------- #
@@ -530,7 +698,7 @@ class ModelEntry(BaseModel):
 
     id: str
     object: Literal["model"] = "model"
-    modality: Literal["image", "video", "music"]
+    modality: Literal["image", "video", "music", "audio"]
 
 
 class ModelListResponse(BaseModel):
@@ -552,7 +720,7 @@ class ModelLimitsEntry(BaseModel):
 
     id: str
     object: Literal["model"] = "model"
-    modality: Literal["image", "video", "music"]
+    modality: Literal["image", "video", "music", "audio"]
     limits: dict[str, Any] = Field(
         default_factory=dict,
         description="Neutral input/output limits (modalities, max prompt, max "
@@ -586,7 +754,7 @@ class EstimateResponse(BaseModel):
     model_config = _RESPONSE
 
     object: Literal["estimate"] = "estimate"
-    modality: Literal["image", "video", "music"]
+    modality: Literal["image", "video", "music", "audio"]
     currency: Literal["USD"] = "USD"
     model: str | None = None
     estimated_cost: float | None = None
@@ -606,7 +774,7 @@ class ModelSpend(BaseModel):
     model_config = _RESPONSE
 
     model: str
-    modality: Literal["image", "video", "music"]
+    modality: Literal["image", "video", "music", "audio"]
     spent_usd: float = 0.0
     tasks: int = 0
 
@@ -632,6 +800,18 @@ class HealthResponse(BaseModel):
 
 __all__ = [
     "AudioInput",
+    "AudioInputList",
+    "AudioOutput",
+    "AudioParameters",
+    "AudioRequest",
+    "AudioTaskResponse",
+    "VoiceCloneRequest",
+    "VoiceConsent",
+    "VoiceInputList",
+    "VoiceListResponse",
+    "VoiceParameters",
+    "VoiceResponse",
+    "VoiceSampleInput",
     "BudgetDirective",
     "BudgetState",
     "EstimateCandidate",

@@ -107,6 +107,12 @@ class ModelLimits:
     # motion, timing) and a ``first_frame`` with the character, and return the character performing it
     # (docs/design/auto-mode.md#capabilities-performance).
     supports_performance: bool | None = None
+    supports_voice_cloning: bool | None = None
+    supports_instructions: bool | None = None
+    max_voice_samples: int | None = None
+    min_speed: float | None = None
+    max_speed: float | None = None
+    supported_file_formats: tuple[str, ...] = ()
     # Model lifecycle (ISO dates, UTC). From ``retired_on`` the model is never
     # auto-routed and a pinned request fails with ``model_retired`` unless it
     # allows a fallback; ``deprecated_on`` ranks it after active models.
@@ -139,6 +145,7 @@ class ModelLimits:
             "max_prompt_chars", "max_prompt_tokens", "max_input_images",
             "max_output_count", "max_duration_seconds", "min_duration_seconds",
             "max_fps", "max_output_longest_side", "max_shots",
+            "max_voice_samples", "min_speed", "max_speed",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -149,12 +156,15 @@ class ModelLimits:
             out["supported_sizes"] = list(self.supported_sizes)
         if self.supported_sample_rates:
             out["supported_sample_rates"] = list(self.supported_sample_rates)
+        if self.supported_file_formats:
+            out["supported_file_formats"] = list(self.supported_file_formats)
         for key in (
             "supports_image_to_image", "supports_first_frame", "supports_last_frame",
             "supports_reference_video", "supports_reference_audio",
             "supports_continuation_audio", "supports_lyrics", "supports_reference_image",
             "supports_audio_output", "supports_upscale", "supports_frame_interpolation",
             "supports_segmentation", "supports_performance", "deprecated_on", "retired_on", "replacement",
+            "supports_voice_cloning", "supports_instructions",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -651,6 +661,47 @@ _LIMITS["acestep-v15-xl-turbo"] = _acestep
 _LIMITS["acestep-v15-base"] = _acestep
 _LIMITS["acestep-v15-turbo-shift3"] = _acestep
 _LIMITS["ace-step-1.5"] = _acestep
+
+
+# Speech constraints checked against official APIs on 2026-10-03.
+_openai_speech = ModelLimits(
+    modality="audio", input_modalities=(_TEXT,), max_prompt_chars=4096,
+    supports_voice_cloning=True, max_voice_samples=1, supports_instructions=True,
+    min_speed=0.25, max_speed=4,
+    supported_file_formats=("mp3", "opus", "aac", "flac", "wav", "pcm"),
+    source_urls=("https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create",
+                 "https://developers.openai.com/api/docs/guides/custom-voices"),
+    notes="Cloning requires eligible account access, operator opt-in and a consent recording. PCM is 24 kHz mono.",
+)
+for _model in ("gpt-4o-mini-tts", "gpt-4o-mini-tts-2025-12-15"):
+    _LIMITS[_model] = _openai_speech
+for _model in ("tts-1", "tts-1-hd"):
+    _LIMITS[_model] = replace(_openai_speech, supports_instructions=False, supports_voice_cloning=False)
+_eleven_speech = ModelLimits(
+    modality="audio", input_modalities=(_TEXT,), supports_voice_cloning=True,
+    max_voice_samples=10, supports_instructions=False, min_speed=0.7, max_speed=1.2,
+    supported_file_formats=("mp3", "pcm", "wav", "opus"),
+    supported_sample_rates=(8000, 16000, 22050, 24000, 32000, 44100, 48000),
+    source_urls=("https://elevenlabs.io/docs/api-reference/text-to-speech/convert",
+                 "https://elevenlabs.io/docs/api-reference/voices/ivc/create"),
+    notes="Output encoding combinations and account plan restrictions apply; WAV wraps PCM as mono S16LE.",
+)
+for _model, _chars in (("eleven_v3", 5000), ("eleven_multilingual_v2", 10000),
+                       ("eleven_flash_v2_5", 40000), ("eleven_turbo_v2_5", 40000)):
+    _LIMITS[_model] = replace(_eleven_speech, max_prompt_chars=_chars)
+_minimax_speech = ModelLimits(
+    modality="audio", input_modalities=(_TEXT,), max_prompt_chars=9999,
+    supports_voice_cloning=True, max_voice_samples=1, supports_instructions=False,
+    min_speed=0.5, max_speed=2,
+    supported_file_formats=("mp3", "pcm", "flac", "wav", "opus"),
+    supported_sample_rates=(8000, 16000, 22050, 24000, 32000, 44100),
+    source_urls=("https://platform.minimax.io/docs/api-reference/speech-t2a-http",
+                 "https://platform.minimax.io/docs/api-reference/voice-cloning-clone"),
+    notes="Cloning accepts one MP3/M4A/WAV sample of 10–300 seconds, up to 20 MB; unused clones expire after seven days.",
+)
+for _model in ("speech-2.8-hd", "speech-2.8-turbo", "speech-2.6-hd", "speech-2.6-turbo",
+               "speech-02-hd", "speech-02-turbo", "speech-01-hd", "speech-01-turbo"):
+    _LIMITS[_model] = _minimax_speech
 
 
 def limits_for(model: str, modality: str) -> ModelLimits:

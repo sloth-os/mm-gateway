@@ -328,9 +328,11 @@ class KeyConfig:
     default_image_tag: str | None = None
     default_video_tag: str | None = None
     default_music_tag: str | None = None
+    default_audio_tag: str | None = None
     default_image_backend: str | None = None
     default_video_backend: str | None = None
     default_music_backend: str | None = None
+    default_audio_backend: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
     # Operator spend cap for this key (None = unlimited).
     budget: KeyBudget | None = None
@@ -440,6 +442,13 @@ class Settings:
                 return k.default_music_backend
         return self.backends[0].name if self.backends else ""
 
+    @property
+    def default_audio_provider(self) -> str:
+        for key in self.keys:
+            if key.default_audio_backend:
+                return key.default_audio_backend
+        return self.backends[0].name if self.backends else ""
+
     # -- loaders -------------------------------------------------------------- #
 
     @classmethod
@@ -483,9 +492,11 @@ class Settings:
                 default_image_tag=k.get("default_image_tag"),
                 default_video_tag=k.get("default_video_tag"),
                 default_music_tag=k.get("default_music_tag"),
+                default_audio_tag=k.get("default_audio_tag"),
                 default_image_backend=k.get("default_image_backend"),
                 default_video_backend=k.get("default_video_backend"),
                 default_music_backend=k.get("default_music_backend"),
+                default_audio_backend=k.get("default_audio_backend"),
                 extra=dict(k.get("extra") or {}),
                 budget=_key_budget(k.get("budget"), str(k["id"])),
             )
@@ -765,6 +776,30 @@ class Settings:
                 base_url=base_url, tags=[], extra=extra,
                 credentials=creds,
             ))
+        for speech_type in ("openai", "elevenlabs", "minimax"):
+            prefix = speech_type.upper()
+            speech_key = _env(f"{prefix}_AUDIO_API_KEY")
+            speech_creds = _credential_list(_env(f"{prefix}_AUDIO_API_KEYS"))
+            if not speech_key and speech_creds:
+                speech_key = _cred_api_key(speech_creds[0])
+            speech_model = _env(f"{prefix}_AUDIO_MODEL")
+            speech_extra = {"audio_only": True}
+            if speech_model:
+                speech_extra["audio_model"] = speech_model
+            _with_outbound_proxy(speech_extra, _env(f"{prefix}_AUDIO_OUTBOUND_PROXY") or _env(f"{prefix}_OUTBOUND_PROXY"))
+            if speech_key:
+                backends.append(BackendConfig(
+                    name=f"{speech_type}-audio", type=speech_type, api_key=speech_key,
+                    base_url=_env(f"{prefix}_AUDIO_BASE_URL") or _env(f"{prefix}_BASE_URL"),
+                    extra=speech_extra, credentials=speech_creds,
+                ))
+            elif not speech_creds:
+                for existing in backends:
+                    if existing.type == speech_type:
+                        if speech_model:
+                            existing.extra["audio_model"] = speech_model
+                        if _env(f"{prefix}_AUDIO_BASE_URL"):
+                            existing.extra["audio_base_url"] = _env(f"{prefix}_AUDIO_BASE_URL")
         # General pass-through proxy from PROXY_API_KEY. The Gemini Live (AI
         # Studio) WebSocket API is a raw upstream the generation contract does
         # not translate, so it fronts the general /proxy/<domain>/ surface. The
@@ -802,6 +837,7 @@ class Settings:
             default_image_backend=_env("DEFAULT_IMAGE_PROVIDER"),
             default_video_backend=_env("DEFAULT_VIDEO_PROVIDER"),
             default_music_backend=_env("DEFAULT_MUSIC_PROVIDER"),
+            default_audio_backend=_env("DEFAULT_AUDIO_PROVIDER"),
         )]
         return cls(
             backends=backends, keys=keys, proxies=proxies,

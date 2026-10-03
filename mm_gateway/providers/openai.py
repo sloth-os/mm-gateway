@@ -16,6 +16,7 @@ from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._dimensions import pixel_size
 from mm_gateway.providers._http import proxy_kwargs
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
+from mm_gateway.providers._speech_openai import OpenAISpeechMixin
 from mm_gateway.schemas.image import (
     ImageData,
     ImageUsage,
@@ -31,7 +32,7 @@ def _logged_httpx(proxy_url: str | None = None) -> httpx.AsyncClient:
     return httpx.AsyncClient(event_hooks=backend_event_hooks(), **proxy_kwargs(proxy_url))
 
 
-class OpenAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
+class OpenAIProvider(OpenAISpeechMixin, SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "openai"
     image_models: ClassVar[list[str]] = [
         "gpt-image-1",

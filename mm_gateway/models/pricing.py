@@ -38,13 +38,16 @@ class ModelPrice:
     per_second_tiers: tuple[PriceTier, ...] = ()
     per_image: float | None = None
     per_request: float | None = None
+    per_character: float | None = None
+    per_clone: float | None = None
     currency: str = "USD"
     as_of: str = ""
     source_urls: tuple[str, ...] = field(default=())
 
     @property
     def priced(self) -> bool:
-        return any(v is not None for v in (self.per_second, self.per_image, self.per_request)) \
+        return any(v is not None for v in (self.per_second, self.per_image, self.per_request,
+                                           self.per_character, self.per_clone)) \
             or bool(self.per_second_tiers)
 
     def rate_for(self, longest_side: int | None) -> float | None:
@@ -61,7 +64,7 @@ class ModelPrice:
 
     def to_public_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"currency": self.currency}
-        for key in ("per_second", "per_image", "per_request"):
+        for key in ("per_second", "per_image", "per_request", "per_character", "per_clone"):
             value = getattr(self, key)
             if value is not None:
                 out[key] = value
@@ -77,7 +80,7 @@ class ModelPrice:
     @classmethod
     def from_mapping(cls, raw: dict[str, Any]) -> "ModelPrice":
         """Build a price from a configuration mapping (validated, USD only)."""
-        allowed = {"per_second", "per_second_tiers", "per_image", "per_request", "currency", "as_of"}
+        allowed = {"per_second", "per_second_tiers", "per_image", "per_request", "per_character", "per_clone", "currency", "as_of"}
         unknown = set(raw) - allowed
         if unknown:
             raise ValueError(f"unknown price field(s): {', '.join(sorted(unknown))}")
@@ -106,6 +109,8 @@ class ModelPrice:
             per_second_tiers=tuple(tiers),
             per_image=amount("per_image"),
             per_request=amount("per_request"),
+            per_character=amount("per_character"),
+            per_clone=amount("per_clone"),
             as_of=str(raw.get("as_of") or ""),
         )
 
@@ -146,16 +151,32 @@ def estimate_cost(
     duration_seconds: float | None = None,
     output_count: int | None = None,
     longest_side: int | None = None,
+    input_characters: int | None = None,
+    voice_clone: bool = False,
 ) -> float | None:
     """USD estimate of one task, or ``None`` when the model is unpriced.
 
     image: outputs × ``per_image``; video: seconds × the size tier's rate (the
     model's minimum duration, else 5 s, when the request leaves it open); music:
-    seconds × ``per_second`` (30 s by default). ``per_request`` is added to all.
+    seconds × ``per_second`` (30 s by default); audio: characters ×
+    ``per_character``. ``per_request`` is added to generation. Voice cloning
+    instead requires its own complete ``per_clone`` price.
     """
     if price is None or not price.priced:
         return None
     total = price.per_request or 0.0
+    if modality == "audio":
+        # A text rate cannot price cloning, and a duration rate cannot price
+        # unknown-length speech. Never manufacture a zero estimate for either.
+        if voice_clone:
+            return round(price.per_clone, 6) if price.per_clone is not None else None
+        if price.per_character is None and price.per_request is None:
+            return None
+        if price.per_character is not None:
+            if input_characters is None:
+                return None
+            total += price.per_character * input_characters
+        return round(total, 6)
     if modality == "image":
         if price.per_image is not None:
             total += price.per_image * max(1, output_count or 1)

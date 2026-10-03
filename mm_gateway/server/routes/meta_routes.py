@@ -53,7 +53,7 @@ async def list_models(
     request: Request,
     key: Annotated[KeyConfig, Depends(get_api_key)],
     modality: Annotated[
-        Literal["image", "video", "music"] | None,
+        Literal["image", "video", "music", "audio"] | None,
         Query(description="Filter models by output modality."),
     ] = None,
     authorization: Annotated[
@@ -108,7 +108,7 @@ async def list_model_limits(
     request: Request,
     key: Annotated[KeyConfig, Depends(get_api_key)],
     modality: Annotated[
-        Literal["image", "video", "music"] | None,
+        Literal["image", "video", "music", "audio"] | None,
         Query(description="Filter models by output modality."),
     ] = None,
     authorization: Annotated[

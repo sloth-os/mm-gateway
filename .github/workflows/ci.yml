@@ -98,6 +98,15 @@ jobs:
       - name: Detect fully-configured provider
         id: secret_gate
         env:
+          OPENAI_AUDIO_API_KEY: ${{ secrets.OPENAI_AUDIO_API_KEY }}
+          OPENAI_AUDIO_BASE_URL: ${{ vars.OPENAI_AUDIO_BASE_URL }}
+          OPENAI_AUDIO_MODEL: ${{ vars.OPENAI_AUDIO_MODEL }}
+          ELEVENLABS_AUDIO_API_KEY: ${{ secrets.ELEVENLABS_AUDIO_API_KEY }}
+          ELEVENLABS_AUDIO_BASE_URL: ${{ vars.ELEVENLABS_AUDIO_BASE_URL }}
+          ELEVENLABS_AUDIO_MODEL: ${{ vars.ELEVENLABS_AUDIO_MODEL }}
+          MINIMAX_AUDIO_API_KEY: ${{ secrets.MINIMAX_AUDIO_API_KEY }}
+          MINIMAX_AUDIO_BASE_URL: ${{ vars.MINIMAX_AUDIO_BASE_URL }}
+          MINIMAX_AUDIO_MODEL: ${{ vars.MINIMAX_AUDIO_MODEL }}
           OPENAI_IMAGE_API_KEY: ${{ secrets.OPENAI_IMAGE_API_KEY }}
           OPENAI_IMAGE_BASE_URL: ${{ vars.OPENAI_IMAGE_BASE_URL }}
           OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }}
@@ -199,6 +208,9 @@ jobs:
           # URL slot so the three-non-empty-fields gate holds without forcing a
           # location. Music reuses the same credentials env.
           for triple in \
+            "${OPENAI_AUDIO_API_KEY}:${OPENAI_AUDIO_BASE_URL}:${OPENAI_AUDIO_MODEL}" \
+            "${ELEVENLABS_AUDIO_API_KEY}:${ELEVENLABS_AUDIO_BASE_URL}:${ELEVENLABS_AUDIO_MODEL}" \
+            "${MINIMAX_AUDIO_API_KEY}:${MINIMAX_AUDIO_BASE_URL}:${MINIMAX_AUDIO_MODEL}" \
             "${OPENAI_IMAGE_API_KEY}:${OPENAI_IMAGE_BASE_URL}:${OPENAI_IMAGE_MODEL}" \
             "${OPENAI_VIDEO_API_KEY}:${OPENAI_VIDEO_BASE_URL}:${OPENAI_VIDEO_MODEL}" \
             "${ARK_IMAGE_API_KEY}:${ARK_IMAGE_BASE_URL}:${ARK_IMAGE_MODEL}" \
@@ -495,6 +507,15 @@ jobs:
         # whatever secrets you add in GitHub, they flow straight into the image
         # 1:1.
         env:
+          OPENAI_AUDIO_API_KEY: ${{ secrets.OPENAI_AUDIO_API_KEY }}
+          OPENAI_AUDIO_BASE_URL: ${{ vars.OPENAI_AUDIO_BASE_URL }}
+          OPENAI_AUDIO_MODEL: ${{ vars.OPENAI_AUDIO_MODEL }}
+          ELEVENLABS_AUDIO_API_KEY: ${{ secrets.ELEVENLABS_AUDIO_API_KEY }}
+          ELEVENLABS_AUDIO_BASE_URL: ${{ vars.ELEVENLABS_AUDIO_BASE_URL }}
+          ELEVENLABS_AUDIO_MODEL: ${{ vars.ELEVENLABS_AUDIO_MODEL }}
+          MINIMAX_AUDIO_API_KEY: ${{ secrets.MINIMAX_AUDIO_API_KEY }}
+          MINIMAX_AUDIO_BASE_URL: ${{ vars.MINIMAX_AUDIO_BASE_URL }}
+          MINIMAX_AUDIO_MODEL: ${{ vars.MINIMAX_AUDIO_MODEL }}
           OPENAI_IMAGE_API_KEY: ${{ secrets.OPENAI_IMAGE_API_KEY }}
           OPENAI_IMAGE_BASE_URL: ${{ vars.OPENAI_IMAGE_BASE_URL }}
           OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }}
@@ -583,6 +604,9 @@ jobs:
         run: |
           docker run -d --name gateway --restart=no \
             -p 8000:8000 \
+            -e OPENAI_AUDIO_API_KEY -e OPENAI_AUDIO_BASE_URL -e OPENAI_AUDIO_MODEL \
+            -e ELEVENLABS_AUDIO_API_KEY -e ELEVENLABS_AUDIO_BASE_URL -e ELEVENLABS_AUDIO_MODEL \
+            -e MINIMAX_AUDIO_API_KEY -e MINIMAX_AUDIO_BASE_URL -e MINIMAX_AUDIO_MODEL \
             -e OPENAI_IMAGE_API_KEY -e OPENAI_IMAGE_BASE_URL -e OPENAI_IMAGE_MODEL \
             -e OPENAI_VIDEO_API_KEY -e OPENAI_VIDEO_BASE_URL -e OPENAI_VIDEO_MODEL \
             -e ARK_IMAGE_API_KEY -e ARK_IMAGE_BASE_URL -e ARK_IMAGE_MODEL \
@@ -629,6 +653,15 @@ jobs:
           # sees the same triple each provider modality was gated on.
           MM_GATEWAY: http://127.0.0.1:8000
           GATEWAY_API_KEY: ${{ secrets.GATEWAY_API_KEY }}
+          OPENAI_AUDIO_API_KEY: ${{ secrets.OPENAI_AUDIO_API_KEY }}
+          OPENAI_AUDIO_BASE_URL: ${{ vars.OPENAI_AUDIO_BASE_URL }}
+          OPENAI_AUDIO_MODEL: ${{ vars.OPENAI_AUDIO_MODEL }}
+          ELEVENLABS_AUDIO_API_KEY: ${{ secrets.ELEVENLABS_AUDIO_API_KEY }}
+          ELEVENLABS_AUDIO_BASE_URL: ${{ vars.ELEVENLABS_AUDIO_BASE_URL }}
+          ELEVENLABS_AUDIO_MODEL: ${{ vars.ELEVENLABS_AUDIO_MODEL }}
+          MINIMAX_AUDIO_API_KEY: ${{ secrets.MINIMAX_AUDIO_API_KEY }}
+          MINIMAX_AUDIO_BASE_URL: ${{ vars.MINIMAX_AUDIO_BASE_URL }}
+          MINIMAX_AUDIO_MODEL: ${{ vars.MINIMAX_AUDIO_MODEL }}
           OPENAI_IMAGE_API_KEY: ${{ secrets.OPENAI_IMAGE_API_KEY }}
           OPENAI_IMAGE_BASE_URL: ${{ vars.OPENAI_IMAGE_BASE_URL }}
           OPENAI_IMAGE_MODEL: ${{ vars.OPENAI_IMAGE_MODEL }}

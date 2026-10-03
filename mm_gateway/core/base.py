@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 from mm_gateway.schemas.image import UnifiedImageRequest, UnifiedImageTask
 from mm_gateway.schemas.music import UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
+from mm_gateway.schemas.audio import UnifiedAudioRequest, UnifiedAudioTask, UnifiedVoiceRequest, UnifiedVoiceTask
 
 
 class Provider(ABC):
@@ -32,21 +33,26 @@ class Provider(ABC):
     image_models: ClassVar[list[str]] = []
     video_models: ClassVar[list[str]] = []
     music_models: ClassVar[list[str]] = []
+    audio_models: ClassVar[list[str]] = []
 
     def __init__(self, backend: Any):
         self.backend = backend
 
     @property
     def supports_image(self) -> bool:
-        return isinstance(self, ImageProvider)
+        return isinstance(self, ImageProvider) and not self.backend.extra.get("audio_only")
 
     @property
     def supports_video(self) -> bool:
-        return isinstance(self, VideoProvider)
+        return isinstance(self, VideoProvider) and not self.backend.extra.get("audio_only")
 
     @property
     def supports_music(self) -> bool:
-        return isinstance(self, MusicProvider)
+        return isinstance(self, MusicProvider) and not self.backend.extra.get("audio_only")
+
+    @property
+    def supports_audio(self) -> bool:
+        return isinstance(self, AudioProvider)
 
 
 class ImageProvider(Provider):
@@ -94,4 +100,33 @@ class MusicProvider(Provider):
     @abstractmethod
     async def get_music_task(self, task_id: str) -> UnifiedMusicTask:
         """Poll a previously submitted task by its provider-local id."""
+        ...
+
+
+class AudioProvider(Provider):
+    @abstractmethod
+    async def create_audio_task(self, request: UnifiedAudioRequest) -> UnifiedAudioTask:
+        """Accept a speech request without waiting for synthesis."""
+        ...
+
+    @abstractmethod
+    async def get_audio_task(self, task_id: str) -> UnifiedAudioTask:
+        ...
+
+    def audio_request_error(self, request: UnifiedAudioRequest | UnifiedVoiceRequest, model: str) -> str | None:
+        """Pure preflight used by both routing and estimates; None means supported."""
+        return None
+
+    def voice_presets(self) -> dict[str, str]:
+        """Gateway preset id to provider-local voice id; operators may configure aliases."""
+        return {}
+
+
+class VoiceCloneProvider(AudioProvider):
+    @abstractmethod
+    async def create_voice_task(self, request: UnifiedVoiceRequest) -> UnifiedVoiceTask:
+        ...
+
+    @abstractmethod
+    async def get_voice_task(self, task_id: str) -> UnifiedVoiceTask:
         ...

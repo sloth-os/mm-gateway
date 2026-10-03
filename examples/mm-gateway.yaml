@@ -31,8 +31,8 @@ defaults:
 outbound_proxy: ${OUTBOUND_PROXY:}
 
 # Expose the gateway as an MCP Streamable-HTTP server. Disabled by default — set
-# enabled: true to mount the seven gateway tools (list_models, create_image,
-# get_image, create_video, get_video, create_music, get_music) at `path`
+# enabled: true to mount the fifteen gateway tools for generation, voices,
+# model discovery, estimates and usage at `path`
 # (default /mcp). The `mcp` package is a core dependency of the gateway; if it
 # fails to import, the gateway starts and logs a warning instead of mounting the
 # endpoint. The same bearer-token keys govern the MCP surface as the HTTP routes.
@@ -76,6 +76,18 @@ backends:
     type: google
     api_key: ${GOOGLE_API_KEY:}
     tags: [prod]
+  # Speech can have its own credentials, presets and routing defaults.
+  - name: speech-primary
+    type: openai
+    api_key: ${OPENAI_AUDIO_API_KEY:}
+    tags: [prod, speech]
+    extra:
+      audio_only: true
+      # Enable only when the upstream account has approved custom voice access.
+      voice_cloning_enabled: false
+      voice_presets:
+        narrator: alloy
+        warm: coral
 
 # General pass-through proxies. A proxy forwards the *raw* request verbatim
 # (method, path, query, body, headers) to an upstream root URL, injecting one
@@ -172,6 +184,7 @@ keys:
     allow_tags: [prod]                 # any prod backend
     default_image_backend: openai-default
     default_video_backend: volcengine-prod
+    default_audio_backend: speech-primary
     # Spend cap per UTC month; every client scope (routing.budget.scope) is
     # capped at 100 USD on top of the client's own limit_usd.
     budget: {limit_usd: 500, period: month, scopes_limit_usd: 100}

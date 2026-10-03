@@ -2,14 +2,15 @@
 
 This document defines the boundary between mm-gateway clients and provider
 adapters. The public contract is intentionally not compatible with any one
-provider. Image, video, and music remain separate resources because their
+provider. Image, video, music, speech, and voices remain separate resources because their
 inputs, controls, outputs, and capability discovery evolve differently.
 
 ## Invariants
 
-1. Image, video, and music use separate collection and item endpoints.
+1. Image, video, music, speech, and voices use separate collection and item endpoints.
 2. Creation is always asynchronous and returns `202 Accepted`.
-3. Every request uses `{model, input, parameters, routing, metadata}`.
+3. Every create uses `{model, input, parameters, routing, metadata}`; cloning
+   also requires a `consent` attestation.
 4. Every public request and response field has one canonical JSON shape.
 5. `input` is a non-empty ordered typed-parts array; repeated media types are valid.
 6. Public request envelopes, input parts, and parameter objects reject unknown
@@ -26,13 +27,20 @@ wire translation belongs in `mm_gateway/providers/`.
 
 ## Resources and lifecycle
 
-The API contains three independent resource collections:
+The API contains five independent resource collections:
 
 | Resource | Create | Retrieve | Public id prefix |
 |---|---|---|---|
 | Image | `POST /v1/images` | `GET /v1/images/{image_id}` | `img_` |
 | Video | `POST /v1/videos` | `GET /v1/videos/{video_id}` | `vid_` |
 | Music | `POST /v1/music` | `GET /v1/music/{music_id}` | `mus_` |
+| Speech | `POST /v1/audio` | `GET /v1/audio/{audio_id}` | `aud_` |
+| Voice | `POST /v1/voices` | `GET /v1/voices/{voice_id}` | `voice_` (clones) |
+
+`GET /v1/voices` lists configured presets and the authenticated key's clones.
+Speech accepts ordered text parts. Cloning accepts audio samples and explicit
+consent; reusable clones retain their creating backend and credential account.
+See [speech and cloning](audio.md) for the contract, mappings and access limits.
 
 The create response is the initial task representation, not a second response
 type. `Location` is its canonical URL, `Link` repeats that URL with `rel="self"`,
@@ -51,7 +59,8 @@ creates sharing the same scope are serialized so only one reaches an adapter.
 The bundled task store is process-local for development. A multi-worker or
 multi-instance deployment must provide a shared durable implementation of the
 same task/idempotency operations through `create_app(..., task_store=...)` so
-these guarantees span every instance.
+these guarantees span every instance. Speech adapters and voice mappings also
+require durable workers and native voice/account state for production reuse.
 
 Status is one of `pending`, `running`, `succeeded`, `failed`, `cancelled`, or
 `expired`. A task store maps the public id to the selected deployment target and

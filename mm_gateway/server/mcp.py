@@ -35,6 +35,14 @@ from mm_gateway.config import Settings
 from mm_gateway.core.exceptions import GatewayError, TaskNotFoundError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.schemas.api import (
+    AudioInputList,
+    AudioParameters,
+    AudioRequest,
+    VoiceCloneRequest,
+    VoiceConsent,
+    VoiceInputList,
+    VoiceParameters,
+    VoiceListResponse,
     EstimateResponse,
     ImageInputList,
     ImageParameters,
@@ -52,6 +60,7 @@ from mm_gateway.schemas.api import (
     VideoTaskResponse,
 )
 from mm_gateway.server.auth import authorize_task_access, resolve_key
+from mm_gateway.server.routes._audio_resources import create_resource, get_audio_resource, get_voice_resource, list_voice_resources
 from mm_gateway.server.routes._resources import (
     find_idempotent_record,
     new_record,
@@ -61,6 +70,8 @@ from mm_gateway.server.routes._resources import (
     served_model,
 )
 from mm_gateway.translators.rest import (
+    from_audio_request,
+    from_voice_request,
     from_image_request,
     from_music_request,
     from_video_request,
@@ -180,9 +191,9 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
     @_tool
     async def list_models(
         ctx: Context,
-        modality: Literal["image", "video", "music"] | None = None,
+        modality: Literal["image", "video", "music", "audio"] | None = None,
     ) -> str:
-        """List usable models, optionally filtered by image, video, or music."""
+        """List usable models, optionally filtered by image, video, music, or audio."""
         import json
 
         key = _key(ctx)
@@ -195,7 +206,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
     @_tool
     async def list_model_limits(
         ctx: Context,
-        modality: Literal["image", "video", "music"] | None = None,
+        modality: Literal["image", "video", "music", "audio"] | None = None,
     ) -> str:
         """List usable models with their documented input/output limits.
 
@@ -455,13 +466,72 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
 
     @mcp.tool()
     @_tool
+    async def create_audio(
+        ctx: Context,
+        input: AudioInputList,
+        parameters: AudioParameters | None = None,
+        model: str | None = None,
+        routing: RoutingDirective | None = None,
+        metadata: dict[str, Any] | None = None,
+        idempotency_key: IdempotencyKey = None,
+    ) -> str:
+        """Create asynchronous speech from text using a gateway voice id."""
+        body = AudioRequest(model=model, input=input, parameters=parameters or AudioParameters(),
+                            routing=routing, metadata=metadata or {})
+        resource, _ = await create_resource(app.state, body, _key(ctx), idempotency_key,
+                                           lambda id: f"/v1/audio/{id}")
+        return resource.model_dump_json(by_alias=True, exclude_none=True)
+
+    @mcp.tool()
+    @_tool
+    async def get_audio(ctx: Context, id: str) -> str:
+        """Retrieve the cached speech task state."""
+        resource = await get_audio_resource(app.state, _key(ctx), id, f"/v1/audio/{id}")
+        return resource.model_dump_json(by_alias=True, exclude_none=True)
+
+    @mcp.tool()
+    @_tool
+    async def create_voice(
+        ctx: Context,
+        input: VoiceInputList,
+        parameters: VoiceParameters,
+        consent: VoiceConsent,
+        model: str | None = None,
+        routing: RoutingDirective | None = None,
+        metadata: dict[str, Any] | None = None,
+        idempotency_key: IdempotencyKey = None,
+    ) -> str:
+        """Clone an authorized speaker's voice and return a reusable gateway voice id."""
+        body = VoiceCloneRequest(model=model, input=input, parameters=parameters, consent=consent,
+                                 routing=routing, metadata=metadata or {})
+        resource, _ = await create_resource(app.state, body, _key(ctx), idempotency_key,
+                                           lambda id: f"/v1/voices/{id}", voice=True)
+        return resource.model_dump_json(by_alias=True, exclude_none=True)
+
+    @mcp.tool()
+    @_tool
+    async def get_voice(ctx: Context, id: str) -> str:
+        """Retrieve a preset or the cached voice-clone task state."""
+        resource = await get_voice_resource(app.state, _key(ctx), id, f"/v1/voices/{id}")
+        return resource.model_dump_json(by_alias=True, exclude_none=True)
+
+    @mcp.tool()
+    @_tool
+    async def list_voices(ctx: Context) -> str:
+        """List gateway presets and voice clones owned by this key."""
+        resources = await list_voice_resources(app.state, _key(ctx), lambda id: f"/v1/voices/{id}")
+        return VoiceListResponse(data=resources).model_dump_json(by_alias=True, exclude_none=True)
+
+    @mcp.tool()
+    @_tool
     async def estimate_cost(
         ctx: Context,
-        modality: Literal["image", "video", "music"],
+        modality: Literal["image", "video", "music", "audio", "voice"],
         input: list[dict[str, Any]],
         parameters: dict[str, Any] | None = None,
         model: str | None = None,
         routing: RoutingDirective | None = None,
+        consent: VoiceConsent | None = None,
     ) -> str:
         """Estimate how auto mode would route a request and what it would cost, without creating a task.
 
@@ -475,13 +545,18 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
         key = _key(ctx)
         payload = {"model": model, "input": input, "parameters": parameters or {},
                    "routing": routing.model_dump(exclude_none=True) if routing else None}
-        if modality == "image":
+        if modality == "voice":
+            payload["consent"] = consent
+            unified = from_voice_request(VoiceCloneRequest.model_validate(payload))
+        elif modality == "audio":
+            unified = await app.state.audio_service.prepare(from_audio_request(AudioRequest.model_validate(payload)), key)
+        elif modality == "image":
             unified = from_image_request(ImageRequest.model_validate(payload))
         elif modality == "video":
             unified = from_video_request(VideoRequest.model_validate(payload))
         else:
             unified = from_music_request(MusicRequest.model_validate(payload))
-        body = estimate_route(registry, app.state.ledger, unified, key=key, modality=modality,
+        body = estimate_route(registry, app.state.ledger, unified, key=key, modality="audio" if modality == "voice" else modality,
                               policy=resolve_policy(settings, routing))
         return EstimateResponse.model_validate(body).model_dump_json(exclude_none=True)
 

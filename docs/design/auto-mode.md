@@ -197,7 +197,9 @@ a reseller's price, a self-hosted model's cost).
 | `per_second` | video, music | price per output second |
 | `per_second_tiers` | video | `[{max_longest_side, per_second}]` ascending; the first tier whose `max_longest_side` covers the requested size applies, else the last |
 | `per_image` | image | price per output image |
-| `per_request` | all | flat price per task (for example per song) |
+| `per_request` | generation | flat price per task (for example per song) |
+| `per_character` | speech | price per input text character |
+| `per_clone` | voice cloning | complete flat price for creating a voice |
 
 Estimate of one task:
 
@@ -206,10 +208,15 @@ Estimate of one task:
 | image | `output_count` (default 1) × `per_image` + `per_request` |
 | video | `duration_seconds` (default: the model's minimum duration, else 5 s) × the tier's `per_second` (else `per_second`) + `per_request` |
 | music | `duration_seconds` (default 30 s) × `per_second` + `per_request` |
+| audio (speech) | input text characters × `per_character` + `per_request` |
+| audio (cloning) | `per_clone` |
 
 A model with none of these fields is **unpriced**: its estimate is `null`.
+Speech also remains unpriced when only a duration price is known; cloning
+requires its own `per_clone` rate. See [speech configuration](audio.md).
 
-`POST /v1/images/estimate`, `POST /v1/videos/estimate` and `POST /v1/music/estimate` take the same body as
+`POST /v1/images/estimate`, `POST /v1/videos/estimate`, `POST /v1/music/estimate`,
+`POST /v1/audio/estimate` and `POST /v1/voices/estimate` take the same body as
 the create call and run stages 1–7 without creating a task:
 
 ```json

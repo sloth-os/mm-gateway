@@ -27,6 +27,7 @@ from mm_gateway.core.exceptions import (
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._http import proxy_kwargs
+from mm_gateway.providers._speech_elevenlabs import ElevenLabsSpeechMixin
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 
 log = get_logger("provider.elevenlabs")
@@ -42,7 +43,7 @@ _DEFAULT_MODEL = "music_v2"
 _CODEC_BY_FORMAT = {"wav": "wav", "mp3": "mp3", "ogg": "ogg", "aac": "aac"}
 
 
-class ElevenLabsProvider(MusicProvider):
+class ElevenLabsProvider(ElevenLabsSpeechMixin, MusicProvider):
     name = "elevenlabs"
     music_models: ClassVar[list[str]] = ["music_v1", "music_v2"]
 

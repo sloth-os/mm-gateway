@@ -28,7 +28,7 @@ from typing import Any
 
 from mm_gateway.billing import BudgetRejection, CostLedger
 from mm_gateway.config import KeyConfig, Settings
-from mm_gateway.core.base import Provider
+from mm_gateway.core.base import AudioProvider, Provider, VoiceCloneProvider
 from mm_gateway.core.exceptions import GatewayError, ProviderTimeoutError, ValidationError
 from mm_gateway.models.pricing import estimate_cost
 from mm_gateway.observability.logging import get_logger
@@ -161,6 +161,7 @@ class _Planner:
         self.catalog = registry.catalog
         self.today = self.catalog.today()
         self.profile = router.profile_for(request)
+        self.request = request
         self.side = router.longest_side(self.profile)
         self.budgeted = ledger.applies(key, policy.budget_scope, policy.budget_limit_usd)
         self.allow_unpriced = registry.settings.budget_allow_unpriced
@@ -172,7 +173,24 @@ class _Planner:
             self.catalog.price_for(model), modality=self.modality, limits=limits,
             duration_seconds=self.profile.duration_seconds,
             output_count=self.profile.output_count, longest_side=self.side,
+            input_characters=self.profile.prompt_chars, voice_clone=self.profile.wants_voice_clone,
         )
+
+    def audio_candidate_ok(self, backend: str, account: str, prov: Provider, model: str) -> bool:
+        if self.modality != "audio":
+            return True
+        if not isinstance(prov, AudioProvider):
+            return False
+        if self.profile.wants_voice_clone and not isinstance(prov, VoiceCloneProvider):
+            return False
+        if getattr(self.request, "voice_backend", None) not in (None, backend):
+            return False
+        if getattr(self.request, "voice_account", None) not in (None, account):
+            return False
+        if prov.audio_request_error(self.request, model):
+            self.exclude(model, "limits", None, self.catalog.lifecycle(model, "audio"))
+            return False
+        return True
 
     def exclude(self, model: str, reason: str, estimate: float | None, lifecycle: str) -> None:
         self.excluded.setdefault((model, reason), Exclusion(model, reason, estimate, lifecycle))
@@ -253,6 +271,8 @@ class _Planner:
                     m_index,
                 )
                 for account_id, prov in self.registry.accounts_of(name):
+                    if not self.audio_candidate_ok(name, account_id, prov, model):
+                        continue
                     rate_limited, health, latency = self._health(name, account_id, model)
                     out.append(Candidate(
                         provider=prov, account_id=account_id, model=model, backend=name,
@@ -285,6 +305,11 @@ def plan_route(
     else:
         real_model, backends = registry.backends_serving(
             request.model, key, modality=modality, backend_name=backend_name)
+        if modality == "audio":
+            backends = [name for name in backends if any(
+                planner.audio_candidate_ok(name, account, prov, real_model)
+                for account, prov in registry.accounts_of(name)
+            )]
         tagged = [b for b in backends if planner.tag_ok(b)]
         if (policy.legacy_tag or policy.tags) and not tagged:
             raise ValidationError(
@@ -302,6 +327,8 @@ def plan_route(
                     f"Model '{request.model}' was retired on {limits.retired_on}{replacement}. "
                     "Pin another model, or allow routing.fallback='any'."
                 )
+        elif modality == "audio" and not router.score(planner.profile, limits, backend_index=0, model_index=0).fits:
+            planner.exclude(request.model, "limits", None, lifecycle)
         else:
             ok, est, reason = planner.admit(real_model, limits)
             if not ok:
@@ -311,6 +338,9 @@ def plan_route(
                 chosen = tagged if policy.fallback in ("same_model", "any") else tagged[:1]
                 for b_order, name in enumerate(chosen):
                     accounts = registry.accounts_of(name)
+                    if modality == "audio":
+                        accounts = [(account, prov) for account, prov in accounts
+                                    if planner.audio_candidate_ok(name, account, prov, real_model)]
                     if policy.fallback == "none":
                         accounts = accounts[:1]
                     for account_id, prov in accounts:

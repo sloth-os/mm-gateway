@@ -42,6 +42,7 @@ from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._dimensions import aspect_ratio
 from mm_gateway.providers._http import _map_status, proxy_kwargs
+from mm_gateway.providers._speech_minimax import MiniMaxSpeechMixin
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
@@ -68,7 +69,7 @@ _VIDEO_STATUS_MAP = {
 }
 
 
-class MiniMaxProvider(MusicProvider, VideoProvider):
+class MiniMaxProvider(MiniMaxSpeechMixin, MusicProvider, VideoProvider):
     name = "minimax"
     music_models: ClassVar[list[str]] = ["music-3.0", "music-2.6", "music-cover"]
     video_models: ClassVar[list[str]] = ["MiniMax-H3"]

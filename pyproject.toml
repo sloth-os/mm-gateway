@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mm-gateway"
 version = "0.1.0"
-description = "Provider-neutral image, video, and music generation gateway."
+description = "Provider-neutral image, video, music, speech and voice cloning gateway."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }

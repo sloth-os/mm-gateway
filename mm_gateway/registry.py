@@ -22,7 +22,7 @@ import importlib
 from typing import Any
 
 from mm_gateway.config import BackendConfig, KeyConfig, ProxyConfig, Settings
-from mm_gateway.core.base import ImageProvider, MusicProvider, Provider, VideoProvider
+from mm_gateway.core.base import AudioProvider, ImageProvider, MusicProvider, Provider, VideoProvider
 from mm_gateway.core.exceptions import (
     ForbiddenError,
     GatewayError,
@@ -85,6 +85,9 @@ _MODEL_ALIASES: dict[str, tuple[str, str]] = {
     "gateway-video-seedance-2-i2v": ("volcengine", "doubao-seedance-2-0-260128"),
     # Music aliases (Gemini Lyria 3 is the front-end shape; each backend serves a
     # stable id under a friendlier name).
+    "gateway-audio-pro": ("openai", "gpt-4o-mini-tts"),
+    "gateway-audio-fast": ("elevenlabs", "eleven_flash_v2_5"),
+    "gateway-audio-minimax": ("minimax", "speech-2.8-hd"),
     "gateway-music-lyria": ("google", "lyria-3"),
     "gateway-music-vertex": ("vertex", "lyria-3"),
     "gateway-music-elevenlabs": ("elevenlabs", "music_v2"),
@@ -145,6 +148,8 @@ class Registry:
                                                    base_url, extra)
                 try:
                     provider = cls(per_cfg)
+                    if provider.supports_audio:
+                        provider.voice_presets()
                 except ProviderNotConfiguredError as exc:
                     log.info("backend_account_skipped", backend=cfg.name,
                              account=account_id, reason=exc.message)
@@ -168,7 +173,8 @@ class Registry:
             self._backends[cfg.name] = default
             log.info("backend_registered", backend=cfg.name, type=cfg.type,
                      tags=cfg.tags, accounts=account_ids, image=default.supports_image,
-                     video=default.supports_video, music=default.supports_music)
+                     video=default.supports_video, music=default.supports_music,
+                     audio=default.supports_audio)
 
         # General pass-through proxies. Unlike provider backends they carry no
         # SDK instance — the proxy runner forwards raw HTTP/WebSocket — so only
@@ -227,6 +233,10 @@ class Registry:
         return dataclasses.replace(proxy, outbound_proxy=effective)
 
     def _apply_pinned_models(self, provider: Provider, cfg: BackendConfig) -> None:
+        if cfg.extra.get("audio_only"):
+            provider.image_models = []
+            provider.video_models = []
+            provider.music_models = []
         # Honor an operator-pinned image model (BackendConfig.extra[
         # "image_model"], set by the legacy env-var layout's *_MODEL). Append it
         # to this instance's served list so resolve() and /v1/models accept it
@@ -239,6 +249,9 @@ class Registry:
         extra_video = cfg.extra.get("video_model")
         if extra_video and provider.supports_video and extra_video not in provider.video_models:
             provider.video_models = [*provider.video_models, extra_video]
+        extra_audio = cfg.extra.get("audio_model")
+        if extra_audio and provider.supports_audio and extra_audio not in provider.audio_models:
+            provider.audio_models = [*provider.audio_models, extra_audio]
         extra_music = cfg.extra.get("music_model")
         if extra_music and provider.supports_music and extra_music not in provider.music_models:
             provider.music_models = [*provider.music_models, extra_music]
@@ -311,6 +324,8 @@ class Registry:
         return allowed
 
     def _modality_models(self, prov: Provider, modality: str) -> list[str]:
+        if modality == "audio":
+            return prov.audio_models
         if modality == "image":
             return prov.image_models
         if modality == "music":
@@ -321,14 +336,9 @@ class Registry:
         models: list[dict[str, Any]] = []
         usable = self.usable_backends(key) if key else list(self._backends)
         for alias, (btype, real) in self._aliases.items():
-            # Include an alias iff at least one usable backend is of its type.
-            if any(self._configs[n].type == btype for n in usable if n in self._configs):
-                if "video" in alias:
-                    modality = "video"
-                elif "music" in alias:
-                    modality = "music"
-                else:
-                    modality = "image"
+            modality = next((m for m in ("video", "music", "audio") if m in alias), "image")
+            if any(self._configs[name].type == btype and self._serves_modality(self._backends[name], modality)
+                   for name in usable if name in self._configs):
                 models.append({"id": alias, "type": btype, "underlying": real, "modality": modality})
         for name in usable:
             prov = self._backends[name]
@@ -336,6 +346,8 @@ class Registry:
                 models.append({"id": m, "provider": name, "modality": "image"})
             for m in prov.video_models:
                 models.append({"id": m, "provider": name, "modality": "video"})
+            for m in prov.audio_models:
+                models.append({"id": m, "provider": name, "modality": "audio"})
             for m in prov.music_models:
                 models.append({"id": m, "provider": name, "modality": "music"})
         return models
@@ -456,6 +468,8 @@ class Registry:
                 return False
             if modality == "video" and not prov.supports_video:
                 return False
+            if modality == "audio" and not prov.supports_audio:
+                return False
             if modality == "music" and not prov.supports_music:
                 return False
             known = self._modality_models(prov, modality)
@@ -482,6 +496,9 @@ class Registry:
             if modality == "image":
                 default = key.default_image_backend
                 default_tag = key.default_image_tag
+            elif modality == "audio":
+                default = key.default_audio_backend
+                default_tag = key.default_audio_tag
             elif modality == "music":
                 default = key.default_music_backend
                 default_tag = key.default_music_tag
@@ -778,6 +795,8 @@ class Registry:
     # -- helpers ------------------------------------------------------------ #
 
     def _serves_modality(self, prov: Provider, modality: str) -> bool:
+        if modality == "audio":
+            return prov.supports_audio
         if modality == "image":
             return prov.supports_image
         if modality == "video":
@@ -787,6 +806,8 @@ class Registry:
     def _key_default_backend(self, key: KeyConfig | None, modality: str) -> str | None:
         if not key:
             return None
+        if modality == "audio":
+            return key.default_audio_backend
         if modality == "image":
             return key.default_image_backend
         if modality == "video":
@@ -796,6 +817,8 @@ class Registry:
     def _key_default_tag(self, key: KeyConfig | None, modality: str) -> str | None:
         if not key:
             return None
+        if modality == "audio":
+            return key.default_audio_tag
         if modality == "image":
             return key.default_image_tag
         if modality == "video":
@@ -825,3 +848,9 @@ class Registry:
         if not isinstance(prov, MusicProvider):
             raise ProviderNotFoundError(f"Backend '{name}' does not support music generation.")
         return prov  # type: ignore[return-value]
+
+    def audio_provider(self, name: str) -> AudioProvider:
+        prov = self.get(name)
+        if not isinstance(prov, AudioProvider):
+            raise ProviderNotFoundError(f"Backend '{name}' does not support audio generation.")
+        return prov

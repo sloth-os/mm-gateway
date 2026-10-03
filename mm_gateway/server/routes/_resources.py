@@ -73,7 +73,7 @@ def new_record(
     task: Any,
     *,
     model: str,
-    modality: Literal["image", "video", "music"],
+    modality: Literal["image", "video", "music", "audio", "voice"],
     metadata: dict[str, Any],
     owner_key_id: str,
     idempotency_key: str | None = None,
@@ -137,7 +137,7 @@ async def find_idempotent_record(
     store: Any,
     *,
     owner_key_id: str,
-    modality: Literal["image", "video", "music"],
+    modality: Literal["image", "video", "music", "audio", "voice"],
     idempotency_key: str | None,
     fingerprint: str,
 ) -> TaskRecord | None:

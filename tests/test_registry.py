@@ -22,11 +22,13 @@ class _FakeProv:
         self.image_models = ["fake-image-1"]
         self.video_models = ["fake-video-1"]
         self.music_models = ["fake-music-1"]
+        self.audio_models = []
         self.backend = cfg
 
     supports_image = True
     supports_video = True
     supports_music = True
+    supports_audio = False
 
 
 @pytest.fixture

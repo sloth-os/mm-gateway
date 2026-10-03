@@ -26,6 +26,8 @@ _OVERRIDABLE = {
     "supports_first_frame", "supports_last_frame", "min_duration_seconds",
     "max_duration_seconds", "max_input_images", "notes", "max_shots", "max_fps",
     "supports_upscale", "supports_frame_interpolation", "supports_segmentation", "supports_performance",
+    "supports_voice_cloning", "supports_instructions", "max_voice_samples", "max_prompt_chars",
+    "min_speed", "max_speed",
 }
 _DATES = {"deprecated_on", "retired_on"}
 
@@ -45,8 +47,8 @@ def parse_overrides(raw: dict[str, Any] | None) -> dict[str, ModelOverride]:
             raise ConfigError(f"catalog.models.{model} must be a mapping")
         spec = dict(spec)
         modality = spec.pop("modality", None)
-        if modality is not None and modality not in ("image", "video", "music"):
-            raise ConfigError(f"catalog.models.{model}.modality must be image, video or music")
+        if modality is not None and modality not in ("image", "video", "music", "audio"):
+            raise ConfigError(f"catalog.models.{model}.modality must be image, video, music or audio")
         price_raw = spec.pop("price", None)
         unknown = set(spec) - _OVERRIDABLE
         if unknown:

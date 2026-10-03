@@ -179,9 +179,9 @@ async def test_lists_all_gateway_tools(mcp_app):
     async with _client(mcp_app, "alice-token") as sess:
         tools = await sess.list_tools()
     names = sorted(t.name for t in tools.tools)
-    assert names == ["create_image", "create_music", "create_video",
-                     "estimate_cost", "get_image", "get_music", "get_usage", "get_video",
-                     "list_model_limits", "list_models"]
+    assert names == ["create_audio", "create_image", "create_music", "create_video", "create_voice",
+                     "estimate_cost", "get_audio", "get_image", "get_music", "get_usage", "get_video", "get_voice",
+                     "list_model_limits", "list_models", "list_voices"]
 
 
 async def test_create_tool_schemas_are_provider_neutral(mcp_app):
@@ -209,9 +209,9 @@ async def test_create_tool_schemas_are_provider_neutral(mcp_app):
         "metadata",
         "idempotency_key",
     }
-    for name in ("create_image", "create_video", "create_music"):
+    for name in ("create_image", "create_video", "create_music", "create_audio", "create_voice"):
         schema = tools[name]
-        assert set(schema["properties"]) == expected
+        assert set(schema["properties"]) == (expected | {"consent"} if name == "create_voice" else expected)
         assert schema["properties"]["input"]["type"] == "array"
         assert schema["properties"]["input"]["minItems"] == 1
         serialized = json.dumps(schema)

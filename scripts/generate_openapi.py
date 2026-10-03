@@ -42,6 +42,12 @@ EXPECTED_PATHS = {
     "/v1/videos/{video_id}",
     "/v1/music",
     "/v1/music/{music_id}",
+    "/v1/audio",
+    "/v1/audio/{audio_id}",
+    "/v1/audio/estimate",
+    "/v1/voices",
+    "/v1/voices/{voice_id}",
+    "/v1/voices/estimate",
     # Auto mode's cost control (docs/design/auto-mode.md).
     "/v1/images/estimate",
     "/v1/videos/estimate",

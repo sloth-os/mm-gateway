@@ -26,6 +26,7 @@ from mm_gateway.models.limits import ModelLimits
 from mm_gateway.schemas.image import UnifiedImageRequest
 from mm_gateway.schemas.music import UnifiedMusicRequest
 from mm_gateway.schemas.video import UnifiedVideoRequest
+from mm_gateway.schemas.audio import UnifiedAudioRequest, UnifiedVoiceRequest
 
 _TEXT = "text"
 _IMAGE = "image"
@@ -63,6 +64,11 @@ class RequestProfile:
     duration_seconds: float | None = None
     fps: int | None = None
     sample_rate_hz: int | None = None
+    wants_voice_clone: bool = False
+    input_audio_count: int = 0
+    file_format: str | None = None
+    speed: float | None = None
+    wants_instructions: bool = False
 
 
 def _image_profile(request: UnifiedImageRequest) -> RequestProfile:
@@ -167,7 +173,16 @@ def _music_profile(request: UnifiedMusicRequest) -> RequestProfile:
 
 
 def profile_for(request: Any) -> RequestProfile:
-    """Build the router input profile for a unified image/video/music request."""
+    """Build the router input profile for media generation or voice cloning."""
+    if isinstance(request, UnifiedVoiceRequest):
+        return RequestProfile(modality="audio", input_modalities={_AUDIO},
+                              wants_voice_clone=True, input_audio_count=len(request.samples))
+    if isinstance(request, UnifiedAudioRequest):
+        params = request.parameters
+        return RequestProfile(modality="audio", input_modalities={_TEXT},
+                              prompt_chars=len(request.text), file_format=params.file_format,
+                              sample_rate_hz=params.sample_rate_hz, speed=params.speed,
+                              wants_instructions=bool(params.instructions))
     if isinstance(request, UnifiedImageRequest):
         return _image_profile(request)
     if isinstance(request, UnifiedVideoRequest):
@@ -207,6 +222,22 @@ def _fits(profile: RequestProfile, limits: ModelLimits) -> tuple[bool, int]:
     that natively honor the request's dimensions/duration/roles).
     """
     optional_hits = 0
+    if profile.wants_voice_clone:
+        if limits.supports_voice_cloning is not True:
+            return False, 0
+        if limits.max_voice_samples is not None and profile.input_audio_count > limits.max_voice_samples:
+            return False, 0
+        # Speech text/output limits do not constrain a clone's input recordings.
+        return True, 1
+    if profile.file_format and limits.supported_file_formats and profile.file_format not in limits.supported_file_formats:
+        return False, 0
+    if profile.wants_instructions and limits.supports_instructions is False:
+        return False, 0
+    if profile.speed is not None:
+        if limits.min_speed is not None and profile.speed < limits.min_speed:
+            return False, 0
+        if limits.max_speed is not None and profile.speed > limits.max_speed:
+            return False, 0
     # Input modalities: every modality the request carries must be accepted.
     # Empty ``input_modalities`` (e.g. the permissive fallback) means "no
     # constraint" — the model accepts any input the modality allows.

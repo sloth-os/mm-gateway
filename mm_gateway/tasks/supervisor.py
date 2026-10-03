@@ -28,6 +28,7 @@ from mm_gateway.observability.metrics import (
 from mm_gateway.schemas.image import UnifiedImageTask
 from mm_gateway.schemas.music import UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoTask
+from mm_gateway.schemas.audio import UnifiedAudioTask, UnifiedVoiceTask
 
 log = get_logger("task.supervisor")
 
@@ -36,6 +37,8 @@ TaskT = TypeVar(
     UnifiedImageTask,
     UnifiedVideoTask,
     UnifiedMusicTask,
+    UnifiedAudioTask,
+    UnifiedVoiceTask,
 )
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "expired"})
 _MAX_CONSECUTIVE_POLL_ERRORS = 3

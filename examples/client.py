@@ -115,12 +115,34 @@ def generate_music(client: httpx.Client) -> None:
     print("music outputs:", task.get("outputs", []))
 
 
+def generate_audio(client: httpx.Client, voice: str = "default") -> dict[str, Any]:
+    """Synthesize speech with a preset or a gateway-owned voice_... id."""
+    task = poll(client, client.post("/v1/audio", headers={"idempotency-key": f"speech-{uuid4().hex}"},
+                 json={"input": [{"type": "text", "text": "Welcome to our application."}],
+                       "parameters": {"voice": voice, "file_format": "mp3"}}))
+    if task["status"] != "succeeded":
+        raise RuntimeError(task.get("error", task["status"]))
+    print("speech output available:", bool(task.get("outputs")))
+    return task
+
+
+def clone_voice(client: httpx.Client, sample_uri: str) -> str:
+    """Call only with a recording whose speaker has authorized cloning."""
+    task = poll(client, client.post("/v1/voices", headers={"idempotency-key": f"voice-{uuid4().hex}"},
+                json={"input": [{"type": "audio", "uri": sample_uri}],
+                      "parameters": {"name": "Application narrator"}, "consent": {"granted": True}}))
+    if task["status"] != "succeeded" or task.get("verification_required"):
+        raise RuntimeError(task.get("error", "Voice is not ready"))
+    return task["id"]
+
+
 def main() -> None:
     headers = {"authorization": f"Bearer {TOKEN}"} if TOKEN else {}
     with httpx.Client(base_url=BASE, headers=headers, timeout=300) as client:
         generate_image(client)
         generate_video(client)
         generate_music(client)
+        generate_audio(client)
 
 
 if __name__ == "__main__":

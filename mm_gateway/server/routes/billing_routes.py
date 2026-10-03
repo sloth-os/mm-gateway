@@ -1,6 +1,6 @@
 """Cost estimates and usage (docs/design/auto-mode.md#prices-and-estimates).
 
-``POST /v1/{images,videos,music}/estimate`` takes the same body as the create
+``POST /v1/{images,videos,music,audio,voices}/estimate`` takes the same body as the create
 call and runs auto mode's planning stages without creating a task: which model
 a create would try first, what it would cost, and why other candidates are not
 admissible. ``GET /v1/usage`` reports the authenticated key's spend,
@@ -23,10 +23,13 @@ from mm_gateway.schemas.api import (
     MusicRequest,
     UsageResponse,
     VideoRequest,
+    AudioRequest,
+    VoiceCloneRequest,
 )
 from mm_gateway.server.auth import get_api_key
 from mm_gateway.server.routes._resources import render_conditional_json
 from mm_gateway.translators.rest import from_image_request, from_music_request, from_video_request
+from mm_gateway.translators.rest import from_audio_request, from_voice_request
 
 router = APIRouter()
 
@@ -47,6 +50,21 @@ _ESTIMATE = {
     "response_model_exclude_none": True,
     "responses": {200: {"description": "How auto mode would route the request, and its estimated cost."}},
 }
+
+
+@router.post("/v1/audio/estimate", name="estimate_audio", operation_id="estimateAudio",
+             summary="Estimate a speech request", tags=["audio"], **_ESTIMATE)
+async def estimate_audio(request: Request, body: Annotated[AudioRequest, Body()],
+                         key: Annotated[KeyConfig, Depends(get_api_key)]):
+    unified = await request.app.state.audio_service.prepare(from_audio_request(body), key)
+    return _estimate(request, unified, body.routing, key, "audio")
+
+
+@router.post("/v1/voices/estimate", name="estimate_voice", operation_id="estimateVoice",
+             summary="Estimate voice cloning", tags=["audio"], **_ESTIMATE)
+async def estimate_voice(request: Request, body: Annotated[VoiceCloneRequest, Body()],
+                         key: Annotated[KeyConfig, Depends(get_api_key)]):
+    return _estimate(request, from_voice_request(body), body.routing, key, "audio")
 
 
 @router.post("/v1/images/estimate", name="estimate_image", operation_id="estimateImage",

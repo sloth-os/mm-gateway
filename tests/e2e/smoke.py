@@ -7,14 +7,15 @@ upstream provider. It is intended to run in CI against the published Docker
 image, with provider credentials supplied via environment variables using the
 gateway's legacy env-var layout split by modality: an image triple
 (``*_IMAGE_API_KEY`` + ``*_IMAGE_BASE_URL`` + ``*_IMAGE_MODEL``), a video triple
-(``*_VIDEO_*``), and a music triple (``*_MUSIC_*``) per provider, plus an
+(``*_VIDEO_*``), a music triple (``*_MUSIC_*``), and a speech triple
+(``*_AUDIO_*``) per provider, plus an
 implicit front-end key of ``GATEWAY_API_KEY``.
 
 When to run
 -----------
 This script exercises a backend for a modality only when that modality is
 **fully configured**: all three of its ``*_IMAGE_*`` (or ``*_VIDEO_*`` or
-``*_MUSIC_*``) env vars are set. The ``*_BASE_URL`` proves the operator pointed
+``*_MUSIC_*`` or ``*_AUDIO_*``) env vars are set. The ``*_BASE_URL`` proves the operator pointed
 at a real endpoint, and ``*_MODEL`` pins the exact upstream model id to call
 (rather than relying on a hard-coded alias). When *no* modality of any backend
 has all three set the script **exits 0** (skips), so the workflow is green
@@ -34,7 +35,7 @@ requires, so a region is optional).
 Behaviour
 ---------
 * Collects every (backend, modality) whose ``*_IMAGE_*`` / ``*_VIDEO_*`` /
-  ``*_MUSIC_*`` triple is fully set. Falls back to the per-backend default
+  ``*_MUSIC_*`` / ``*_AUDIO_*`` triple is fully set. Falls back to the per-backend default
   gateway alias when the user pins a backend via ``E2E_BACKEND`` but leaves the
   model env unset.
 * Confirms the chosen model is actually served by ``GET /v1/models`` — so a
@@ -52,6 +53,8 @@ Configuration (env)
   E2E_IMAGE_MODEL     pin an image model id instead of the backend's *_IMAGE_MODEL
   E2E_VIDEO_MODEL     pin a video model id instead of the backend's *_VIDEO_MODEL
   E2E_MUSIC_MODEL     pin a music model id instead of the backend's *_MUSIC_MODEL
+  E2E_AUDIO_MODEL     pin a speech model id instead of the backend's *_AUDIO_MODEL
+  E2E_AUDIO_VOICE     configured speech preset (default "default")
   E2E_PROMPT          override the prompt (default a deterministic string)
   E2E_LYRICS          override the music lyrics (default structured example lyrics)
   E2E_TIMEOUT         per-request timeout seconds (default 120)
@@ -66,6 +69,7 @@ Exit codes: 0 ok / skipped / some candidates failed but at least one succeeded
 
 from __future__ import annotations
 
+import base64
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -143,6 +147,9 @@ PROVIDERS: list[tuple[str, str, str, str, str, str, str, str, str, str, str, str
      "ACESTEP_MUSIC_API_KEY", "ACESTEP_MUSIC_BASE_URL", "ACESTEP_MUSIC_MODEL", "gateway-music-acestep"),
 ]
 
+# Speech is distinct from song generation; the smoke never creates a voice clone.
+AUDIO_PROVIDERS = ("openai", "elevenlabs", "minimax")
+
 BASE = os.environ.get("MM_GATEWAY", "http://127.0.0.1:8000").rstrip("/")
 TOKEN = os.environ.get("GATEWAY_API_KEY", "")
 TIMEOUT = float(os.environ.get("E2E_TIMEOUT", "120"))
@@ -215,7 +222,7 @@ def candidates() -> list[tuple[str, str, str]]:
     """(backend_type, modality, model_id) candidates that are fully configured.
 
     A (backend, modality) qualifies only when its ``*_IMAGE_*`` / ``*_VIDEO_*`` /
-    ``*_MUSIC_*`` triple is fully set — "three envs of one type provider set" —
+    ``*_MUSIC_*`` / ``*_AUDIO_*`` triple is fully set — "three envs of one type provider set" —
     so the e2e targets a real, operator-pinned model rather than a default alias.
     ``E2E_BACKEND`` pins a single backend (raising if no modality is fully
     configured); ``E2E_IMAGE_MODEL`` / ``E2E_VIDEO_MODEL`` / ``E2E_MUSIC_MODEL``
@@ -225,6 +232,7 @@ def candidates() -> list[tuple[str, str, str]]:
     pinned_image_model = os.environ.get("E2E_IMAGE_MODEL", "").strip()
     pinned_video_model = os.environ.get("E2E_VIDEO_MODEL", "").strip()
     pinned_music_model = os.environ.get("E2E_MUSIC_MODEL", "").strip()
+    pinned_audio_model = os.environ.get("E2E_AUDIO_MODEL", "").strip()
 
     rows: list[tuple[str, str, str]] = []
 
@@ -234,6 +242,14 @@ def candidates() -> list[tuple[str, str, str]]:
         if model:
             rows.append((backend, modality, model))
 
+    for backend in AUDIO_PROVIDERS:
+        if pinned_backend and backend != pinned_backend:
+            continue
+        prefix = backend.upper() + "_AUDIO_"
+        if fully_configured({"api_key": prefix + "API_KEY", "base_url": prefix + "BASE_URL",
+                             "model": prefix + "MODEL"}):
+            add(backend, "audio", prefix + "MODEL", "", pinned_audio_model)
+
     if pinned_backend:
         spec = next((p for p in PROVIDERS if p[0] == pinned_backend), None)
         if spec is None:
@@ -242,13 +258,17 @@ def candidates() -> list[tuple[str, str, str]]:
         img_set = fully_configured({"api_key": ik, "base_url": iu, "model": im})
         vid_set = fully_configured({"api_key": vk, "base_url": vu, "model": vm})
         mus_set = fully_configured({"api_key": mk, "base_url": mu, "model": mm})
-        if not (img_set or vid_set or mus_set):
+        if not (img_set or vid_set or mus_set or rows):
             # Only list env names that exist for this backend (music-only
             # providers have empty image/video env names — skip those).
             missing = [v for v in (ik, iu, im, vk, vu, vm, mk, mu, mm)
                        if v and not os.environ.get(v)]
+            if backend in AUDIO_PROVIDERS:
+                missing.extend(backend.upper() + "_AUDIO_" + suffix
+                               for suffix in ("API_KEY", "BASE_URL", "MODEL")
+                               if not os.environ.get(backend.upper() + "_AUDIO_" + suffix))
             raise ValueError(
-                f"E2E_BACKEND={pinned_backend!r} pinned but no image/video/music "
+                f"E2E_BACKEND={pinned_backend!r} pinned but no image/video/music/audio "
                 f"triple is fully configured (missing: {', '.join(missing)})"
             )
         if img_set:
@@ -405,6 +425,42 @@ def generate_music(client: httpx.Client, model: str) -> str:
     raise RuntimeError(f"music task did not complete within {MUSIC_TIMEOUT}s (last: {str(last)[:500]})")
 
 
+def generate_audio(client: httpx.Client, model: str) -> str:
+    """Exercise speech using a configured preset and validate inline audio bytes."""
+    create = client.post(
+        "/v1/audio", headers=auth_headers(), timeout=TIMEOUT,
+        json={"model": model,
+              "input": [{"type": "text", "text": "The speech gateway is ready."}],
+              "parameters": {"voice": os.environ.get("E2E_AUDIO_VOICE", "default"),
+                             "file_format": "mp3", "delivery": "inline"}},
+    )
+    if create.status_code != 202:
+        raise RuntimeError(f"POST /v1/audio -> {create.status_code}: {create.text[:500]}")
+    task_id = create.json().get("id")
+    if not task_id:
+        raise RuntimeError("speech create returned no task id")
+    resource_url = create.headers.get("location") or f"/v1/audio/{task_id}"
+    deadline = time.time() + TIMEOUT
+    while time.time() < deadline:
+        response = client.get(resource_url, headers=auth_headers(), timeout=TIMEOUT)
+        if response.status_code != 200:
+            raise RuntimeError(f"GET /v1/audio/{task_id} -> {response.status_code}: {response.text[:500]}")
+        task = response.json()
+        if task.get("status") == "succeeded":
+            output = (task.get("outputs") or [{}])[0]
+            uri = output.get("uri", "")
+            if output.get("mime_type") != "audio/mpeg" or not uri.startswith("data:audio/mpeg;base64,"):
+                raise RuntimeError("speech succeeded without the requested inline MP3 output")
+            data = base64.b64decode(uri.split(",", 1)[1], validate=True)
+            if not data:
+                raise RuntimeError("speech returned empty audio")
+            return f"audio/mpeg, {len(data)} bytes"
+        if task.get("status") in ("failed", "cancelled", "expired"):
+            raise RuntimeError(f"speech task {task['status']}: {task.get('error')}")
+        time.sleep(2)
+    raise RuntimeError(f"speech task did not complete within {TIMEOUT}s")
+
+
 def run_one(candidate: tuple[str, str, str]) -> tuple[str, str, str, str]:
     """Exercise a single (backend, modality, model) in its own client/thread.
 
@@ -422,6 +478,9 @@ def run_one(candidate: tuple[str, str, str]) -> tuple[str, str, str, str]:
             if modality == "video":
                 url = generate_video(client, model)
                 return backend, modality, model, f"video ok: {url}"
+            if modality == "audio":
+                result = generate_audio(client, model)
+                return backend, modality, model, f"speech ok: {result}"
             url = generate_music(client, model)
             return backend, modality, model, f"music ok: {url}"
     except Exception as exc:  # noqa: BLE001
@@ -434,7 +493,7 @@ def main() -> int:
     if not cands:
         log(
             "no provider modality is fully configured (needs *_IMAGE_* / "
-            "*_VIDEO_* / *_MUSIC_* triple) and E2E_BACKEND is unset — "
+            "*_VIDEO_* / *_MUSIC_* / *_AUDIO_* triple) and E2E_BACKEND is unset — "
             "skipping real-provider e2e"
         )
         return 0

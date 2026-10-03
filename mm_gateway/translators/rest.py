@@ -5,6 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from mm_gateway.schemas.api import (
+    AudioRequest,
+    AudioTaskResponse,
+    VoiceCloneRequest,
+    VoiceResponse,
     ImageOutput,
     ImageRequest,
     ImageTaskResponse,
@@ -38,6 +42,9 @@ from mm_gateway.schemas.video import audio_part as video_audio_part
 from mm_gateway.schemas.video import image_part as video_image_part
 from mm_gateway.schemas.video import text_part as video_text_part
 from mm_gateway.tasks.store import TaskRecord
+from mm_gateway.schemas.audio import UnifiedAudioRequest, UnifiedAudioTask, UnifiedVoiceRequest, UnifiedVoiceTask
+
+GenerationTask = UnifiedImageTask | UnifiedVideoTask | UnifiedMusicTask | UnifiedAudioTask | UnifiedVoiceTask
 
 
 def _data_uri(data: str, mime_type: str) -> str:
@@ -140,6 +147,34 @@ def from_music_request(body: MusicRequest) -> UnifiedMusicRequest:
     )
 
 
+def from_audio_request(body: AudioRequest) -> UnifiedAudioRequest:
+    return UnifiedAudioRequest(model=body.model or "auto", text="\n".join(part.text for part in body.input),
+                               parameters=body.parameters.model_copy(deep=True))
+
+
+def from_voice_request(body: VoiceCloneRequest) -> UnifiedVoiceRequest:
+    return UnifiedVoiceRequest(model=body.model or "auto", samples=body.input,
+                               parameters=body.parameters, consent=body.consent)
+
+
+def to_audio_response(task: UnifiedAudioTask, record: TaskRecord, *, self_url: str) -> AudioTaskResponse:
+    usage = Usage(**task.usage.model_dump(exclude_none=True), output_count=len(task.outputs)) if task.usage else None
+    return AudioTaskResponse(id=record.task_id, model=record.model, status=task.status,
+                             outputs=task.outputs, error=_error(task), usage=_with_cost(usage, task, record),
+                             metadata=record.metadata, created_at=_created_at(task, record),
+                             completed_at=_completed_at(task), routing=_routing(record),
+                             links=ResourceLinks(self=self_url))
+
+
+def to_voice_response(task: UnifiedVoiceTask, record: TaskRecord, *, self_url: str) -> VoiceResponse:
+    usage = Usage(**task.usage.model_dump(exclude_none=True)) if task.usage else None
+    return VoiceResponse(id=record.task_id, name=task.name, model=record.model, status=task.status,
+                         verification_required=task.verification_required, error=_error(task),
+                         usage=_with_cost(usage, task, record), metadata=record.metadata,
+                         created_at=_created_at(task, record), completed_at=_completed_at(task),
+                         routing=_routing(record), links=ResourceLinks(self=self_url))
+
+
 def _datetime(value: float) -> datetime:
     timestamp = float(value)
     if timestamp > 100_000_000_000:
@@ -148,7 +183,7 @@ def _datetime(value: float) -> datetime:
 
 
 def _created_at(
-    task: UnifiedImageTask | UnifiedVideoTask | UnifiedMusicTask,
+    task: GenerationTask,
     record: TaskRecord,
 ) -> datetime:
     # The public resource is created by the gateway. Provider timestamps may use
@@ -157,12 +192,12 @@ def _created_at(
     return _datetime(record.created_at)
 
 
-def _completed_at(task: UnifiedImageTask | UnifiedVideoTask | UnifiedMusicTask
+def _completed_at(task: GenerationTask
                   ) -> datetime | None:
     return _datetime(task.completed_at) if task.completed_at is not None else None
 
 
-def _error(task: UnifiedImageTask | UnifiedVideoTask | UnifiedMusicTask
+def _error(task: GenerationTask
            ) -> TaskError | None:
     if not task.error:
         return None
@@ -173,7 +208,7 @@ def _routing(record: TaskRecord) -> RoutingInfo | None:
     return RoutingInfo.model_validate(record.routing) if record.routing else None
 
 
-def _with_cost(usage: Usage | None, task: UnifiedImageTask | UnifiedVideoTask | UnifiedMusicTask,
+def _with_cost(usage: Usage | None, task: GenerationTask,
                record: TaskRecord) -> Usage | None:
     """Mark a provider-reported cost, or fill in auto mode's estimate for a succeeded task."""
     if usage is not None and usage.cost is not None:

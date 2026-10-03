@@ -16,6 +16,13 @@ EXPECTED_OPERATIONS = {
     ("/v1/videos/{video_id}", "get"): "getVideo",
     ("/v1/music", "post"): "createMusic",
     ("/v1/music/{music_id}", "get"): "getMusic",
+    ("/v1/audio", "post"): "createAudio",
+    ("/v1/audio/{audio_id}", "get"): "getAudio",
+    ("/v1/audio/estimate", "post"): "estimateAudio",
+    ("/v1/voices", "post"): "createVoice",
+    ("/v1/voices", "get"): "listVoices",
+    ("/v1/voices/{voice_id}", "get"): "getVoice",
+    ("/v1/voices/estimate", "post"): "estimateVoice",
     # Auto mode's cost control (docs/design/auto-mode.md).
     ("/v1/images/estimate", "post"): "estimateImage",
     ("/v1/videos/estimate", "post"): "estimateVideo",
@@ -60,7 +67,7 @@ def test_openapi_has_only_the_intended_rest_paths_and_operation_ids():
 
 def test_create_operations_are_202_resources_with_polling_headers():
     spec = _spec()
-    for path in ("/v1/images", "/v1/videos", "/v1/music"):
+    for path in ("/v1/images", "/v1/videos", "/v1/music", "/v1/audio", "/v1/voices"):
         responses = spec["paths"][path]["post"]["responses"]
         assert "200" not in responses
         assert "409" in responses
@@ -85,6 +92,8 @@ def test_get_operations_support_conditional_polling():
         "/v1/images/{image_id}",
         "/v1/videos/{video_id}",
         "/v1/music/{music_id}",
+        "/v1/audio/{audio_id}",
+        "/v1/voices/{voice_id}",
     ):
         operation = spec["paths"][path]["get"]
         assert "304" in operation["responses"]
@@ -158,7 +167,7 @@ def test_public_parameter_schemas_are_strict_and_provider_neutral():
         "aspect_ratio",
         "resolution",
     }
-    for name in ("ImageParameters", "VideoParameters", "MusicParameters"):
+    for name in ("ImageParameters", "VideoParameters", "MusicParameters", "AudioParameters", "VoiceParameters"):
         schema = schemas[name]
         assert schema["additionalProperties"] is False
         assert provider_fields.isdisjoint(schema["properties"])
@@ -170,9 +179,15 @@ def test_requests_are_strict_but_responses_allow_additive_fields():
         "ImageRequest",
         "VideoRequest",
         "MusicRequest",
+        "AudioRequest",
+        "VoiceCloneRequest",
         "ImageParameters",
         "VideoParameters",
         "MusicParameters",
+        "AudioParameters",
+        "VoiceParameters",
+        "VoiceConsent",
+        "VoiceSampleInput",
         "Dimensions",
     ):
         assert schemas[name]["additionalProperties"] is False
@@ -180,6 +195,8 @@ def test_requests_are_strict_but_responses_allow_additive_fields():
         "ImageTaskResponse",
         "VideoTaskResponse",
         "MusicTaskResponse",
+        "AudioTaskResponse",
+        "VoiceResponse",
         "ProblemDetail",
     ):
         assert schemas[name]["additionalProperties"] is True
@@ -187,7 +204,7 @@ def test_requests_are_strict_but_responses_allow_additive_fields():
 
 def test_inputs_have_one_canonical_non_empty_array_shape():
     schemas = _spec()["components"]["schemas"]
-    for name in ("ImageRequest", "VideoRequest", "MusicRequest"):
+    for name in ("ImageRequest", "VideoRequest", "MusicRequest", "AudioRequest", "VoiceCloneRequest"):
         schema = schemas[name]
         input_schema = schema["properties"]["input"]
         assert input_schema["type"] == "array"

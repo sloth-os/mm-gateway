@@ -1,6 +1,6 @@
 # mm-gateway
 
-`mm-gateway` is a Python 3.11+ gateway for image, video, and music generation.
+`mm-gateway` is a Python 3.11+ gateway for image, video, music, speech synthesis, and voice cloning.
 Each output modality has its own REST API, while all clients use the same
 provider-neutral request and task conventions.
 
@@ -18,8 +18,15 @@ each backend adapter translates those concepts to its native SDK or REST shape.
 | `GET` | `/v1/videos/{video_id}` | Retrieve a video task |
 | `POST` | `/v1/music` | Create a music task |
 | `GET` | `/v1/music/{music_id}` | Retrieve a music task |
-| `GET` | `/v1/models?modality=image\|video\|music` | List usable models |
-| `GET` | `/v1/models/limits?modality=image\|video\|music` | List usable models with documented input/output limits |
+| `POST` | `/v1/audio` | Create a speech synthesis task |
+| `GET` | `/v1/audio/{audio_id}` | Retrieve a speech task |
+| `POST` | `/v1/voices` | Create a reusable voice clone |
+| `GET` | `/v1/voices` | List voice presets and owned clones |
+| `GET` | `/v1/voices/{voice_id}` | Retrieve a voice or clone task |
+| `POST` | `/v1/audio/estimate` | Estimate speech cost and routing |
+| `POST` | `/v1/voices/estimate` | Estimate cloning cost and routing |
+| `GET` | `/v1/models?modality=image\|video\|music\|audio` | List usable models |
+| `GET` | `/v1/models/limits?modality=image\|video\|music\|audio` | List usable models with documented input/output limits |
 | `POST` | `/v1/images/estimate` | Estimate the cost and routing of an image request without creating a task |
 | `POST` | `/v1/videos/estimate` | Estimate the cost and routing of a video request without creating a task |
 | `POST` | `/v1/music/estimate` | Estimate the cost and routing of a music request without creating a task |
@@ -221,9 +228,68 @@ reference-audio strength, inference steps, section-duration adherence, and
 provenance signing. Adapters map these concepts only where the selected backend
 supports them.
 
+### Speech and voice cloning
+
+`POST /v1/audio` synthesizes the text parts in order. Omit `model` to route
+by the speech limits. OpenAI, ElevenLabs and MiniMax speech adapters are
+available; the existing music endpoints keep their music-generation semantics.
+
+```json
+{
+  "input": [{"type": "text", "text": "Welcome to our application."}],
+  "parameters": {"voice": "default", "file_format": "mp3", "speed": 1.0}
+}
+```
+
+`GET /v1/voices` lists gateway voice ids. `default` is a portable preset;
+operators can add named presets in each backend's `extra.voice_presets`
+mapping. A preset selects a voice on the chosen backend. Speech parameters also
+include `instructions`, ISO `language`, `sample_rate_hz`, `bitrate_kbps`, `seed`,
+and `delivery`. Unsupported controls and encoding combinations exclude a
+candidate before any upstream generation. `inline` is the default delivery;
+MiniMax also supports `remote`. Instructions are separate from the spoken text.
+
+Clone an authorized speaker with `POST /v1/voices`:
+
+```json
+{
+  "input": [{"type": "audio", "uri": "https://assets.example/speaker.wav"}],
+  "parameters": {"name": "Application narrator"},
+  "consent": {"granted": true},
+  "metadata": {"speaker": "narrator"}
+}
+```
+
+Poll the returned `Location`. Once the clone succeeds and
+`verification_required` is false, pass its `voice_...` id as
+`parameters.voice` in `/v1/audio`. The clone belongs to its creating gateway
+key. Reuse and estimates check ownership and bind routing to the backend and
+credential account that created it, including when fallback is requested.
+Preset aliases may select different speakers across providers; a cloned voice
+always selects the recorded speaker on its owning account.
+
+OpenAI custom voices require an eligible upstream account and
+`extra.voice_cloning_enabled: true`. For that route, also supply
+`consent.recording_uri` and `consent.language` (for example `en`); the recording
+must use the provider's published consent phrase. The adapter creates the
+upstream consent resource and then the voice. ElevenLabs supports multiple
+samples and MiniMax one sample; neither accepts a separate consent recording
+through this clone operation. The caller's `granted: true` attestation is
+required for every provider. Provider sample duration, format and account
+requirements are documented in [the audio design and research](docs/design/audio.md).
+
+Both creates support `Idempotency-Key`, cached non-blocking reads, and ETags.
+Audio and clone resources share the configured process-local task store and
+monitor; they do not survive a gateway restart with the default implementation.
+Speech estimates use configured `price.per_character` and/or `per_request`;
+cloning uses `price.per_clone`. Unknown prices remain unknown, and budget or
+cost-capped requests exclude unpriced operations unless the configured unpriced
+budget policy permits them. See [the audio design](docs/design/audio.md)
+for configuration and provider mappings.
+
 ### Task resource
 
-All three APIs use the same lifecycle and field names. The `object` value and
+All generation APIs use the same lifecycle and field names. The `object` value and
 the output schema are modality-specific.
 
 ```json
@@ -252,7 +318,8 @@ scope's state.
 
 Every output contains one `uri`; inline results are base64 data URIs. Image
 outputs may also contain `mime_type` and `revised_prompt`, video outputs may
-contain `cover_uri` and `mime_type`, and music outputs may contain `mime_type`.
+contain `cover_uri` and `mime_type`, and music outputs may contain `mime_type`. Speech outputs also carry available
+sample rate, channel count, and duration in seconds.
 Generated lyrics are returned in the music task's `lyrics` field.
 
 HTTP errors use RFC 9457 Problem Details with the
@@ -367,9 +434,10 @@ use the same underlying generation service. Health and metrics are open.
 
 ## MCP
 
-Set `mcp.enabled: true` to expose the same contract through ten MCP tools:
+Set `mcp.enabled: true` to expose the same contract through fifteen MCP tools:
 `list_models`, `list_model_limits`, `create_image`, `get_image`, `create_video`,
-`get_video`, `create_music`, `get_music`, `estimate_cost`, and `get_usage`. `model` is optional on the create
+`get_video`, `create_music`, `get_music`, `create_audio`, `get_audio`,
+`create_voice`, `get_voice`, `list_voices`, `estimate_cost`, and `get_usage`. `model` is optional on the create
 tools; omit it (or pass `auto`) to auto-route to a fitting backend.
 
 Create tools take `model`, typed `input`, a modality-specific `parameters`
@@ -461,7 +529,7 @@ configuration.
 
 If no YAML file exists, environment-based backend configuration is also
 available. The split variables are `<PROVIDER>_IMAGE_*`,
-`<PROVIDER>_VIDEO_*`, and `<PROVIDER>_MUSIC_*`, each with `API_KEY`, `BASE_URL`,
+`<PROVIDER>_VIDEO_*`, `<PROVIDER>_MUSIC_*`, and `<PROVIDER>_AUDIO_*`, each with `API_KEY`, `BASE_URL`,
 and `MODEL` variants. `vertex` is the exception: it authenticates with
 Application Default Credentials (a service-account JSON key), so instead of an
 `API_KEY` it reads `VERTEX_CREDENTIALS_JSON` (raw key content, e.g. a CI secret)

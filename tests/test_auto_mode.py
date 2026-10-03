@@ -218,7 +218,7 @@ def test_catalog_declares_performance_models():
     {"m": {"unknown_field": 1}},
     {"m": {"price": {"per_second": -1}}},
     {"m": {"price": {"currency": "EUR", "per_second": 1}}},
-    {"m": {"modality": "audio"}},
+    {"m": {"modality": "speech"}},
 ])
 def test_catalog_overrides_are_validated(raw):
     with pytest.raises(ConfigError):

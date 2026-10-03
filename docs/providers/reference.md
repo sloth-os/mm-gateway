@@ -20,6 +20,12 @@ any explicit proxy — HTTP or SOCKS — through `aiohttp-socks`. See the README
 
 ## openai — `openai` v2.53.0
 
+- **Speech and custom voices** use a separate authenticated REST transport:
+  `/v1/audio/speech`, `/v1/audio/voice_consents`, and `/v1/audio/voices`. Binary
+  speech becomes a normalized audio output; custom voices upload consent before
+  the speaker sample. Cloning requires operator opt-in and eligible upstream
+  access. See [speech research and mappings](../design/audio.md).
+
 - **Client**: `from openai import AsyncOpenAI; AsyncOpenAI(api_key=, base_url=)` (env `OPENAI_API_KEY`, `OPENAI_BASE_URL`).
 - **Sync vs async URL**: two `AsyncOpenAI` instances — image (DALL·E/GPT-Image)
   on `base_url` (the `OPENAI_IMAGE_BASE_URL` sync endpoint) and video (Sora) on
@@ -222,6 +228,12 @@ differs.
 
 ## elevenlabs — `elevenlabs` v2.62.0 (SDK)
 
+- **Speech and Instant Voice Cloning** use REST `/v1/text-to-speech/{voice_id}`
+  and multipart `/v1/voices/add`. Gateway presets map to private native ids;
+  clones retain credential affinity and background verification state. Neutral
+  formats/rates/bitrates become encoding strings; WAV wraps PCM samples.
+  See [speech research and mappings](../design/audio.md).
+
 - **Client**: `from elevenlabs import AsyncElevenLabs; AsyncElevenLabs(api_key=, base_url=|None, timeout=240.0)` (env `ELEVENLABS_MUSIC_API_KEY`/`ELEVENLABS_MUSIC_BASE_URL`, legacy `ELEVENLABS_API_KEY`/`ELEVENLABS_BASE_URL`). Required: `backend.api_key` else `ProviderNotConfiguredError("elevenlabs")`. No default base_url — `None` falls back to the SDK default.
 - **Music**: `client.music.compose(...)` — an async generator that streams audio bytes from a single `POST /v1/music`. No task id to poll; the adapter mints a synthetic in-memory task (id `el-{uuid4.hex}`) that moves `pending -> running -> succeeded` as the stream completes on the first poll.
   - Models: `music_v1`, `music_v2` (default `music_v2`).
@@ -232,6 +244,11 @@ differs.
   - Errors: any `Exception` from the stream → `ProviderRequestError(502)`; no audio bytes → `TaskFailedError`; unknown task id → 404; missing prompt (no text part) → `ProviderRequestError(400)`.
 
 ## minimax — REST over `https://api.minimax.io`
+
+- **Speech and voice cloning** use `/v1/t2a_v2`, `/v1/files/upload` and
+  `/v1/voice_clone`. Speech normalizes completed hex bytes or a temporary URL;
+  cloning uploads a sample before creating a private native voice id, without
+  requesting a preview synthesis. See [speech research and mappings](../design/audio.md).
 
 - **Client**: two `httpx.AsyncClient`s (timeout 300, headers `{Authorization: Bearer {api_key}, Content-Type: application/json}`). The music client (`_client`) uses `backend.base_url or "https://api.minimax.io"` (env `MINIMAX_MUSIC_API_KEY`/`MINIMAX_MUSIC_BASE_URL`, legacy `MINIMAX_API_KEY`/`MINIMAX_BASE_URL`); the video client (`_client_video`) uses `backend.extra["video_base_url"]` when it differs (env `MINIMAX_VIDEO_API_KEY`/`MINIMAX_VIDEO_BASE_URL`), else collapses onto the music client. The real `api.minimax.io` serves both at one host. Required: `backend.api_key` else `ProviderNotConfiguredError("minimax")`.
 - **Music**: `POST /v1/music_generation` (synchronous — a single blocking call returns `data.status` 1 = in progress or 2 = completed with audio inline). No job id; the adapter mints a synthetic in-memory task (id `mm-{uuid4.hex}`) and runs the POST on the first poll — `pending -> running -> succeeded`/`failed`. A `data.status` of 1 leaves the task `running` so a later poll re-issues the call.
@@ -288,4 +305,3 @@ differs.
   - Models: `acestep-v15-turbo`, `acestep-v15-xl-turbo`, `acestep-v15-base`, `acestep-v15-turbo-shift3`, `ace-step-1.5`.
   - Audio delivery = inline base64 (native: bytes fetched via `_fetch_audio`; completion: data-URL payload via `_data_url_b64`); native fallback to `audio_urls=[absolute path]` on fetch failure. `_media_type_for` maps `flac`→`audio/flac`, `mp3`→`audio/mpeg`, `opus`→`audio/ogg`, `aac`→`audio/aac`, `wav`/`wav32`→`audio/wav`, default `audio/mpeg`. Native `parsed[0].metas.duration` → `MusicUsage(duration)`; `parsed[0].lyrics` → `task.lyrics`. No result → `failed`; no file/audio → `failed`.
   - Errors: `httpx.HTTPError`/transport error → `ProviderRequestError(502)`; HTTP ≥400 → `ProviderRequestError` via `_map_status`; create with no task_id → `ProviderRequestError`; audio-fetch HTTP ≥400 → `ProviderRequestError`; non-JSON completion response → `TaskFailedError`.
-

@@ -9,7 +9,7 @@ which settles its cost in the ledger when it finishes. Keeping this logic out
 of the route handler keeps the route testable and lets a CLI or worker reuse
 the same path.
 
-Image, video and music share one flow (:class:`_GenerationService`); the
+Media generation and voice cloning share one flow (:class:`_GenerationService`); the
 subclasses only name their provider capability and native create/get calls.
 """
 
@@ -29,19 +29,21 @@ from mm_gateway.auto_mode import (
 )
 from mm_gateway.billing import CostLedger
 from mm_gateway.config import KeyConfig
-from mm_gateway.core.base import ImageProvider, MusicProvider, VideoProvider
-from mm_gateway.core.exceptions import GatewayError
+from mm_gateway.core.base import AudioProvider, ImageProvider, MusicProvider, VideoProvider, VoiceCloneProvider
+from mm_gateway.core.exceptions import GatewayError, TaskNotFoundError, ValidationError
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.observability.metrics import timed
 from mm_gateway.registry import Registry
 from mm_gateway.schemas.image import UnifiedImageRequest, UnifiedImageTask
 from mm_gateway.schemas.music import UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
+from mm_gateway.schemas.audio import UnifiedAudioRequest, UnifiedAudioTask, UnifiedVoiceRequest, UnifiedVoiceTask
+from mm_gateway.tasks.store import TaskStore
 from mm_gateway.tasks.supervisor import AsyncTaskSupervisor
 
 log = get_logger("service")
 
-TaskT = TypeVar("TaskT", UnifiedImageTask, UnifiedVideoTask, UnifiedMusicTask)
+TaskT = TypeVar("TaskT", UnifiedImageTask, UnifiedVideoTask, UnifiedMusicTask, UnifiedAudioTask, UnifiedVoiceTask)
 
 _TERMINAL = ("succeeded", "failed", "cancelled", "expired")
 
@@ -52,7 +54,7 @@ def _is_auto(model: str | None) -> bool:
 
 
 class _GenerationService(Generic[TaskT]):
-    """Plan → attempt → monitor → settle, shared by the three modalities."""
+    """Plan → attempt → monitor → settle, shared by generation and cloning."""
 
     modality: str = ""
     provider_type: type = object
@@ -235,4 +237,63 @@ class MusicService(_GenerationService[UnifiedMusicTask]):
         return await provider.get_music_task(task_id)
 
 
-__all__ = ["ImageService", "MusicService", "VideoService"]
+class VoiceService(_GenerationService[UnifiedVoiceTask]):
+    # Clone selection uses the audio model catalogue, with a distinct profile.
+    modality = "audio"
+    provider_type = VoiceCloneProvider
+
+    async def _create_task(self, provider: VoiceCloneProvider, request: UnifiedVoiceRequest, *,
+                           sync: bool) -> UnifiedVoiceTask:
+        return await provider.create_voice_task(request)
+
+    async def _get_task(self, provider: VoiceCloneProvider, task_id: str) -> UnifiedVoiceTask:
+        return await provider.get_voice_task(task_id)
+
+
+class AudioService(_GenerationService[UnifiedAudioTask]):
+    modality = "audio"
+    provider_type = AudioProvider
+
+    def __init__(self, registry: Registry, *, task_store: TaskStore, voice_service: VoiceService, **kwargs: Any):
+        super().__init__(registry, **kwargs)
+        self.task_store = task_store
+        self.voice_service = voice_service
+
+    async def prepare(self, request: UnifiedAudioRequest, key: KeyConfig | None) -> UnifiedAudioRequest:
+        """Authorize and resolve a gateway voice before either create or estimate."""
+        from mm_gateway.server.auth import authorize_task_access
+
+        voice_id = request.parameters.voice
+        if voice_id.startswith("voice_"):
+            record = await self.task_store.get(voice_id)
+            if record is None or record.modality != "voice":
+                raise TaskNotFoundError("Voice not found.")
+            if key is not None:
+                authorize_task_access(self.registry, key, record)
+            voice = await self.voice_service.get(record.provider_task_id or record.task_id,
+                                                 backend_name=record.provider)
+            if voice.status != "succeeded" or voice.verification_required or not voice.native_voice_id:
+                raise GatewayError("The voice is not ready for speech generation.",
+                                   code="voice_not_ready", status_code=409)
+            return request.model_copy(update={"native_voice_id": voice.native_voice_id,
+                                               "voice_backend": record.provider,
+                                               "voice_account": voice.account_id})
+        usable = self.registry.usable_for_modality(key, "audio")
+        if not any(voice_id in prov.voice_presets() for name in usable
+                   for _, prov in self.registry.accounts_of(name)):
+            raise ValidationError("Unknown voice preset. Choose a voice from GET /v1/voices.")
+        return request
+
+    async def create(self, request: UnifiedAudioRequest, *, key: KeyConfig | None = None,
+                     **kwargs: Any) -> UnifiedAudioTask:
+        return await super().create(await self.prepare(request, key), key=key, **kwargs)
+
+    async def _create_task(self, provider: AudioProvider, request: UnifiedAudioRequest, *,
+                           sync: bool) -> UnifiedAudioTask:
+        return await provider.create_audio_task(request)
+
+    async def _get_task(self, provider: AudioProvider, task_id: str) -> UnifiedAudioTask:
+        return await provider.get_audio_task(task_id)
+
+
+__all__ = ["AudioService", "ImageService", "MusicService", "VideoService", "VoiceService"]

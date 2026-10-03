@@ -24,7 +24,7 @@ class TaskRecord:
     provider: str
     model: str
     owner_key_id: str
-    modality: Literal["image", "video", "music"]
+    modality: Literal["image", "video", "music", "audio", "voice"]
     provider_task_id: str | None = None
     created_at: int = field(default_factory=lambda: int(time.time()))
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -58,6 +58,11 @@ class TaskStore:
     async def get(self, task_id: str) -> TaskRecord | None:
         async with self._lock:
             return self._records.get(task_id)
+
+    async def list(self, owner_key_id: str, modality: str) -> list[TaskRecord]:
+        async with self._lock:
+            return [record for record in self._records.values()
+                    if record.owner_key_id == owner_key_id and record.modality == modality]
 
     async def get_by_idempotency(
         self,
