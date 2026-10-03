@@ -221,3 +221,9 @@ actionlint
 # Claude Code session-local state (workflow scripts auto-persisted per session,
 # agent transcripts, etc. — not shared repo config).
 .claude/
+
+# Management console build and browser test artifacts.
+node_modules/
+mm_gateway/server/static/admin/
+web/test-results/
+web/playwright-report/

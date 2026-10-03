@@ -59,6 +59,9 @@ mm-gateway = "mm_gateway.server.app:run"
 [tool.setuptools.packages.find]
 include = ["mm_gateway*"]
 
+[tool.setuptools.package-data]
+"mm_gateway.server" = ["static/admin/*", "static/admin/assets/*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

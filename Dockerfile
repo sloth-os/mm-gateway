@@ -10,6 +10,17 @@
 
 ARG PYTHON_VERSION=3.12
 
+# Build the management console with its pinned public TypeScript SDK.
+FROM node:24-bookworm-slim AS console-builder
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /ui/web
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+COPY web ./
+RUN npm run build
+
 # ---- builder ----------------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim AS builder
 
@@ -48,6 +59,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy the package source ONLY after the deps layer is cached, so source changes
 # do not invalidate the dependency install above.
 COPY mm_gateway ./mm_gateway
+COPY --from=console-builder /ui/mm_gateway/server/static/admin ./mm_gateway/server/static/admin
 # Install the gateway package itself (uses the deps above; only re-runs when the
 # mm_gateway source tree changes).
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -63,7 +75,8 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     PORT=8000
 
 # Non-root user for the running process.
-RUN groupadd -r app && useradd -r -g app -d /app app
+RUN groupadd -r app && useradd -r -g app -d /app app \
+    && mkdir -p /app/data && chown app:app /app/data
 
 COPY --from=builder /opt/venv /opt/venv
 

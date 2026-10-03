@@ -7,6 +7,8 @@
 server:
   host: 0.0.0.0
   port: 8000
+  # URL prefix stripped by Caddy handle_path; empty for root deployments.
+  root_path: ${ROOT_PATH:}
   log_level: INFO
   log_format: json
   request_timeout: 120
@@ -18,6 +20,12 @@ video:
 
 defaults:
   enable_metrics: true
+
+# Separate admin token for /v1/management and the /admin/ console. Leave unset
+# to disable management. A storage path keeps live configuration on restart.
+management:
+  api_key: ${MANAGEMENT_API_KEY:}
+  config_path: ${MANAGEMENT_CONFIG_PATH:}
 
 # Route every backend provider's outbound SDK/httpx traffic AND every pass-through
 # proxy's HTTP forwarder + WebSocket bridge through one HTTP or SOCKS5 proxy.

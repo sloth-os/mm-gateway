@@ -1,0 +1,30 @@
+{
+  "name": "mm-gateway-management",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "sdk:generate": "openapi-typescript ../docs/openapi.json -o src/sdk/schema.d.ts",
+    "test": "playwright test",
+    "test:production": "MANAGEMENT_TEST_PRODUCTION=1 playwright test"
+  },
+  "dependencies": {
+    "@sloth-os/mm-gateway-ts": "git+https://github.com/sloth-os/mm-gateway-ts.git#6a9c70acb12ace4733d3870490f7787413db23f6",
+    "axios": "^1.18.0",
+    "lucide-react": "^1.50.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.2"
+  }
+}

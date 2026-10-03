@@ -9,6 +9,8 @@ defined in ``core/exceptions``.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+import time
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -16,8 +18,11 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.staticfiles import StaticFiles
 
 from mm_gateway.config import Settings
+from mm_gateway.management import ManagementService, load_management_config
+from mm_gateway.observability.metrics import STORE as METRICS
 from mm_gateway.core.exceptions import GatewayError
 from mm_gateway.observability.httplog import frontend_request_log, frontend_response_log
 from mm_gateway.observability.logging import (
@@ -34,6 +39,14 @@ from mm_gateway.services import AudioService, ImageService, MusicService, VideoS
 from mm_gateway.tasks.store import TaskStore
 
 log = get_logger("app")
+
+
+def _is_management_request(request: Request) -> bool:
+    path = request.scope["path"]
+    root_path = request.scope.get("root_path", "").rstrip("/")
+    if root_path and path.startswith(root_path + "/"):
+        path = path[len(root_path):]
+    return path == "/v1/management" or path.startswith("/v1/management/")
 
 
 def _problem_response(
@@ -73,7 +86,7 @@ def create_app(
     task_store: TaskStore | None = None,
     ledger: CostLedger | None = None,
 ) -> FastAPI:
-    settings = settings or Settings.from_env()
+    settings = load_management_config(settings or Settings.from_env())
     configure_logging(level=settings.log_level, fmt=settings.log_format)
 
     registry = Registry(settings)
@@ -119,7 +132,7 @@ def create_app(
     app = FastAPI(
         title="mm-gateway",
         description="Provider-neutral image, video, music, speech and voice cloning gateway.",
-        version="0.1.0", lifespan=lifespan,
+        version="0.1.0", lifespan=lifespan, root_path=settings.root_path,
     )
     app.state.settings = settings
     app.state.registry = registry
@@ -131,9 +144,12 @@ def create_app(
     app.state.task_store = task_store
     app.state.ledger = ledger
     app.state.proxy_runner = proxy_runner
+    app.state.management = ManagementService(app)
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):
+        started = time.monotonic()
+        is_management = _is_management_request(request)
         request_id = request.headers.get("x-request-id") or new_request_id()
         request.state.request_id = request_id
         bind_context(request_id=request_id)
@@ -146,7 +162,7 @@ def create_app(
         except Exception:  # noqa: BLE001
             raw_body = None
         frontend_request_log(
-            request.method, str(request.url), request.headers, raw_body,
+            request.method, str(request.url), request.headers, None if is_management else raw_body,
         )
         # If the downstream raises, the response never streams, so clear the
         # context now — the streaming wrapper below is never installed.
@@ -177,7 +193,7 @@ def create_app(
             bind_context(request_id=request_id)
             try:
                 async for chunk in original_iter:
-                    if not is_proxy_stream:
+                    if not is_proxy_stream and not is_management:
                         if isinstance(chunk, (bytes, bytearray)):
                             captured.extend(chunk)
                         elif isinstance(chunk, str):
@@ -190,10 +206,18 @@ def create_app(
                 else:
                     frontend_response_log(response.status_code, response.headers, bytes(captured))
             finally:
+                if app.state.settings.enable_metrics:
+                    route = request.scope.get("route")
+                    labels = {"method": request.method, "path": getattr(route, "path", "unmatched"),
+                              "status": str(response.status_code)}
+                    METRICS.inc_counter("gateway_http_requests_total", **labels)
+                    METRICS.observe("gateway_http_request_duration_seconds", time.monotonic() - started, **labels)
                 clear_context()
 
         response.body_iterator = logged_iter()
         response.headers["x-request-id"] = request_id
+        if is_management:
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.exception_handler(GatewayError)
@@ -209,12 +233,16 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):
+        errors = exc.errors()
+        if _is_management_request(request):
+            # Pydantic's input/context members can contain newly supplied secrets.
+            errors = [{k: v for k, v in error.items() if k not in {"input", "ctx"}} for error in errors]
         return _problem_response(
             request,
             status=422,
             code="validation_error",
             detail="Request validation failed.",
-            errors=jsonable_encoder(exc.errors()),
+            errors=jsonable_encoder(errors),
         )
 
     @app.exception_handler(StarletteHTTPException)
@@ -235,6 +263,7 @@ def create_app(
         audio_routes,
         billing_routes,
         image_routes,
+        management_routes,
         meta_routes,
         music_routes,
         proxy_routes,
@@ -247,6 +276,11 @@ def create_app(
     app.include_router(audio_routes.router)
     app.include_router(billing_routes.router)
     app.include_router(proxy_routes.router)
+    app.include_router(management_routes.router)
+
+    admin_assets = Path(__file__).parent / "static" / "admin"
+    if admin_assets.is_dir():
+        app.mount("/admin", StaticFiles(directory=admin_assets, html=True), name="admin")
 
     # Optionally mount the HTTP MCP endpoint (no-op when mcp_enabled is false).
     from mm_gateway.server.mcp import mount_mcp
@@ -477,6 +511,10 @@ def _install_openapi_customization(app: FastAPI) -> None:
             "bearerFormat": "API key",
             "description": 'Front-end API key sent as "Authorization: Bearer <token>".',
         }
+        spec["components"]["securitySchemes"]["ManagementAuth"] = {
+            "type": "http", "scheme": "bearer", "bearerFormat": "Management API key",
+            "description": "Separate admin token configured by MANAGEMENT_API_KEY.",
+        }
 
         problem_ref = {"$ref": "#/components/schemas/ProblemDetail"}
         # FastAPI assigns a single operationId to every method of a multi-method
@@ -520,7 +558,7 @@ def _install_openapi_customization(app: FastAPI) -> None:
                 if method not in ("get", "post", "put", "patch", "delete", "head", "options"):
                     continue
                 if path not in _OPEN_PATHS:
-                    op.setdefault("security", [{"BearerAuth": []}])
+                    op.setdefault("security", [{"ManagementAuth" if path.startswith("/v1/management") else "BearerAuth": []}])
                     responses = op.setdefault("responses", {})
                     # Every protected op can return these problem statuses.
                     # Ensure each carries both the shared schema and an example;
@@ -529,6 +567,8 @@ def _install_openapi_customization(app: FastAPI) -> None:
                     # set the schema/example on the media block directly rather
                     # than setdefault-ing the whole response block.
                     error_codes = ["400", "401", "403", "404", "422", "502", "503", "504"]
+                    if path.startswith("/v1/management"):
+                        error_codes = ["401", "404", "422", "503"]
                     if method == "post" and path in {"/v1/images", "/v1/videos", "/v1/music", "/v1/audio", "/v1/voices"}:
                         error_codes.append("409")
                     for code in error_codes:
@@ -556,6 +596,10 @@ def _install_openapi_customization(app: FastAPI) -> None:
                             "error",
                             {"summary": example["summary"], "value": value},
                         )
+                    if path.startswith("/v1/management"):
+                        for code in ("412", "428"):
+                            if code in responses:
+                                responses[code]["content"] = {"application/problem+json": {"schema": problem_ref}}
 
                 # Attach a worked example to each JSON success-response media
                 # block, keyed off the schema $ref so clients see a concrete
@@ -601,7 +645,7 @@ app = create_app()
 def run() -> None:
     settings = Settings.from_env()
     uvicorn.run("mm_gateway.server.app:app", host=settings.host, port=settings.port,
-                log_level=settings.log_level.lower())
+                log_level=settings.log_level.lower(), root_path=settings.root_path)
 
 
 if __name__ == "__main__":

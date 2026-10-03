@@ -354,6 +354,109 @@
         "title": "AudioTaskResponse",
         "type": "object"
       },
+      "BackendCredential": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "extra": {
+            "additionalProperties": true,
+            "title": "Extra",
+            "type": "object"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "BackendCredential",
+        "type": "object"
+      },
+      "BackendRuntime": {
+        "additionalProperties": false,
+        "properties": {
+          "accounts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "models": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Models",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "enabled",
+          "configured",
+          "active",
+          "tags",
+          "accounts",
+          "models"
+        ],
+        "title": "BackendRuntime",
+        "type": "object"
+      },
       "BudgetDirective": {
         "additionalProperties": false,
         "description": "A client-chosen spend bucket within the key, optionally self-capped.",
@@ -447,6 +550,33 @@
         },
         "required": [],
         "title": "BudgetState",
+        "type": "object"
+      },
+      "CounterSample": {
+        "additionalProperties": false,
+        "properties": {
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "labels",
+          "value"
+        ],
+        "title": "CounterSample",
         "type": "object"
       },
       "Dimensions": {
@@ -607,6 +737,53 @@
         },
         "required": [],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "HistogramSample": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
+          },
+          "max": {
+            "title": "Max",
+            "type": "number"
+          },
+          "mean": {
+            "title": "Mean",
+            "type": "number"
+          },
+          "min": {
+            "title": "Min",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "sum": {
+            "title": "Sum",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "labels",
+          "count",
+          "sum",
+          "min",
+          "max",
+          "mean"
+        ],
+        "title": "HistogramSample",
         "type": "object"
       },
       "ImageInput": {
@@ -1049,6 +1226,827 @@
           "text"
         ],
         "title": "LyricsInput",
+        "type": "object"
+      },
+      "ManagedBackend": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "credentials": {
+            "items": {
+              "$ref": "#/components/schemas/BackendCredential"
+            },
+            "title": "Credentials",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "extra": {
+            "additionalProperties": true,
+            "title": "Extra",
+            "type": "object"
+          },
+          "name": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "type": {
+            "minLength": 1,
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "title": "ManagedBackend",
+        "type": "object"
+      },
+      "ManagedBudget": {
+        "additionalProperties": false,
+        "properties": {
+          "limit_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Usd"
+          },
+          "period": {
+            "default": "month",
+            "enum": [
+              "day",
+              "month",
+              "total"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "scopes_limit_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopes Limit Usd"
+          }
+        },
+        "required": [],
+        "title": "ManagedBudget",
+        "type": "object"
+      },
+      "ManagedKey": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_backends": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allow Backends",
+            "type": "array"
+          },
+          "allow_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allow Tags",
+            "type": "array"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManagedBudget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_audio_backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Audio Backend"
+          },
+          "default_audio_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Audio Tag"
+          },
+          "default_image_backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Image Backend"
+          },
+          "default_image_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Image Tag"
+          },
+          "default_music_backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Music Backend"
+          },
+          "default_music_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Music Tag"
+          },
+          "default_video_backend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Video Backend"
+          },
+          "default_video_tag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Video Tag"
+          },
+          "deny_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Deny Tags",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "extra": {
+            "additionalProperties": true,
+            "title": "Extra",
+            "type": "object"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key"
+        ],
+        "title": "ManagedKey",
+        "type": "object"
+      },
+      "ManagedProxy": {
+        "additionalProperties": false,
+        "properties": {
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/ProxyAccount"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Headers",
+            "type": "object"
+          },
+          "outbound_proxy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outbound Proxy"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "timeout": {
+            "default": 120,
+            "exclusiveMinimum": 0.0,
+            "title": "Timeout",
+            "type": "number"
+          }
+        },
+        "required": [
+          "base_url"
+        ],
+        "title": "ManagedProxy",
+        "type": "object"
+      },
+      "ManagedRoutingProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "fallback": {
+            "anyOf": [
+              {
+                "enum": [
+                  "none",
+                  "same_model",
+                  "any"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback"
+          },
+          "max_cost_usd": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cost Usd"
+          },
+          "optimize": {
+            "anyOf": [
+              {
+                "enum": [
+                  "balanced",
+                  "cost",
+                  "latency"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimize"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [],
+        "title": "ManagedRoutingProfile",
+        "type": "object"
+      },
+      "ManagedTask": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "modality": {
+            "enum": [
+              "image",
+              "video",
+              "music",
+              "audio",
+              "voice"
+            ],
+            "title": "Modality",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "owner_key_id": {
+            "title": "Owner Key Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "owner_key_id",
+          "backend",
+          "model",
+          "modality",
+          "status",
+          "created_at"
+        ],
+        "title": "ManagedTask",
+        "type": "object"
+      },
+      "ManagedUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "key_id": {
+            "title": "Key Id",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageResponse"
+          }
+        },
+        "required": [
+          "key_id",
+          "enabled",
+          "usage"
+        ],
+        "title": "ManagedUsage",
+        "type": "object"
+      },
+      "ManagementConfig-Input": {
+        "additionalProperties": false,
+        "properties": {
+          "backends": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedBackend"
+            },
+            "title": "Backends",
+            "type": "array"
+          },
+          "budget_allow_unpriced": {
+            "default": false,
+            "title": "Budget Allow Unpriced",
+            "type": "boolean"
+          },
+          "catalog_models": {
+            "additionalProperties": true,
+            "title": "Catalog Models",
+            "type": "object"
+          },
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedKey"
+            },
+            "title": "Keys",
+            "type": "array"
+          },
+          "outbound_proxy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outbound Proxy"
+          },
+          "proxies": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedProxy"
+            },
+            "title": "Proxies",
+            "type": "array"
+          },
+          "routing_default_optimize": {
+            "default": "balanced",
+            "enum": [
+              "balanced",
+              "cost",
+              "latency"
+            ],
+            "title": "Routing Default Optimize",
+            "type": "string"
+          },
+          "routing_profiles": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ManagedRoutingProfile"
+            },
+            "title": "Routing Profiles",
+            "type": "object"
+          }
+        },
+        "required": [],
+        "title": "ManagementConfig",
+        "type": "object"
+      },
+      "ManagementConfig-Output": {
+        "additionalProperties": false,
+        "properties": {
+          "backends": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedBackend"
+            },
+            "title": "Backends",
+            "type": "array"
+          },
+          "budget_allow_unpriced": {
+            "default": false,
+            "title": "Budget Allow Unpriced",
+            "type": "boolean"
+          },
+          "catalog_models": {
+            "additionalProperties": true,
+            "title": "Catalog Models",
+            "type": "object"
+          },
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedKey"
+            },
+            "title": "Keys",
+            "type": "array"
+          },
+          "outbound_proxy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outbound Proxy"
+          },
+          "proxies": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedProxy"
+            },
+            "title": "Proxies",
+            "type": "array"
+          },
+          "routing_default_optimize": {
+            "default": "balanced",
+            "enum": [
+              "balanced",
+              "cost",
+              "latency"
+            ],
+            "title": "Routing Default Optimize",
+            "type": "string"
+          },
+          "routing_profiles": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ManagedRoutingProfile"
+            },
+            "title": "Routing Profiles",
+            "type": "object"
+          }
+        },
+        "required": [],
+        "title": "ManagementConfig",
+        "type": "object"
+      },
+      "ManagementConfigResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ManagementConfig-Output"
+          },
+          "persistent": {
+            "title": "Persistent",
+            "type": "boolean"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "persistent",
+          "config"
+        ],
+        "title": "ManagementConfigResponse",
+        "type": "object"
+      },
+      "ManagementMetrics": {
+        "additionalProperties": false,
+        "properties": {
+          "collected_at": {
+            "title": "Collected At",
+            "type": "string"
+          },
+          "counters": {
+            "items": {
+              "$ref": "#/components/schemas/CounterSample"
+            },
+            "title": "Counters",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "histograms": {
+            "items": {
+              "$ref": "#/components/schemas/HistogramSample"
+            },
+            "title": "Histograms",
+            "type": "array"
+          },
+          "selection": {
+            "items": {
+              "$ref": "#/components/schemas/SelectionHealth"
+            },
+            "title": "Selection",
+            "type": "array"
+          }
+        },
+        "required": [
+          "collected_at",
+          "enabled",
+          "counters",
+          "histograms",
+          "selection"
+        ],
+        "title": "ManagementMetrics",
+        "type": "object"
+      },
+      "ManagementStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "backend_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Backend Types",
+            "type": "array"
+          },
+          "backends": {
+            "items": {
+              "$ref": "#/components/schemas/BackendRuntime"
+            },
+            "title": "Backends",
+            "type": "array"
+          },
+          "enabled_keys_count": {
+            "title": "Enabled Keys Count",
+            "type": "integer"
+          },
+          "keys_count": {
+            "title": "Keys Count",
+            "type": "integer"
+          },
+          "metrics_enabled": {
+            "title": "Metrics Enabled",
+            "type": "boolean"
+          },
+          "persistent": {
+            "title": "Persistent",
+            "type": "boolean"
+          },
+          "proxies": {
+            "items": {
+              "$ref": "#/components/schemas/ProxyRuntime"
+            },
+            "title": "Proxies",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "status": {
+            "const": "ok",
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          },
+          "tasks_by_status": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Tasks By Status",
+            "type": "object"
+          },
+          "uptime_seconds": {
+            "title": "Uptime Seconds",
+            "type": "number"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "uptime_seconds",
+          "revision",
+          "persistent",
+          "metrics_enabled",
+          "backend_types",
+          "backends",
+          "proxies",
+          "keys_count",
+          "enabled_keys_count",
+          "tasks_by_status"
+        ],
+        "title": "ManagementStatus",
+        "type": "object"
+      },
+      "ManagementTaskList": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedTask"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "object": {
+            "const": "list",
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "data",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "title": "ManagementTaskList",
+        "type": "object"
+      },
+      "ManagementUsageList": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedUsage"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "const": "list",
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "ManagementUsageList",
         "type": "object"
       },
       "ModelEntry": {
@@ -1871,6 +2869,60 @@
         "title": "ProblemDetail",
         "type": "object"
       },
+      "ProxyAccount": {
+        "additionalProperties": false,
+        "properties": {
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Headers",
+            "type": "object"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "ProxyAccount",
+        "type": "object"
+      },
+      "ProxyRuntime": {
+        "additionalProperties": false,
+        "properties": {
+          "accounts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Accounts",
+            "type": "array"
+          },
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "domain": {
+            "title": "Domain",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "domain",
+          "enabled",
+          "active",
+          "accounts"
+        ],
+        "title": "ProxyRuntime",
+        "type": "object"
+      },
       "ResourceLinks": {
         "additionalProperties": true,
         "properties": {
@@ -2025,6 +3077,81 @@
           "requested_model"
         ],
         "title": "RoutingInfo",
+        "type": "object"
+      },
+      "SelectionHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "title": "Account",
+            "type": "string"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "backend": {
+            "title": "Backend",
+            "type": "string"
+          },
+          "cooldown_remaining_s": {
+            "title": "Cooldown Remaining S",
+            "type": "number"
+          },
+          "latency_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency S"
+          },
+          "modality": {
+            "title": "Modality",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "rate_limited": {
+            "title": "Rate Limited",
+            "type": "boolean"
+          },
+          "success_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Rate"
+          }
+        },
+        "required": [
+          "backend",
+          "account",
+          "model",
+          "modality",
+          "success_rate",
+          "latency_s",
+          "rate_limited",
+          "cooldown_remaining_s",
+          "attempts"
+        ],
+        "title": "SelectionHealth",
         "type": "object"
       },
       "TaskError": {
@@ -3089,6 +4216,12 @@
       "BearerAuth": {
         "bearerFormat": "API key",
         "description": "Front-end API key sent as \"Authorization: Bearer <token>\".",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "ManagementAuth": {
+        "bearerFormat": "Management API key",
+        "description": "Separate admin token configured by MANAGEMENT_API_KEY.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -6570,6 +7703,2078 @@
         "summary": "Retrieve an image task",
         "tags": [
           "images"
+        ]
+      }
+    },
+    "/v1/management/backends/{name}": {
+      "delete": {
+        "operationId": "deleteManagementBackend",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current configuration revision (ETag).",
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current configuration revision (ETag).",
+              "title": "If-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/backends/{name}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/backends/{name}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Configuration changed; reload before saving."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/backends/{name}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "A current If-Match revision is required."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/backends/{name}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Delete Backend",
+        "tags": [
+          "management"
+        ]
+      },
+      "put": {
+        "operationId": "putManagementBackend",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current configuration revision (ETag).",
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current configuration revision (ETag).",
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedBackend"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/backends/{name}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/backends/{name}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Configuration changed; reload before saving."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/backends/{name}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "A current If-Match revision is required."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/backends/{name}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Put Backend",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/v1/management/config": {
+      "get": {
+        "operationId": "getManagementConfig",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/config",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/config",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/config",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Request validation failed or a task failed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/config",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Get Config",
+        "tags": [
+          "management"
+        ]
+      },
+      "put": {
+        "operationId": "replaceManagementConfig",
+        "parameters": [
+          {
+            "description": "Current configuration revision (ETag).",
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current configuration revision (ETag).",
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagementConfig-Input"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/config",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/config",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Configuration changed; reload before saving."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/config",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "A current If-Match revision is required."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/config",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Replace Config",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/v1/management/keys/{key_id}": {
+      "delete": {
+        "operationId": "deleteManagementKey",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current configuration revision (ETag).",
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current configuration revision (ETag).",
+              "title": "If-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/keys/{key_id}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/keys/{key_id}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Configuration changed; reload before saving."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/keys/{key_id}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "A current If-Match revision is required."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/keys/{key_id}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Delete Key",
+        "tags": [
+          "management"
+        ]
+      },
+      "put": {
+        "operationId": "putManagementKey",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current configuration revision (ETag).",
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current configuration revision (ETag).",
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/keys/{key_id}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/keys/{key_id}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Configuration changed; reload before saving."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/keys/{key_id}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "A current If-Match revision is required."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/keys/{key_id}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Put Key",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/v1/management/metrics": {
+      "get": {
+        "operationId": "getManagementMetrics",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementMetrics"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/metrics",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/metrics",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/metrics",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Request validation failed or a task failed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/metrics",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Get Metrics",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/v1/management/proxies/{domain}": {
+      "delete": {
+        "operationId": "deleteManagementProxy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "domain",
+            "required": true,
+            "schema": {
+              "title": "Domain",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current configuration revision (ETag).",
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current configuration revision (ETag).",
+              "title": "If-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/proxies/{domain}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/proxies/{domain}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Configuration changed; reload before saving."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/proxies/{domain}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "A current If-Match revision is required."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/proxies/{domain}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Delete Proxy",
+        "tags": [
+          "management"
+        ]
+      },
+      "put": {
+        "operationId": "putManagementProxy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "domain",
+            "required": true,
+            "schema": {
+              "title": "Domain",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Current configuration revision (ETag).",
+            "in": "header",
+            "name": "If-Match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Current configuration revision (ETag).",
+              "title": "If-Match"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedProxy"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/proxies/{domain}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/proxies/{domain}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "412": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Configuration changed; reload before saving."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/proxies/{domain}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "428": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "A current If-Match revision is required."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/proxies/{domain}",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Put Proxy",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/v1/management/status": {
+      "get": {
+        "operationId": "getManagementStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/status",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/status",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/status",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Request validation failed or a task failed."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/status",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "Get Status",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/v1/management/tasks": {
+      "get": {
+        "operationId": "listManagementTasks",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "modality",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "image",
+                    "video",
+                    "music",
+                    "audio",
+                    "voice"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Modality"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "expired"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "backend",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Backend"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementTaskList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/tasks",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/tasks",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/tasks",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/tasks",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "List Tasks",
+        "tags": [
+          "management"
+        ]
+      }
+    },
+    "/v1/management/usage": {
+      "get": {
+        "operationId": "listManagementUsage",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "key_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementUsageList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Missing API key",
+                    "value": {
+                      "code": "unauthorized",
+                      "detail": "Missing API key. Send an 'Authorization: Bearer <token>' header.",
+                      "instance": "/v1/management/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 401,
+                      "title": "Unauthorized",
+                      "type": "urn:mm-gateway:problem:unauthorized"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Missing or unknown API key (unauthorized)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Unknown task",
+                    "value": {
+                      "code": "task_not_found",
+                      "detail": "image task img_unknown not found",
+                      "instance": "/v1/management/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 404,
+                      "title": "Task Not Found",
+                      "type": "urn:mm-gateway:problem:task_not_found"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Model or task not found."
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Validation failed",
+                    "value": {
+                      "code": "validation_error",
+                      "detail": "Request validation failed.",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "model"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/v1/management/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 422,
+                      "title": "Validation Error",
+                      "type": "urn:mm-gateway:problem:validation_error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "error": {
+                    "summary": "Generation service unavailable",
+                    "value": {
+                      "code": "generation_service_unavailable",
+                      "detail": "No generation service is available for this request.",
+                      "instance": "/v1/management/usage",
+                      "request_id": "req_01HZX4J3K7NQ8X2V9Y6R5W4T3P",
+                      "status": 503,
+                      "title": "Generation Service Unavailable",
+                      "type": "urn:mm-gateway:problem:generation_service_unavailable"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "No usable generation service is configured."
+          }
+        },
+        "security": [
+          {
+            "ManagementAuth": []
+          }
+        ],
+        "summary": "List Usage",
+        "tags": [
+          "management"
         ]
       }
     },

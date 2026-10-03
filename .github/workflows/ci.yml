@@ -87,6 +87,26 @@ jobs:
       - name: Run unit tests
         run: pytest -q
 
+      - name: Set up Node for the management console
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build and verify the management console
+        working-directory: web
+        env:
+          GATEWAY_TEST_PYTHON: python
+        run: |
+          npm ci --no-audit --no-fund
+          python ../scripts/generate_openapi.py
+          npm run sdk:generate
+          git diff --exit-code -- ../docs/openapi.json src/sdk/schema.d.ts
+          npm run build
+          npx playwright install --with-deps chromium
+          npm run test:production
+
       # Detect whether at least one provider modality is *fully* configured — all
       # three of its *_IMAGE_* / *_VIDEO_* / *_MUSIC_* triple (API_KEY + BASE_URL +
       # MODEL) set — *without* printing any of them. `secrets.*` references are

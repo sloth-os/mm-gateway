@@ -114,6 +114,14 @@ class AsyncTaskSupervisor(Generic[TaskT]):
                 entry = matches[0]
         return entry.snapshot.model_copy(deep=True) if entry is not None else None
 
+    def summary(self, task_id: str, *, provider: str) -> dict | None:
+        """Observe lifecycle fields without copying potentially large output media."""
+        entry = self._entries.get((provider, task_id))
+        if entry is None:
+            return None
+        return {"status": entry.snapshot.status,
+                "completed_at": getattr(entry.snapshot, "completed_at", None)}
+
     async def wait_for_terminal(
         self,
         task_id: str,

@@ -27,6 +27,8 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 
+from mm_gateway.observability.metrics import prometheus_labels
+
 # How long a rate-limit (429) or an explicit cooldown keeps a candidate out of
 # selection. Picked to match typical provider rate-limit windows; operators with
 # longer windows rely on the EWMA decay rather than this hard gate.
@@ -295,14 +297,14 @@ class _SelectionStore:
         """Expose selection metrics on ``/metrics`` alongside the request stats."""
         lines: list[str] = []
         for key, snap in self.snapshot().items():
-            labels = (
-                f'backend="{snap["backend"]}",account="{snap["account"]}",'
-                f'model="{snap["model"] or ""}",modality="{snap["modality"]}"'
-            )
+            labels = prometheus_labels((
+                ("backend", snap["backend"]), ("account", snap["account"]),
+                ("model", snap["model"] or ""), ("modality", snap["modality"]),
+            ))
             sr = snap["success_rate"]
             lat = snap["latency_s"]
             lines.append(
-                f'gateway_selection_success_rate{{{labels}}} {sr if sr is not None else ""}'
+                f'gateway_selection_success_rate{{{labels}}} {sr if sr is not None else "NaN"}'
             )
             if lat is not None:
                 lines.append(f'gateway_selection_latency_seconds{{{labels}}} {lat}')

@@ -33,6 +33,47 @@ each backend adapter translates those concepts to its native SDK or REST shape.
 | `GET` | `/v1/usage` | Spend, reservations and budgets of the authenticated key |
 | `GET` | `/health` | Liveness check |
 | `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/v1/management/status` | Admin runtime status and backend inventory |
+| `GET`, `PUT` | `/v1/management/config` | Read redacted configuration or atomically replace it |
+| `PUT`, `DELETE` | `/v1/management/backends/{name}` | Configure or remove a backend |
+| `PUT`, `DELETE` | `/v1/management/keys/{key_id}` | Configure, rotate, disable, or remove a generation key |
+| `PUT`, `DELETE` | `/v1/management/proxies/{domain}` | Configure or remove a proxy |
+| `GET` | `/v1/management/metrics` | Structured counters, durations, and account selection health |
+| `GET` | `/v1/management/tasks` | Filtered and paginated task snapshots |
+| `GET` | `/v1/management/usage` | Spend and budgets across all generation keys |
+
+### Management console
+
+Set a separate `MANAGEMENT_API_KEY`, start the gateway, and open `/admin/`.
+Docker images include the console. For a source checkout, first build it:
+
+```bash
+cd web
+npm ci
+npm run build
+cd ..
+export MANAGEMENT_API_KEY='your-admin-token'
+export MANAGEMENT_CONFIG_PATH='./data/management.json'
+mm-gateway
+```
+
+For Caddy subpaths such as `/gateway/admin/`, set `ROOT_PATH=/gateway` and use
+`handle_path /gateway/*`. The frontend detects the prefix at runtime; see the
+[Caddy deployment example](docs/management.md#caddy-and-subpath-deployments).
+
+The console uses [`sloth-os/mm-gateway-ts`](https://github.com/sloth-os/mm-gateway-ts)
+with typed management bindings generated from this gateway's OpenAPI contract.
+It displays real runtime metrics, task status and key usage, and manages backend
+credentials, account pools, API-key permissions and budgets, proxies and routing.
+The admin token stays in browser-tab memory. Generation keys never grant admin
+access, even when the generation API is open.
+
+`MANAGEMENT_CONFIG_PATH` enables a private, atomically written configuration
+overlay that is loaded on restart. Without it, changes last for the process
+lifetime. Mount this path on persistent storage when using Docker. Live
+management uses one gateway process; multiple workers or replicas require a
+shared control plane. See [management setup and API details](docs/management.md)
+for revision checks, credential preservation, and development commands.
 
 The `/proxy/{domain}/{path}` surface (documented below) forwards any HTTP
 method — and WebSocket upgrades — verbatim to a configured upstream root URL,

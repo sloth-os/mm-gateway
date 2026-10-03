@@ -155,6 +155,8 @@ async def list_model_limits(
     responses={200: {"description": "Prometheus exposition"}},
 )
 async def metrics(request: Request) -> str:
+    if not request.app.state.settings.enable_metrics:
+        return ""
     # Request counters/histograms first, then the per-backend selection health
     # (success rate, latency EWMA, rate-limit cooldown, attempts) that drives
     # auto-routing, then the key budget gauges of the cost ledger — all share

@@ -28,6 +28,18 @@ EXPECTED_OPERATIONS = {
     ("/v1/videos/estimate", "post"): "estimateVideo",
     ("/v1/music/estimate", "post"): "estimateMusic",
     ("/v1/usage", "get"): "getUsage",
+    ("/v1/management/status", "get"): "getManagementStatus",
+    ("/v1/management/config", "get"): "getManagementConfig",
+    ("/v1/management/config", "put"): "replaceManagementConfig",
+    ("/v1/management/backends/{name}", "put"): "putManagementBackend",
+    ("/v1/management/backends/{name}", "delete"): "deleteManagementBackend",
+    ("/v1/management/keys/{key_id}", "put"): "putManagementKey",
+    ("/v1/management/keys/{key_id}", "delete"): "deleteManagementKey",
+    ("/v1/management/proxies/{domain}", "put"): "putManagementProxy",
+    ("/v1/management/proxies/{domain}", "delete"): "deleteManagementProxy",
+    ("/v1/management/metrics", "get"): "getManagementMetrics",
+    ("/v1/management/tasks", "get"): "listManagementTasks",
+    ("/v1/management/usage", "get"): "listManagementUsage",
 }
 
 # The general pass-through proxy is a separate public surface: one catch-all

@@ -84,6 +84,7 @@ class BackendConfig:
     # the single ``api_key``/``base_url``/``extra`` fields are ignored for
     # account enumeration (but still gate ``configured`` below).
     credentials: list[dict[str, Any]] = field(default_factory=list)
+    enabled: bool = True
 
     @property
     def configured(self) -> bool:
@@ -187,6 +188,7 @@ class ProxyConfig:
     # effective URL (per-proxy override wins) onto this field at registration so
     # the proxy runner and ``bridge_websocket`` read one authoritative value.
     outbound_proxy: str | None = None
+    enabled: bool = True
 
     @property
     def host(self) -> str:
@@ -336,12 +338,15 @@ class KeyConfig:
     extra: dict[str, Any] = field(default_factory=dict)
     # Operator spend cap for this key (None = unlimited).
     budget: KeyBudget | None = None
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
 class Settings:
     host: str = field(default_factory=lambda: _env("HOST", "0.0.0.0") or "0.0.0.0")
     port: int = field(default_factory=lambda: int(_env("PORT", "8000") or "8000"))
+    # Public URL prefix stripped by a reverse proxy, e.g. Caddy handle_path.
+    root_path: str = field(default_factory=lambda: (_env("ROOT_PATH", "") or "").rstrip("/"))
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO") or "INFO")
     log_format: str = field(default_factory=lambda: _env("LOG_FORMAT", "json") or "json")
     request_timeout: float = field(default_factory=lambda: float(_env("REQUEST_TIMEOUT", "120") or "120"))
@@ -357,6 +362,9 @@ class Settings:
     max_sync_wait: float = field(default_factory=lambda: float(_env("MAX_SYNC_WAIT", "300") or "300"))
     poll_interval: float = field(default_factory=lambda: float(_env("POLL_INTERVAL", "2.0") or "2.0"))
     enable_metrics: bool = field(default_factory=lambda: _env("ENABLE_METRICS", "true").lower() == "true")
+    # Management uses a separate credential; generation keys never grant admin access.
+    management_api_key: str | None = field(default_factory=lambda: _env("MANAGEMENT_API_KEY"))
+    management_config_path: str | None = field(default_factory=lambda: _env("MANAGEMENT_CONFIG_PATH"))
 
     # Route every backend provider's *outbound* traffic and every pass-through
     # proxy's forwarder/bridge through this HTTP or SOCKS5 proxy URL (e.g.
@@ -410,7 +418,7 @@ class Settings:
 
     def key_for(self, token: str) -> KeyConfig | None:
         for k in self.keys:
-            if k.key == token:
+            if k.enabled and k.key == token:
                 return k
         return None
 
@@ -479,6 +487,7 @@ class Settings:
                 extra=_with_outbound_proxy(dict(b.get("extra") or {}),
                                            b.get("outbound_proxy")),
                 credentials=list(b.get("credentials") or []),
+                enabled=_bool(b.get("enabled", True)),
             )
             for b in (raw.get("backends") or [])
         ]
@@ -499,6 +508,7 @@ class Settings:
                 default_audio_backend=k.get("default_audio_backend"),
                 extra=dict(k.get("extra") or {}),
                 budget=_key_budget(k.get("budget"), str(k["id"])),
+                enabled=_bool(k.get("enabled", True)),
             )
             for k in (raw.get("keys") or [])
         ]
@@ -510,6 +520,7 @@ class Settings:
                 accounts=list(p.get("accounts") or []),
                 timeout=float(p.get("timeout") or 120),
                 outbound_proxy=_resolve_outbound_proxy(p.get("outbound_proxy")),
+                enabled=_bool(p.get("enabled", True)),
             )
             for p in (raw.get("proxies") or [])
         ]
@@ -529,9 +540,11 @@ class Settings:
         routing = _section("routing")
         catalog = _section("catalog")
         budget = _section("budget")
+        management = _section("management")
         return cls(
             host=str(server.get("host", _env("HOST", "0.0.0.0") or "0.0.0.0")),
             port=int(server.get("port", _env("PORT", "8000") or "8000")),
+            root_path=str(server.get("root_path", _env("ROOT_PATH", "")) or "").rstrip("/"),
             log_level=str(server.get("log_level", _env("LOG_LEVEL", "INFO") or "INFO")),
             log_format=str(server.get("log_format", _env("LOG_FORMAT", "json") or "json")),
             request_timeout=float(server.get("request_timeout", _env("REQUEST_TIMEOUT", "120") or "120")),
@@ -541,6 +554,8 @@ class Settings:
             max_sync_wait=float(video.get("max_sync_wait", _env("MAX_SYNC_WAIT", "300") or "300")),
             poll_interval=float(video.get("poll_interval", _env("POLL_INTERVAL", "2.0") or "2.0")),
             enable_metrics=_bool(defaults.get("enable_metrics", _env("ENABLE_METRICS", "true"))),
+            management_api_key=management.get("api_key", _env("MANAGEMENT_API_KEY")),
+            management_config_path=management.get("config_path", _env("MANAGEMENT_CONFIG_PATH")),
             mcp_enabled=_bool(mcp.get("enabled", _env("MCP_ENABLED", "false"))),
             mcp_path=str(mcp.get("path", _env("MCP_PATH", "/mcp") or "/mcp")),
             mcp_session_idle_timeout=float(

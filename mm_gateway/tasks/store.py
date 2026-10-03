@@ -64,6 +64,11 @@ class TaskStore:
             return [record for record in self._records.values()
                     if record.owner_key_id == owner_key_id and record.modality == modality]
 
+    async def list_all(self) -> list[TaskRecord]:
+        """List gateway records for authenticated management, without provider I/O."""
+        async with self._lock:
+            return list(self._records.values())
+
     async def get_by_idempotency(
         self,
         owner_key_id: str,

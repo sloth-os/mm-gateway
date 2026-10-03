@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 
 from mm_gateway.config import KeyConfig
 from mm_gateway.observability.logging import get_logger
-from mm_gateway.observability.metrics import STORE as METRICS
+from mm_gateway.observability.metrics import STORE as METRICS, prometheus_labels
 
 log = get_logger("ledger")
 
@@ -297,8 +297,9 @@ class CostLedger:
             period = self._period(key)
             with self._lock:
                 spent = self._key_spent.get((key.id, period), 0.0)
-            lines.append(f'gateway_budget_spent_usd{{key="{key.id}"}} {round(spent, 6)}')
-            lines.append(f'gateway_budget_limit_usd{{key="{key.id}"}} {limit}')
+            labels = prometheus_labels((("key", key.id),))
+            lines.append(f'gateway_budget_spent_usd{{{labels}}} {round(spent, 6)}')
+            lines.append(f'gateway_budget_limit_usd{{{labels}}} {limit}')
         return "\n".join(lines) + ("\n" if lines else "")
 
     def clear(self) -> None:

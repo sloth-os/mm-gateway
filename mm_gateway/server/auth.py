@@ -12,6 +12,8 @@ by both the HTTP dependency (``get_api_key``) and the MCP tools, which read the
 
 from __future__ import annotations
 
+import secrets
+
 from fastapi import Request
 
 from mm_gateway.config import KeyConfig, Settings
@@ -43,7 +45,7 @@ def resolve_key(settings: Settings, token: str | None) -> KeyConfig:
             return key
     # No token, or an unknown one: fall back to an open key if configured.
     for k in settings.keys:
-        if not k.key:
+        if k.enabled and not k.key:
             return k
     if token:
         raise UnauthorizedError("Unknown API key.")
@@ -53,6 +55,16 @@ def resolve_key(settings: Settings, token: str | None) -> KeyConfig:
 def get_api_key(request: Request) -> KeyConfig:
     """FastAPI dependency: resolve the bearer token on the request to a KeyConfig."""
     return resolve_key(request.app.state.settings, _extract_token(request))
+
+
+def require_management_key(request: Request) -> None:
+    """Authenticate explicitly; an open generation key cannot admit an administrator."""
+    expected = request.app.state.settings.management_api_key
+    if not expected:
+        raise UnauthorizedError("Management is disabled. Configure MANAGEMENT_API_KEY to enable it.")
+    token = _extract_token(request)
+    if not token or not secrets.compare_digest(token.encode(), expected.encode()):
+        raise UnauthorizedError("A valid management bearer token is required.")
 
 
 def authorize_task(

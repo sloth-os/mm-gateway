@@ -133,7 +133,7 @@ class Registry:
 
     def _build(self) -> None:
         for cfg in self.settings.backends:
-            if not cfg.configured:
+            if not cfg.enabled or not cfg.configured:
                 continue
             cls_name = _PROVIDER_CLASSES.get(cfg.type)
             if cls_name is None:
@@ -181,7 +181,7 @@ class Registry:
         # the configured ProxyConfig is retained, keyed by upstream domain (the
         # proxy's routing identity) for the routes.
         for proxy in self.settings.proxies:
-            if not proxy.configured:
+            if not proxy.enabled or not proxy.configured:
                 continue
             proxy = self._resolve_proxy(proxy)
             if proxy.host in self._proxies or proxy.host in self._backends:

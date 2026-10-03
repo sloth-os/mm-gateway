@@ -55,6 +55,14 @@ EXPECTED_PATHS = {
     "/v1/usage",
     "/proxy/{domain}/{path}",
     "/metrics",
+    "/v1/management/status",
+    "/v1/management/config",
+    "/v1/management/backends/{name}",
+    "/v1/management/keys/{key_id}",
+    "/v1/management/proxies/{domain}",
+    "/v1/management/metrics",
+    "/v1/management/tasks",
+    "/v1/management/usage",
 }
 
 

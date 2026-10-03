@@ -22,3 +22,9 @@ mm-gateway.yml
 tests/
 docs/
 examples/
+
+# Frontend dependencies and locally generated bundles are built in their own stage.
+**/node_modules/
+web/test-results/
+web/playwright-report/
+mm_gateway/server/static/admin/

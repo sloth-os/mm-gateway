@@ -176,7 +176,6 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
     if _mcp_import_error is not None:
         raise _mcp_import_error
 
-    settings: Settings = app.state.settings
     registry = app.state.registry
     image_service = app.state.image_service
     video_service = app.state.video_service
@@ -185,7 +184,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
     mcp = MCPServer(name="mm-gateway", version="0.1.0")
 
     def _key(ctx: Context):
-        return resolve_key(settings, _bearer_from_ctx(ctx))
+        return resolve_key(app.state.settings, _bearer_from_ctx(ctx))
 
     @mcp.tool()
     @_tool
@@ -557,7 +556,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
         else:
             unified = from_music_request(MusicRequest.model_validate(payload))
         body = estimate_route(registry, app.state.ledger, unified, key=key, modality="audio" if modality == "voice" else modality,
-                              policy=resolve_policy(settings, routing))
+                              policy=resolve_policy(app.state.settings, routing))
         return EstimateResponse.model_validate(body).model_dump_json(exclude_none=True)
 
     @mcp.tool()

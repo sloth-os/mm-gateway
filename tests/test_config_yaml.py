@@ -26,6 +26,7 @@ _SAMPLE_YAML = """\
 server:
   host: 127.0.0.1
   port: 9999
+  root_path: /tools/gateway
   log_level: DEBUG
   log_format: text
   request_timeout: 45
@@ -118,6 +119,20 @@ def test_interpolate_only_matches_uppercase_env_names():
     assert _interpolate("v: ${lowercase}") == "v: ${lowercase}"
 
 
+def test_root_path_env_fallback_and_yaml_override(monkeypatch, tmp_path):
+    monkeypatch.setenv("ROOT_PATH", "/nested/gateway/")
+    assert Settings().root_path == "/nested/gateway"
+    path = tmp_path / "mm-gateway.yaml"
+    path.write_text("backends: []\nkeys: []\n", encoding="utf-8")
+    assert Settings.from_file(path).root_path == "/nested/gateway"
+    path.write_text("server: {root_path: /other/}\n", encoding="utf-8")
+    assert Settings.from_file(path).root_path == "/other"
+    path.write_text("server: {root_path: ''}\n", encoding="utf-8")
+    assert Settings.from_file(path).root_path == ""
+    monkeypatch.delenv("ROOT_PATH")
+    assert Settings().root_path == ""
+
+
 # --------------------------------------------------------------------------- #
 # YAML parsing round-trip
 # --------------------------------------------------------------------------- #
@@ -138,6 +153,7 @@ def test_from_file_parses_all_sections(monkeypatch, tmp_path):
     # server / video / defaults
     assert s.host == "127.0.0.1"
     assert s.port == 9999
+    assert s.root_path == "/tools/gateway"
     assert s.log_level == "DEBUG"
     assert s.log_format == "text"
     assert s.request_timeout == 45
@@ -611,5 +627,3 @@ def test_from_env_video_only_key_registers_backend(monkeypatch, tmp_path):
     assert stab.api_key == "sk-stab"
     assert stab.extra.get("video_model") == "stable-video-diffusion"
     assert "image_model" not in stab.extra
-
-

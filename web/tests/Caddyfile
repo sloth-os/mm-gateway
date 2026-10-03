@@ -1,0 +1,16 @@
+{
+	admin off
+	auto_https off
+}
+
+http://127.0.0.1:8766 {
+	redir /nested/gateway /nested/gateway/admin/ 308
+
+	handle_path /nested/gateway/* {
+		reverse_proxy 127.0.0.1:8767
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+}
