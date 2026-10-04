@@ -1,0 +1,25 @@
+services:
+  mm-gateway:
+    build: .
+    image: mm-gateway:local
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"
+    # Optional overrides and provider credentials; no .env file is needed to start.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8000"
+      ROOT_PATH: "${ROOT_PATH:-}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      LOG_FORMAT: "${LOG_FORMAT:-json}"
+      GATEWAY_API_KEY: "${GATEWAY_API_KEY:-mm-gateway-local}"
+      MANAGEMENT_API_KEY: "${MANAGEMENT_API_KEY:-mm-gateway-admin}"
+      MANAGEMENT_CONFIG_PATH: /app/data/management.json
+    volumes:
+      - mm-gateway-data:/app/data
+
+volumes:
+  mm-gateway-data:

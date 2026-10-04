@@ -8,6 +8,34 @@ Provider SDK request names never appear in the public generation contract. The
 gateway validates a strict set of media concepts and generation controls, then
 each backend adapter translates those concepts to its native SDK or REST shape.
 
+## Run with Docker Compose
+
+With Docker and Docker Compose v2.24+ installed, run from the repository root:
+
+```bash
+docker compose up --build -d
+```
+
+This builds the gateway and management console, then starts the API at
+`http://localhost:8000`. Open `http://localhost:8000/admin/` and sign in with
+the default admin token `mm-gateway-admin`. The default generation API token
+is `mm-gateway-local`; send it as `Authorization: Bearer mm-gateway-local`.
+The health endpoint is `http://localhost:8000/health`.
+
+No configuration file or provider credentials are needed to start. Add a backend
+and its credentials in the console to enable generation. Console configuration
+is stored in the `mm-gateway-data` Docker volume and survives container recreation
+and `docker compose down`. Task snapshots remain process-local.
+
+To customize the defaults, copy [`.env.example`](.env.example) to `.env`.
+`PORT` changes the published host port; the container always listens on port
+8000. The service binds to `127.0.0.1` by default. For access from other hosts,
+set `BIND_ADDRESS=0.0.0.0` and replace both default tokens with private values.
+Provider environment settings such as `OPENAI_API_KEY`, `GOOGLE_API_KEY`, and
+`ARK_API_KEY` can also go in `.env`. Run the same startup command after editing it.
+
+Use `docker compose logs -f` to follow logs and `docker compose down` to stop.
+
 ## HTTP API
 
 | Method | Path | Purpose |
