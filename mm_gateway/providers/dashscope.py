@@ -891,7 +891,24 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
                 f"dashscope video submit failed: {exc}", provider="dashscope"
             ) from exc
 
-        task_id = resp.output.task_id
+        task_id = getattr(getattr(resp, "output", None), "task_id", None)
+        if not task_id:
+            # A rejected submit (an auth error, a wrong API root answering 503 with an
+            # empty envelope) comes back without ``output``: say what the upstream
+            # answered instead of failing on the missing task id.
+            status = getattr(resp, "status_code", None)
+            code = getattr(resp, "code", None)
+            message = getattr(resp, "message", None)
+            raise ProviderRequestError(
+                f"dashscope video submit returned HTTP {status}: code={code} message={message}",
+                provider="dashscope",
+                status_code=_map_status(status) if isinstance(status, int) else 502,
+                details={
+                    "upstream_status": status,
+                    "upstream_code": code,
+                    "upstream_message": message,
+                },
+            )
         return UnifiedVideoTask(
             task_id=task_id, provider=self.name, model=request.model, status="pending"
         )

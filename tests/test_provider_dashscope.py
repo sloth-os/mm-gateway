@@ -915,6 +915,26 @@ def test_video_create_maps_params_and_response(provider: DashScopeProvider) -> N
     assert kw["prompt_extend"] is True
 
 
+def test_video_create_rejected_submit_yields_clean_error(
+    provider: DashScopeProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A submit the upstream rejects comes back without ``output`` (the SDK's
+    envelope of a non-200 answer, e.g. a DashScope-compatible gateway's 503 for a
+    path outside its API root): the adapter reports the upstream status and code
+    rather than crashing on ``None.task_id``.
+    """
+
+    async def rejected(**kwargs: Any) -> Any:
+        return SimpleNamespace(status_code=503, code="Unknown", message="", output=None)
+
+    monkeypatch.setattr(provider._fake_video, "async_call", rejected)  # type: ignore[attr-defined]
+    req = UnifiedVideoRequest(model="wanx2.1-t2v-turbo", content=[text_part("a cat")])
+    with pytest.raises(ProviderRequestError) as exc:
+        asyncio.run(provider.create_video_task(req))
+    assert "HTTP 503" in str(exc.value) and "code=Unknown" in str(exc.value)
+    assert exc.value.details["upstream_status"] == 503
+
+
 def test_video_poll_reads_model_from_response(provider: DashScopeProvider) -> None:
     _mount_video(
         provider,
