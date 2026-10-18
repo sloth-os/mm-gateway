@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 async function connect(page: Page) {
   await page.goto("admin/");
@@ -67,7 +69,7 @@ test("shows real gateway metrics, tasks, usage and Prometheus through the SDK", 
 
 test("creates, configures, disables, and deletes a backend", async ({
   page,
-}) => {
+}, testInfo) => {
   await connect(page);
   await page.getByRole("button", { name: "Backends", exact: true }).click();
   await page.getByRole("button", { name: "Add backend" }).click();
@@ -87,6 +89,18 @@ test("creates, configures, disables, and deletes a backend", async ({
   });
   await expect(card).toBeVisible();
   await expect(card.getByText("active", { exact: true })).toBeVisible();
+  const directory = join(
+    testInfo.config.metadata.managementConfigDirectory as string,
+    testInfo.project.name,
+  );
+  const persisted = readFileSync(join(directory, "management.json"), "utf8");
+  expect(persisted).not.toContain("browser-provider-secret");
+  expect(
+    JSON.parse(persisted).backends.find(
+      (backend: { name: string }) => backend.name === "browser-backend",
+    ).api_key,
+  ).toMatch(/^enc:v1:/);
+  expect(statSync(join(directory, ".mm-gateway.key")).mode & 0o777).toBe(0o600);
   await card.getByRole("button", { name: "Configure" }).click();
   await expect(
     page.getByLabel("Provider API key", { exact: true }),

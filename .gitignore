@@ -150,6 +150,7 @@ activemq-data/
 # Environments
 .env
 .envrc
+.mm-gateway.key
 .venv
 env/
 venv/

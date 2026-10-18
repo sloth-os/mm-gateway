@@ -18,19 +18,22 @@ docker compose up --build -d
 
 This builds the gateway and management console, then starts the API at
 `http://localhost:8000`. Open `http://localhost:8000/admin/` and sign in with
-the default admin token `mm-gateway-admin`. The default generation API token
-is `mm-gateway-local`; send it as `Authorization: Bearer mm-gateway-local`.
+the default admin token `mm-gateway-admin`. `GATEWAY_API_KEY` is optional;
+the generation API starts open when it is unset. Use the console to configure
+generation keys and replace or remove the initial open `env` key to require them.
 The health endpoint is `http://localhost:8000/health`.
 
 No configuration file or provider credentials are needed to start. Add a backend
 and its credentials in the console to enable generation. Console configuration
-is stored in the `mm-gateway-data` Docker volume and survives container recreation
-and `docker compose down`. Task snapshots remain process-local.
+is encrypted in the `mm-gateway-data` Docker volume and survives container
+recreation and `docker compose down`. The encryption key is generated
+automatically in the same volume. Task snapshots remain process-local.
 
 To customize the defaults, copy [`.env.example`](.env.example) to `.env`.
 `PORT` changes the published host port; the container always listens on port
 8000. The service binds to `127.0.0.1` by default. For access from other hosts,
-set `BIND_ADDRESS=0.0.0.0` and replace both default tokens with private values.
+set `BIND_ADDRESS=0.0.0.0`, replace the default admin token, and configure private
+generation keys through the console or the optional `GATEWAY_API_KEY` setting.
 Provider environment settings such as `OPENAI_API_KEY`, `GOOGLE_API_KEY`, and
 `ARK_API_KEY` can also go in `.env`. Run the same startup command after editing it.
 
@@ -553,6 +556,15 @@ mcp:
 The gateway loads `mm-gateway.yaml`, `/etc/mm-gateway/config.yaml`, or the path
 in `MM_GATEWAY_CONFIG`. Environment interpolation supports `${ENV}` and
 `${ENV:default}`.
+
+On startup, inline credentials in YAML and existing management overlays are
+automatically encrypted. Credentials added or changed in the console are
+encrypted before they are saved. Environment references stay dynamic, and
+providers receive decrypted credentials at runtime. The gateway creates a
+private `.mm-gateway.key` beside each configuration file; set
+`MM_GATEWAY_SECRET_KEY_FILE` to use a different persistent key location.
+Back up the key with the encrypted configuration. See
+[credential storage](docs/management.md#credential-storage) for deployment details.
 
 ```yaml
 server:

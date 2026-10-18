@@ -5,9 +5,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
-import os
-import re
-import tempfile
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -26,27 +23,20 @@ from mm_gateway.observability.metrics import STORE as METRICS
 from mm_gateway.observability.selection import STORE as SELECTION
 from mm_gateway.registry import Registry, _PROVIDER_CLASSES
 from mm_gateway.schemas.management import ManagementConfig, REDACTED
+from mm_gateway.secrets import SecretError, SecretStore, atomic_write, is_header_map, is_secret
 
 log = get_logger("management")
-_SECRET = re.compile(r"(^key$|api.?key|token|secret|password|passwd|authorization|cookie|credential|private.?key)", re.I)
 
 
 def _redact(value: Any, name: str = "", *, header: bool = False) -> Any:
     if value is None or value == "":
         return value
-    if header or (_SECRET.search(name) and name not in {"keys", "credentials"}):
+    if is_secret(value, name, header=header):
         return REDACTED
     if isinstance(value, dict):
-        return {k: _redact(v, k, header=name == "headers") for k, v in value.items()}
+        return {k: _redact(v, k, header=is_header_map(name)) for k, v in value.items()}
     if isinstance(value, list):
         return [_redact(v, name) for v in value]
-    if isinstance(value, str) and "://" in value:
-        try:
-            parsed = urlsplit(value)
-        except ValueError:
-            return REDACTED
-        if parsed.username or parsed.password or _SECRET.search(parsed.query):
-            return REDACTED
     return value
 
 
@@ -113,27 +103,22 @@ def settings_from_config(settings: Settings, config: ManagementConfig) -> Settin
 def load_management_config(settings: Settings) -> Settings:
     if settings.management_config_path and Path(settings.management_config_path).exists():
         raw = json.loads(Path(settings.management_config_path).read_text(encoding="utf-8"))
-        config = ManagementConfig.model_validate(raw)
+        secrets = SecretStore(settings.management_config_path)
+        config = ManagementConfig.model_validate(secrets.decrypt(raw))
         # A persisted overlay contains actual credentials, never UI placeholders.
         _restore(config.model_dump(), None)
-        return settings_from_config(settings, config)
+        loaded = settings_from_config(settings, config)
+        encrypted = secrets.encrypt(raw)
+        if encrypted != raw:
+            atomic_write(settings.management_config_path,
+                         json.dumps(encrypted, indent=2, allow_nan=False) + "\n")
+        return loaded
     return settings
 
 
 def _persist(path: str, config: ManagementConfig) -> None:
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(config.model_dump(), handle, indent=2, allow_nan=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    encrypted = SecretStore(path).encrypt(config.model_dump())
+    atomic_write(path, json.dumps(encrypted, indent=2, allow_nan=False) + "\n")
 
 
 class ManagementService:
@@ -215,7 +200,7 @@ class ManagementService:
         if settings.management_config_path:
             try:
                 await asyncio.to_thread(_persist, settings.management_config_path, config)
-            except OSError as exc:
+            except (OSError, SecretError) as exc:
                 raise GatewayError("Could not persist configuration; no changes were applied.",
                                    code="config_write_failed", status_code=503) from exc
         # Publish in one event-loop step, retaining the registry object shared by

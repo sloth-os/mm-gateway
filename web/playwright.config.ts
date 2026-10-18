@@ -1,14 +1,17 @@
 import { defineConfig } from "@playwright/test";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const production = process.env.MANAGEMENT_TEST_PRODUCTION === "1";
+const managementConfigDirectory = mkdtempSync(join(tmpdir(), "mm-gateway-browser-"));
 
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,
+  metadata: { managementConfigDirectory },
   use: {
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
@@ -37,7 +40,8 @@ export default defineConfig({
     {
       command: `${process.env.GATEWAY_TEST_PYTHON || "../.venv/bin/python"} tests/gateway.py`,
       url: "http://127.0.0.1:8765/health",
-      reuseExistingServer: !process.env.CI,
+      env: { MANAGEMENT_CONFIG_PATH: join(managementConfigDirectory, "root", "management.json") },
+      reuseExistingServer: false,
     },
     ...(production
       ? [
@@ -47,8 +51,9 @@ export default defineConfig({
             env: {
               GATEWAY_TEST_PORT: "8767",
               GATEWAY_TEST_ROOT_PATH: "/nested/gateway",
+              MANAGEMENT_CONFIG_PATH: join(managementConfigDirectory, "subpath", "management.json"),
             },
-            reuseExistingServer: !process.env.CI,
+            reuseExistingServer: false,
           },
           {
             command: process.env.CADDY_TEST_BINARY

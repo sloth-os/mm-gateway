@@ -15,9 +15,10 @@ services:
       ROOT_PATH: "${ROOT_PATH:-}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       LOG_FORMAT: "${LOG_FORMAT:-json}"
-      GATEWAY_API_KEY: "${GATEWAY_API_KEY:-mm-gateway-local}"
+      GATEWAY_API_KEY: "${GATEWAY_API_KEY:-}"
       MANAGEMENT_API_KEY: "${MANAGEMENT_API_KEY:-mm-gateway-admin}"
       MANAGEMENT_CONFIG_PATH: /app/data/management.json
+      MM_GATEWAY_SECRET_KEY_FILE: "${MM_GATEWAY_SECRET_KEY_FILE:-/app/data/.mm-gateway.key}"
     volumes:
       - mm-gateway-data:/app/data
 

@@ -17,6 +17,7 @@ mm-gateway.yaml
 mm-gateway.yml
 .env
 .envrc
+**/.mm-gateway.key
 
 # Dev-only trees.
 tests/

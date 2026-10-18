@@ -17,6 +17,12 @@ management:
   config_path: ${MANAGEMENT_CONFIG_PATH:}
 ```
 
+Docker Compose supplies the default admin token `mm-gateway-admin` and needs no
+`GATEWAY_API_KEY`. Its initial generation key, `env`, has an empty token and
+allows unauthenticated generation. To require tokens, edit that key in the
+console or replace it with your own keys; adding a key while leaving the open
+key enabled keeps unauthenticated access available.
+
 An unset admin token disables management access. Ordinary generation keys and
 empty/open generation keys do not authorize management. `/health` and the
 existing `/metrics` Prometheus endpoint keep their existing public access rules.
@@ -134,7 +140,7 @@ provider client, and administrative observation never initiates provider polling
 
 `MANAGEMENT_CONFIG_PATH` (or YAML `management.config_path`) selects a JSON
 overlay. Successful writes use a temporary file, `fsync` and atomic replacement;
-the file has mode `0600` and contains the actual credentials. On startup the
+the file has mode `0600` and contains encrypted credentials. On startup the
 overlay replaces the managed portion of the base environment/YAML settings.
 The admin token and server settings continue to come from the base configuration.
 To return to the base configuration, stop the gateway and remove the overlay.
@@ -144,6 +150,46 @@ The console shows this persistence mode. A Docker deployment can mount a volume
 and set, for example, `MANAGEMENT_CONFIG_PATH=/app/data/management.json`.
 The image creates `/app/data` with ownership for its runtime user, so a named
 volume mounted there inherits a writable directory on first use.
+
+### Credential storage
+
+Startup automatically migrates plaintext credentials in the base YAML and any
+existing JSON overlay. Console/API writes encrypt credentials before replacing
+the overlay. This covers backend API keys, named and shorthand account pools,
+service-account JSON, nested authentication/password/token fields, all proxy
+header values, and URLs with authentication. Generation keys and inline admin
+tokens are protected too. Providers use the decrypted values in memory;
+management responses continue to return `[redacted]`.
+
+Encrypted values use the `enc:v1:` prefix and
+[Fernet authenticated encryption](https://cryptography.io/en/latest/fernet/).
+The gateway automatically creates `.mm-gateway.key` in the configuration file's
+directory, with mode `0600`. YAML and overlays in different directories each
+use their directory's key unless `MM_GATEWAY_SECRET_KEY_FILE` selects a shared
+key location. This key is independent of generation and management API tokens.
+No encryption key needs to be supplied for the first start.
+
+Compose sets `MM_GATEWAY_SECRET_KEY_FILE=/app/data/.mm-gateway.key`, so the key
+and overlay both survive container recreation in `mm-gateway-data`. Back up the
+key along with the configuration; restoring encrypted configuration requires
+the matching key. A missing/invalid key or modified ciphertext stops startup
+without replacing the encrypted file or generating a replacement key. A failed
+encryption or save rejects a management edit and preserves its runtime revision.
+
+The configuration directory must be writable for plaintext migration. Mount a
+directory rather than a single config file so atomic replacement can succeed;
+already encrypted YAML or YAML containing only environment references can be
+mounted read-only with a readable key. Direct `${ENV}` and `${ENV:}` references remain
+in the file without copying resolved environment secrets into it. Inline
+fallback secrets in `${ENV:secret}` and mixed templates such as `Bearer ${ENV}`
+are encrypted and still honor environment overrides. Referenced external
+credential files and `.env` files are not rewritten.
+
+You can paste a new plaintext credential over an encrypted value and restart;
+it will be encrypted again. Back up the config and key together before moving
+them. Unrelated YAML comments and formatting are retained during ordinary
+migration; configurations using YAML anchors, aliases or explicit tags are
+serialized again to preserve their types and values.
 
 Use one gateway worker for live management. Multiple workers or replicas have
 independent registries, metrics, task stores, ledgers and configuration revisions;

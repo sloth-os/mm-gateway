@@ -8,6 +8,9 @@ compatibility, if no YAML file is found the settings fall back to a
 legacy env-var layout that registers one backend per provider by its
 ``<NAME>_API_KEY``.
 
+File loads automatically encrypt inline credentials with a private persistent
+key, and decrypt them before constructing provider settings.
+
 The model distinguishes **backends** (named, typed provider instances, each
 carrying its own credentials and zero or more routing tags) from **keys**
 (front-end API keys with allow/deny rules over tags and backends). This lets
@@ -23,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+from mm_gateway.secrets import ENV_PATTERN, SecretStore
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -462,7 +467,10 @@ class Settings:
     @classmethod
     def from_file(cls, path: str | Path) -> "Settings":
         text = Path(path).read_text(encoding="utf-8")
-        return cls._from_yaml(text)
+        secrets = SecretStore(path)
+        settings = cls._from_yaml(text, secrets=secrets)
+        secrets.protect_yaml(path, text)
+        return settings
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -473,10 +481,12 @@ class Settings:
         return cls._from_legacy_env()
 
     @classmethod
-    def _from_yaml(cls, text: str) -> "Settings":
+    def _from_yaml(cls, text: str, *, secrets: SecretStore | None = None) -> "Settings":
         import yaml  # local import so the dep is optional for env-only use
 
         raw = yaml.safe_load(_interpolate(text)) or {}
+        if secrets is not None:
+            raw = secrets.decrypt(raw, interpolate=_interpolate)
         backends = [
             BackendConfig(
                 name=b["name"],
@@ -933,7 +943,7 @@ def _credential_list(raw: str | None) -> list[dict[str, Any]]:
     return [{"api_key": k} for k in keys]
 
 
-_INTERP = re.compile(r"\$\{([A-Z0-9_]+)(?::([^}]*))?\}")
+_INTERP = ENV_PATTERN
 
 
 def _interpolate(text: str) -> str:
