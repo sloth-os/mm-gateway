@@ -564,10 +564,11 @@ def estimate_route(
     key: KeyConfig | None,
     modality: str,
     policy: RoutingPolicy,
+    _plan: RoutePlan | None = None,
 ) -> dict[str, Any]:
     """The ``POST /v1/{modality}/estimate`` body: stages 1–7 without creating a task."""
-    plan = plan_route(registry, ledger, request, key=key, modality=modality, policy=policy,
-                      raise_errors=False)
+    plan = _plan if _plan is not None else plan_route(registry, ledger, request, key=key, modality=modality, policy=policy,
+                                                     raise_errors=False)
     seen: set[str] = set()
     candidates: list[dict[str, Any]] = []
     for c in plan.candidates:
@@ -597,6 +598,16 @@ def estimate_route(
         "candidates": candidates,
         "budget": budget,
     }
+
+
+async def estimate_route_with_plugins(registry, ledger, request, *, key, modality, policy):
+    plugins = getattr(registry, "plugins", None)
+    if plugins is None:
+        return estimate_route(registry, ledger, request, key=key, modality=modality, policy=policy)
+    async with plugins.lease_extensions():
+        plan = plan_route(registry, ledger, request, key=key, modality=modality, policy=policy, raise_errors=False)
+        plan = await plugins.route_plan(plan, request, key, raise_errors=False)
+        return estimate_route(registry, ledger, request, key=key, modality=modality, policy=policy, _plan=plan)
 
 
 __all__ = [

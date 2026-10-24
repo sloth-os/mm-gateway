@@ -1,0 +1,9 @@
+{
+  "id": "request-monitor",
+  "name": "Request monitor",
+  "version": "1.0.0",
+  "api_version": "1",
+  "description": "Log request identity, response status and elapsed time without recording bodies or credentials.",
+  "author": "mm-gateway contributors",
+  "hooks": ["on_request", "on_response"]
+}

@@ -16,6 +16,7 @@ subclasses only name their provider capability and native create/get calls.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import time
 from typing import Any, Generic, TypeVar
 
@@ -68,6 +69,7 @@ class _GenerationService(Generic[TaskT]):
         # One ledger per gateway: create_app shares it across the modalities.
         self.ledger = ledger if ledger is not None else CostLedger()
         self._supervisor = AsyncTaskSupervisor[TaskT](self.modality, poll_interval=poll_interval)
+        self._plugin_pins = {}
 
     # -- modality hooks ------------------------------------------------------ #
 
@@ -79,7 +81,23 @@ class _GenerationService(Generic[TaskT]):
 
     # -- create -------------------------------------------------------------- #
 
-    async def create(
+    async def create(self, request: Any, **kwargs: Any) -> TaskT:
+        plugins = getattr(self.registry, "plugins", None)
+        if plugins is None:
+            return await self._create_routed(request, **kwargs)
+        async with plugins.lease_extensions():
+            return await self._create_routed(request, **kwargs)
+
+    @asynccontextmanager
+    async def _backend_scope(self, provider):
+        plugins = getattr(self.registry, "plugins", None)
+        if plugins is None:
+            yield
+        else:
+            async with plugins.backend_scope(provider.backend):
+                yield
+
+    async def _create_routed(
         self,
         request: Any,
         *,
@@ -99,6 +117,9 @@ class _GenerationService(Generic[TaskT]):
         policy = resolve_policy(self.registry.settings, routing, tag=tag)
         plan = plan_route(self.registry, self.ledger, request, key=key, modality=self.modality,
                           policy=policy, backend_name=backend_name)
+        plugins = getattr(self.registry, "plugins", None)
+        if plugins is not None:
+            plan = await plugins.route_plan(plan, request, key)
 
         async def attempt(cand: Candidate, accept) -> TaskT:
             prov = cand.provider
@@ -108,9 +129,10 @@ class _GenerationService(Generic[TaskT]):
                     code="unsupported_feature", status_code=400,
                 )
             routed = request.model_copy(update={"model": cand.model, "provider": cand.backend})
-            with timed(cand.backend, self.modality):
+            async with self._backend_scope(prov):
                 try:
-                    task = await self._create_task(prov, routed, sync=want_sync)
+                    with timed(cand.backend, self.modality):
+                        task = await self._create_task(prov, routed, sync=want_sync)
                 except GatewayError:
                     raise
                 except Exception as exc:  # noqa: BLE001
@@ -141,9 +163,10 @@ class _GenerationService(Generic[TaskT]):
         return await self._poll(provider_obj, task_id)
 
     async def _poll(self, provider_obj: Any, task_id: str) -> TaskT:
-        with timed(provider_obj.name, self.modality):
+        async with self._backend_scope(provider_obj):
             try:
-                task = await self._get_task(provider_obj, task_id)
+                with timed(provider_obj.name, self.modality):
+                    task = await self._get_task(provider_obj, task_id)
             except GatewayError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -152,20 +175,40 @@ class _GenerationService(Generic[TaskT]):
         return task
 
     def _start_monitor(self, provider_obj: Any, backend: str, task: TaskT) -> None:
+        plugins = getattr(self.registry, "plugins", None)
+        owner = getattr(provider_obj, "_gateway_plugin_owner", None)
+        identity = (backend, task.task_id)
+        if owner is not None and identity not in self._plugin_pins:
+            owner.users += 1
+            self._plugin_pins[identity] = owner
+        settle = settlement(self.ledger, self.modality, backend)
+
+        def on_terminal(latest):
+            try:
+                settle(latest)
+            finally:
+                pinned = self._plugin_pins.pop(identity, None)
+                if pinned is not None:
+                    asyncio.create_task(plugins.release(pinned))
+
         self._supervisor.start(
             provider=backend,
             task=task,
             poll=lambda: self._poll(provider_obj, task.task_id),
-            on_terminal=settlement(self.ledger, self.modality, backend),
+            on_terminal=on_terminal,
         )
 
     async def aclose(self) -> None:
         await self._supervisor.aclose()
+        plugins = getattr(self.registry, "plugins", None)
+        for pinned in self._plugin_pins.values():
+            await plugins.release(pinned)
+        self._plugin_pins.clear()
 
     async def _await_or_timeout(self, provider: Any, task: TaskT) -> TaskT:
         deadline = time.monotonic() + self.max_sync_wait
         while time.monotonic() < deadline:
-            task = await self._get_task(provider, task.task_id)
+            task = await self._poll(provider, task.task_id)
             if task.status in _TERMINAL:
                 if task.status in ("failed", "cancelled", "expired") and not task.error:
                     task.error = task.status

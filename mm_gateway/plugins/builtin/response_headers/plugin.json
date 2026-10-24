@@ -1,0 +1,10 @@
+{
+  "id": "response-headers",
+  "name": "Response headers",
+  "version": "1.0.0",
+  "api_version": "1",
+  "description": "Add configured headers to generation and proxy responses.",
+  "author": "mm-gateway contributors",
+  "hooks": ["on_response"],
+  "default_config": {"headers": {"x-gateway-plugin": "enabled"}}
+}

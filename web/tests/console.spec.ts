@@ -11,6 +11,84 @@ async function connect(page: Page) {
   ).toBeVisible();
 }
 
+test("installs, configures, reloads and removes a plugin through the store", async ({
+  page,
+  request,
+}) => {
+  await connect(page);
+  await page.getByRole("button", { name: "Plugin Store", exact: true }).click();
+  const card = page
+    .locator(".plugin-card")
+    .filter({
+      has: page.getByRole("heading", { name: "Response headers", exact: true }),
+    });
+  await card.getByRole("button", { name: "Install", exact: true }).click();
+  await page
+    .getByLabel("Plugin configuration (JSON)")
+    .fill('{"headers":{"x-browser-plugin":"configured"}}');
+  await page
+    .getByRole("button", { name: "Install plugin", exact: true })
+    .click();
+  await expect(card.getByText("active", { exact: true })).toBeVisible();
+  const auth = { Authorization: "Bearer browser-generation" };
+  expect(
+    (await request.get("v1/models", { headers: auth })).headers()[
+      "x-browser-plugin"
+    ],
+  ).toBe("configured");
+  await card.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Plugin reloaded");
+  await card.getByRole("button", { name: "Disable", exact: true }).click();
+  await expect(card.getByText("disabled", { exact: true })).toBeVisible();
+  expect(
+    (await request.get("v1/models", { headers: auth })).headers()[
+      "x-browser-plugin"
+    ],
+  ).toBeUndefined();
+  await card.getByRole("button", { name: "Enable", exact: true }).click();
+  await expect(card.getByText("active", { exact: true })).toBeVisible();
+  await card.getByRole("button", { name: "Configure", exact: true }).click();
+  await page
+    .getByLabel("Plugin configuration (JSON)")
+    .fill('{"headers":{"x-browser-plugin":"updated"}}');
+  await page.getByRole("button", { name: "Save plugin", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(
+    (await request.get("v1/models", { headers: auth })).headers()[
+      "x-browser-plugin"
+    ],
+  ).toBe("updated");
+  await card
+    .getByRole("button", { name: "Uninstall response-headers", exact: true })
+    .click();
+  await expect(card.getByText("available", { exact: true })).toBeVisible();
+  expect(
+    (await request.get("v1/models", { headers: auth })).headers()[
+      "x-browser-plugin"
+    ],
+  ).toBeUndefined();
+  await page
+    .getByRole("button", { name: "Install from GitHub", exact: true })
+    .click();
+  await page
+    .getByLabel("GitHub repository URL")
+    .fill("https://example.test/owner/repository");
+  await page.getByLabel("Branch, tag or commit").fill("v1.0.0");
+  await page.getByLabel("Plugin subdirectory").fill("plugins/example");
+  await page
+    .getByRole("button", { name: "Install plugin", exact: true })
+    .click();
+  await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
+    "Request validation failed",
+  );
+  await expect(page.getByLabel("Plugin subdirectory")).toHaveValue(
+    "plugins/example",
+  );
+  await page
+    .getByRole("button", { name: "Close plugin editor", exact: true })
+    .click();
+});
+
 test("rejects generation tokens and keeps admin credentials in tab memory", async ({
   page,
 }) => {

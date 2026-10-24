@@ -1,0 +1,10 @@
+{
+  "id": "backend-bearer",
+  "name": "Backend bearer authentication",
+  "version": "1.0.0",
+  "api_version": "1",
+  "description": "Supply a backend's SDK credential and sign outgoing HTTP requests with a configured bearer token. Select this plugin with backend option auth_plugin.",
+  "author": "mm-gateway contributors",
+  "hooks": ["prepare_backend", "on_backend_request"],
+  "default_config": {"token": ""}
+}

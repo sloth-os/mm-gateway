@@ -29,7 +29,7 @@ class SecretError(ValueError):
 
 def is_secret(value: Any, name: str = "", *, header: bool = False) -> bool:
     """Share the same credential boundaries between persistence and redaction."""
-    if header or (_SECRET.search(name) and name not in {"keys", "credentials"}):
+    if header or (_SECRET.search(name) and name not in {"keys", "credentials", "auth_plugin"}):
         return True
     if name == "credentials" and isinstance(value, str):  # YAML account shorthand
         return True

@@ -128,6 +128,8 @@ class BackendConfig:
         # (credentials, project, or an explicit location). Credentials resolve
         # at build time, and location defaults to the global endpoint when
         # unset, so neither is individually required.
+        if self.extra.get("auth_plugin"):
+            return True
         if self.type == "vertex":
             return any(self.extra.get(k) for k in
                        ("credentials_json", "credentials_file", "project", "location"))
@@ -222,6 +224,7 @@ class ProxyConfig:
     # the proxy runner and ``bridge_websocket`` read one authoritative value.
     outbound_proxy: str | None = None
     enabled: bool = True
+    auth_plugin: str | None = None
 
     @property
     def host(self) -> str:
@@ -237,7 +240,7 @@ class ProxyConfig:
     def configured(self) -> bool:
         # An account is usable iff merging its headers over the proxy-level
         # headers yields at least one header (its credential).
-        return any(merged for _, merged in self.enumerate_accounts())
+        return bool(self.auth_plugin) or any(merged for _, merged in self.enumerate_accounts())
 
     def enumerate_accounts(self) -> list[tuple[str, dict[str, str]]]:
         """Yield ``(account_id, headers)`` per account.
@@ -264,6 +267,8 @@ class ProxyConfig:
                 if isinstance(cheaders, dict):
                     merged.update({str(k): str(v) for k, v in cheaders.items() if v is not None})
             out.append((account_id, merged))
+        if not out and self.auth_plugin:
+            out.append(("default", dict(self.headers)))
         return out
 
 
@@ -398,6 +403,14 @@ class Settings:
     # Management uses a separate credential; generation keys never grant admin access.
     management_api_key: str | None = field(default_factory=lambda: _env("MANAGEMENT_API_KEY"))
     management_config_path: str | None = field(default_factory=lambda: _env("MANAGEMENT_CONFIG_PATH"))
+
+    # Contributor source folders and the independent plugin installation state.
+    # Without an explicit state path, use plugins.json beside management.json.
+    plugins_dir: str = field(default_factory=lambda: _env("PLUGINS_DIR", "./plugins") or "./plugins")
+    plugins_state_path: str | None = field(default_factory=lambda: _env("PLUGINS_STATE_PATH"))
+    plugins_watch: bool = field(default_factory=lambda: _env("PLUGINS_WATCH", "true").lower() == "true")
+    plugins_poll_interval: float = field(default_factory=lambda: float(_env("PLUGINS_POLL_INTERVAL", "1") or "1"))
+    plugins_max_body_bytes: int = field(default_factory=lambda: int(_env("PLUGINS_MAX_BODY_BYTES", "8388608") or "8388608"))
 
     # Route every backend provider's *outbound* traffic and every pass-through
     # proxy's forwarder/bridge through this HTTP or SOCKS5 proxy URL (e.g.
@@ -561,6 +574,7 @@ class Settings:
                 timeout=float(p.get("timeout") or 120),
                 outbound_proxy=_resolve_outbound_proxy(p.get("outbound_proxy")),
                 enabled=_bool(p.get("enabled", True)),
+                auth_plugin=p.get("auth_plugin"),
             )
             for p in (raw.get("proxies") or [])
         ]
@@ -581,6 +595,7 @@ class Settings:
         catalog = _section("catalog")
         budget = _section("budget")
         management = _section("management")
+        plugins = _section("plugins")
         return cls(
             host=str(server.get("host", _env("HOST", "0.0.0.0") or "0.0.0.0")),
             port=int(server.get("port", _env("PORT", "8000") or "8000")),
@@ -596,6 +611,11 @@ class Settings:
             enable_metrics=_bool(defaults.get("enable_metrics", _env("ENABLE_METRICS", "true"))),
             management_api_key=management.get("api_key", _env("MANAGEMENT_API_KEY")),
             management_config_path=management.get("config_path", _env("MANAGEMENT_CONFIG_PATH")),
+            plugins_dir=str(plugins.get("directory", _env("PLUGINS_DIR", "./plugins"))),
+            plugins_state_path=plugins.get("state_path", _env("PLUGINS_STATE_PATH")),
+            plugins_watch=_bool(plugins.get("watch", _env("PLUGINS_WATCH", "true"))),
+            plugins_poll_interval=float(plugins.get("poll_interval", _env("PLUGINS_POLL_INTERVAL", "1"))),
+            plugins_max_body_bytes=int(plugins.get("max_body_bytes", _env("PLUGINS_MAX_BODY_BYTES", "8388608"))),
             mcp_enabled=_bool(mcp.get("enabled", _env("MCP_ENABLED", "false"))),
             mcp_path=str(mcp.get("path", _env("MCP_PATH", "/mcp") or "/mcp")),
             mcp_session_idle_timeout=float(

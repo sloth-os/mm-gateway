@@ -142,6 +142,8 @@ def shell_quote(s: str) -> str:
 # -- Backend (httpx) hooks -------------------------------------------------- #
 
 async def _backend_request_hook(request: httpx.Request) -> None:
+    from mm_gateway.plugins.runtime import authenticate_outgoing
+    await authenticate_outgoing(request)
     # The body stream may already be consumed by httpx; aread() materialises it
     # and (httpx re-uses the same bytes) keeps the request sendable.
     content: bytes | None = None
@@ -190,6 +192,8 @@ def backend_event_hooks(*, log_response: bool = True) -> dict[str, list]:
 
 
 def _backend_request_hook_sync(request: httpx.Request) -> None:
+    from mm_gateway.plugins.runtime import authenticate_outgoing_sync
+    authenticate_outgoing_sync(request)
     content: bytes | None = None
     if request.content is not None:
         content = request.content

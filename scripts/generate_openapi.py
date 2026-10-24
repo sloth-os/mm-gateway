@@ -65,6 +65,11 @@ EXPECTED_PATHS = {
     "/v1/management/metrics",
     "/v1/management/tasks",
     "/v1/management/usage",
+    "/v1/management/plugins",
+    "/v1/management/plugins/install",
+    "/v1/management/plugins/{plugin_id}",
+    "/v1/management/plugins/{plugin_id}/reload",
+    "/v1/management/plugins/{plugin_id}/update",
 }
 
 

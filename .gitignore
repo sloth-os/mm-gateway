@@ -228,3 +228,6 @@ node_modules/
 mm_gateway/server/static/admin/
 web/test-results/
 web/playwright-report/
+
+# Process-local plugin installation packages (when no durable state path is set).
+.mm-gateway/

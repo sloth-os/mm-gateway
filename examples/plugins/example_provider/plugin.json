@@ -1,0 +1,8 @@
+{
+  "id": "example-provider",
+  "name": "Example HTTP image provider",
+  "version": "0.1.0",
+  "api_version": "1",
+  "description": "Contributor example: adapt a JSON image service to the gateway's asynchronous image API.",
+  "providers": ["example-image"]
+}

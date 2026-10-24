@@ -15,7 +15,7 @@ from fastapi import APIRouter, Body, Depends, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 
-from mm_gateway.auto_mode import estimate_route, resolve_policy
+from mm_gateway.auto_mode import estimate_route_with_plugins, resolve_policy
 from mm_gateway.config import KeyConfig
 from mm_gateway.schemas.api import (
     EstimateResponse,
@@ -34,9 +34,9 @@ from mm_gateway.translators.rest import from_audio_request, from_voice_request
 router = APIRouter()
 
 
-def _estimate(request: Request, unified: Any, routing: Any, key: KeyConfig, modality: str) -> Response:
+async def _estimate(request: Request, unified: Any, routing: Any, key: KeyConfig, modality: str) -> Response:
     state = request.app.state
-    body = estimate_route(
+    body = await estimate_route_with_plugins(
         state.registry, state.ledger, unified, key=key, modality=modality,
         policy=resolve_policy(state.settings, routing),
     )
@@ -57,14 +57,14 @@ _ESTIMATE = {
 async def estimate_audio(request: Request, body: Annotated[AudioRequest, Body()],
                          key: Annotated[KeyConfig, Depends(get_api_key)]):
     unified = await request.app.state.audio_service.prepare(from_audio_request(body), key)
-    return _estimate(request, unified, body.routing, key, "audio")
+    return await _estimate(request, unified, body.routing, key, "audio")
 
 
 @router.post("/v1/voices/estimate", name="estimate_voice", operation_id="estimateVoice",
              summary="Estimate voice cloning", tags=["audio"], **_ESTIMATE)
 async def estimate_voice(request: Request, body: Annotated[VoiceCloneRequest, Body()],
                          key: Annotated[KeyConfig, Depends(get_api_key)]):
-    return _estimate(request, from_voice_request(body), body.routing, key, "audio")
+    return await _estimate(request, from_voice_request(body), body.routing, key, "audio")
 
 
 @router.post("/v1/images/estimate", name="estimate_image", operation_id="estimateImage",
@@ -74,7 +74,7 @@ async def estimate_image(
     body: Annotated[ImageRequest, Body()],
     key: Annotated[KeyConfig, Depends(get_api_key)],
 ) -> Response:
-    return _estimate(request, from_image_request(body), body.routing, key, "image")
+    return await _estimate(request, from_image_request(body), body.routing, key, "image")
 
 
 @router.post("/v1/videos/estimate", name="estimate_video", operation_id="estimateVideo",
@@ -84,7 +84,7 @@ async def estimate_video(
     body: Annotated[VideoRequest, Body()],
     key: Annotated[KeyConfig, Depends(get_api_key)],
 ) -> Response:
-    return _estimate(request, from_video_request(body), body.routing, key, "video")
+    return await _estimate(request, from_video_request(body), body.routing, key, "video")
 
 
 @router.post("/v1/music/estimate", name="estimate_music", operation_id="estimateMusic",
@@ -94,7 +94,7 @@ async def estimate_music(
     body: Annotated[MusicRequest, Body()],
     key: Annotated[KeyConfig, Depends(get_api_key)],
 ) -> Response:
-    return _estimate(request, from_music_request(body), body.routing, key, "music")
+    return await _estimate(request, from_music_request(body), body.routing, key, "music")
 
 
 @router.get(

@@ -34,6 +34,8 @@ from mm_gateway.observability.logging import (
 )
 from mm_gateway.billing import CostLedger
 from mm_gateway.proxy import ProxyRunner
+from mm_gateway.plugins.middleware import PluginMiddleware
+from mm_gateway.plugins.store import PluginManager
 from mm_gateway.registry import Registry
 from mm_gateway.services import AudioService, ImageService, MusicService, VideoService, VoiceService
 from mm_gateway.tasks.store import TaskStore
@@ -114,20 +116,25 @@ def create_app(
                                  max_sync_wait=settings.max_sync_wait, poll_interval=settings.poll_interval,
                                  sync_default=False, ledger=ledger)
     proxy_runner = ProxyRunner()
+    plugins = PluginManager(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         log.info("gateway_starting", host=settings.host, port=settings.port,
                  providers=list(registry.providers.keys()),
                  proxies=list(registry.proxy_names()))
-        yield
-        await image_service.aclose()
-        await video_service.aclose()
-        await music_service.aclose()
-        await audio_service.aclose()
-        await voice_service.aclose()
-        await proxy_runner.aclose()
-        log.info("gateway_stopping")
+        await plugins.start()
+        try:
+            yield
+        finally:
+            await image_service.aclose()
+            await video_service.aclose()
+            await music_service.aclose()
+            await audio_service.aclose()
+            await voice_service.aclose()
+            await proxy_runner.aclose()
+            await plugins.aclose()
+            log.info("gateway_stopping")
 
     app = FastAPI(
         title="mm-gateway",
@@ -144,7 +151,11 @@ def create_app(
     app.state.task_store = task_store
     app.state.ledger = ledger
     app.state.proxy_runner = proxy_runner
+    app.state.plugins = plugins
     app.state.management = ManagementService(app)
+    plugins.app = app
+    registry.plugins = plugins
+    app.add_middleware(PluginMiddleware, manager=plugins)
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):
@@ -267,6 +278,7 @@ def create_app(
         meta_routes,
         music_routes,
         proxy_routes,
+        plugin_routes,
         video_routes,
     )
     app.include_router(meta_routes.router)
@@ -277,6 +289,7 @@ def create_app(
     app.include_router(billing_routes.router)
     app.include_router(proxy_routes.router)
     app.include_router(management_routes.router)
+    app.include_router(plugin_routes.router)
 
     admin_assets = Path(__file__).parent / "static" / "admin"
     if admin_assets.is_dir():

@@ -101,8 +101,11 @@ _MODEL_ALIASES: dict[str, tuple[str, str]] = {
 
 
 class Registry:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, *, provider_factories: dict | None = None,
+                 prepared_backends: dict | None = None):
         self.settings = settings
+        self.provider_factories = provider_factories or {}
+        self.prepared_backends = prepared_backends or {}
         # backend name -> Provider instance (the *default* account's instance;
         # kept for backward compatibility with ``providers``/``backends``).
         self._backends: dict[str, Provider] = {}
@@ -137,19 +140,22 @@ class Registry:
 
     def _build(self) -> None:
         for cfg in self.settings.backends:
-            if not cfg.enabled or not cfg.configured:
+            if not cfg.enabled or (not cfg.configured and cfg.type not in self.provider_factories):
                 continue
+            cls = self.provider_factories.get(cfg.type)
             cls_name = _PROVIDER_CLASSES.get(cfg.type)
-            if cls_name is None:
+            if cls is None and cls_name is None:
                 log.warning("unknown_backend_type", backend=cfg.name, type=cfg.type)
                 continue
-            module = importlib.import_module(f"mm_gateway.providers.{cfg.type}")
-            cls = getattr(module, cls_name)
+            if cls is None:
+                module = importlib.import_module(f"mm_gateway.providers.{cfg.type}")
+                cls = getattr(module, cls_name)
             accounts = cfg.accounts()
             account_ids: list[str] = []
             for account_id, api_key, base_url, extra in accounts:
                 per_cfg = self._per_account_config(cfg, account_id, api_key,
                                                    base_url, extra)
+                per_cfg = self.prepared_backends.get((cfg.name, account_id), per_cfg)
                 try:
                     provider = cls(per_cfg)
                     if provider.supports_audio:

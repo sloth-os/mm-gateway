@@ -798,6 +798,46 @@ td {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 21px;
 }
+.plugin-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+}
+.plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.plugin-card .resource-top,
+.plugin-card .resource-description {
+  margin: 0;
+}
+.plugin-facts {
+  display: grid;
+  gap: 7px;
+  color: #667b80;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.plugin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 16px;
+  margin-top: auto;
+}
+.plugin-store-note {
+  margin-bottom: 24px;
+  color: #667b80;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.plugin-store-note details {
+  margin-top: 8px;
+}
+.plugin-store-note summary {
+  cursor: pointer;
+  color: #315b46;
+}
 .resource-card {
   border: 1px solid #e1e7e8;
   background: #fff;
@@ -1195,7 +1235,8 @@ td {
   font-size: 11px;
   color: #52695a;
 }
-.model-option code, .model-alias code {
+.model-option code,
+.model-alias code {
   overflow-wrap: anywhere;
   min-width: 0;
 }
@@ -1205,7 +1246,10 @@ td {
   font-size: 10px;
   white-space: nowrap;
 }
-.model-toolbar, .model-entry, .alias-entry, .model-alias {
+.model-toolbar,
+.model-entry,
+.alias-entry,
+.model-alias {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1215,16 +1259,19 @@ td {
   justify-content: space-between;
   margin: 25px 0 12px;
 }
-.model-entry, .alias-entry {
+.model-entry,
+.alias-entry {
   align-items: flex-end;
   margin-bottom: 20px;
 }
-.model-entry .field, .alias-entry .field {
+.model-entry .field,
+.alias-entry .field {
   flex: 1 1 150px;
   min-width: 0;
   margin-bottom: 0;
 }
-.model-entry button, .alias-entry button {
+.model-entry button,
+.alias-entry button {
   margin-bottom: 0;
   min-height: 40px;
 }

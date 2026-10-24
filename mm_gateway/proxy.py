@@ -244,6 +244,12 @@ class ProxyRunner:
                 upstream_req = client.build_request(
                     method, upstream_url, params=query_params, content=body, headers=headers,
                 )
+                from mm_gateway.config import BackendConfig
+                plugins = getattr(request.app.state, "plugins", None)
+                if plugins is not None:
+                    await plugins.authenticate_request(BackendConfig(
+                        name=proxy.host, type="proxy", base_url=proxy.base_url,
+                        extra={"auth_plugin": proxy.auth_plugin, "__account_id": account_id}), upstream_req)
                 resp = await client.send(upstream_req, stream=True)
             except httpx.TimeoutException as exc:
                 latency = time.monotonic() - start

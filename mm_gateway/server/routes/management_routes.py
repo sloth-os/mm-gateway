@@ -41,9 +41,9 @@ async def replace_config(request: Request, response: Response, body: ManagementC
 
 @router.get("/backend-types/{provider_type}/models", operation_id="getManagementBuiltinModels",
             response_model=BackendModelCatalog)
-async def get_builtin_models(provider_type: str):
+async def get_builtin_models(provider_type: str, request: Request):
     from mm_gateway.model_management import builtin_models
-    return {"models": builtin_models(provider_type)}
+    return {"models": builtin_models(provider_type, request.app.state.registry.provider_factories)}
 
 
 @router.post("/backends/discover-models", operation_id="discoverManagementBackendModels",

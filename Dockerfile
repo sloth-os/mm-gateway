@@ -78,7 +78,7 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 # The development package names work across Debian slim releases, including
 # releases where the runtime packages gained a t64 suffix.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libasound2-dev libssl-dev \
+    && apt-get install -y --no-install-recommends ca-certificates git libasound2-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root user for the running process.

@@ -334,6 +334,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/management/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Store
+         * @description Discover bundled, local and installed GitHub plugins without executing them.
+         */
+        get: operations["getManagementPluginStore"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/management/plugins/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Install Github
+         * @description Fetch a public GitHub package, validate it, persist and atomically activate it.
+         */
+        post: operations["installManagementGitHubPlugin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/management/plugins/{plugin_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Plugin
+         * @description Install a catalog plugin or change its enabled state, config, order or hook policy.
+         */
+        put: operations["putManagementPlugin"];
+        post?: never;
+        /**
+         * Delete Plugin
+         * @description Uninstall, releasing old generations after their in-flight requests complete.
+         */
+        delete: operations["deleteManagementPlugin"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/management/plugins/{plugin_id}/reload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reload Plugin
+         * @description Reload from disk. A failed reload leaves the last working generation active.
+         */
+        post: operations["reloadManagementPlugin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/management/plugins/{plugin_id}/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Plugin
+         * @description Re-fetch the installed GitHub ref and activate it only after validation.
+         */
+        post: operations["updateManagementGitHubPlugin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/management/proxies/{domain}": {
         parameters: {
             query?: never;
@@ -871,7 +975,7 @@ export interface components {
             model: string;
             /**
              * Reason
-             * @description Why the candidate is not admissible: limits, retired, max_cost, unpriced or budget.
+             * @description Why the candidate is not admissible: limits, retired, max_cost, unpriced, budget or plugin_policy.
              */
             reason?: string | null;
         } & {
@@ -908,6 +1012,26 @@ export interface components {
             object: "estimate";
         } & {
             [key: string]: unknown;
+        };
+        /** GitHubPluginInstall */
+        GitHubPluginInstall: {
+            options?: components["schemas"]["PluginOptions"];
+            /**
+             * Ref
+             * @description Branch, tag or commit to fetch.
+             * @default HEAD
+             */
+            ref: string;
+            /**
+             * Repository
+             * @description HTTPS GitHub repository URL.
+             */
+            repository: string;
+            /**
+             * Subdirectory
+             * @default
+             */
+            subdirectory: string;
         };
         /** HealthResponse */
         HealthResponse: {
@@ -1183,6 +1307,11 @@ export interface components {
         ManagedProxy: {
             /** Accounts */
             accounts?: components["schemas"]["ProxyAccount"][];
+            /**
+             * Auth Plugin
+             * @description Plugin providing on_backend_request for HTTP proxy authentication.
+             */
+            auth_plugin?: string | null;
             /** Base Url */
             base_url: string;
             /** Domain */
@@ -1672,6 +1801,167 @@ export interface components {
             usage?: components["schemas"]["Usage"] | null;
         } & {
             [key: string]: unknown;
+        };
+        /** PluginDiscoveryError */
+        PluginDiscoveryError: {
+            /** Error */
+            error: string;
+            /** Path */
+            path: string;
+        };
+        /** PluginEntry */
+        PluginEntry: {
+            /**
+             * Active
+             * @default false
+             */
+            active: boolean;
+            /**
+             * Calls
+             * @default 0
+             */
+            calls: number;
+            /** Error */
+            error?: string | null;
+            /**
+             * Failures
+             * @default 0
+             */
+            failures: number;
+            /** Generation */
+            generation?: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Installed
+             * @default false
+             */
+            installed: boolean;
+            /** Loaded At */
+            loaded_at?: number | null;
+            manifest?: components["schemas"]["PluginManifest"] | null;
+            options?: components["schemas"]["PluginOptions"] | null;
+            source: components["schemas"]["PluginSource"];
+        };
+        /** PluginManifest */
+        PluginManifest: {
+            /**
+             * Api Version
+             * @default 1
+             * @constant
+             */
+            api_version: "1";
+            /**
+             * Author
+             * @default
+             */
+            author: string;
+            /**
+             * Backend Types
+             * @description Backend types for automatic authentication hooks; * matches all.
+             */
+            backend_types?: string[];
+            /** Default Config */
+            default_config?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Homepage */
+            homepage?: string | null;
+            /** Hooks */
+            hooks?: ("on_request" | "on_response" | "on_response_chunk" | "prepare_backend" | "on_backend_request" | "route")[];
+            /** Id */
+            id: string;
+            /** Methods */
+            methods?: string[];
+            /** Name */
+            name: string;
+            /** Paths */
+            paths?: string[];
+            /**
+             * Providers
+             * @description New provider types exported by this plugin.
+             */
+            providers?: string[];
+            /**
+             * Response Body
+             * @default none
+             * @enum {string}
+             */
+            response_body: "none" | "json";
+            /** Version */
+            version: string;
+        };
+        /** PluginOptions */
+        PluginOptions: {
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Failure Mode
+             * @default closed
+             * @enum {string}
+             */
+            failure_mode: "closed" | "open";
+            /**
+             * Order
+             * @default 0
+             */
+            order: number;
+            /**
+             * Timeout Ms
+             * @default 1000
+             */
+            timeout_ms: number;
+        };
+        /** PluginSource */
+        PluginSource: {
+            /** Commit */
+            commit?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "builtin" | "local" | "github";
+            /**
+             * Path
+             * @default
+             */
+            path: string;
+            /** Ref */
+            ref?: string | null;
+            /** Repository */
+            repository?: string | null;
+            /**
+             * Subdirectory
+             * @default
+             */
+            subdirectory: string;
+        };
+        /** PluginStore */
+        PluginStore: {
+            /** Data */
+            data: components["schemas"]["PluginEntry"][];
+            /** Directory */
+            directory: string;
+            /** Errors */
+            errors: components["schemas"]["PluginDiscoveryError"][];
+            /** Persistent */
+            persistent: boolean;
+            /** Revision */
+            revision: string;
+            /** Watching */
+            watching: boolean;
         };
         /**
          * ProblemDetail
@@ -4262,6 +4552,463 @@ export interface operations {
             };
             /** @description Request validation failed or a task failed. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No usable generation service is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    getManagementPluginStore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginStore"];
+                };
+            };
+            /** @description Missing or unknown API key (unauthorized). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Model or task not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Request validation failed or a task failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No usable generation service is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    installManagementGitHubPlugin: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Current configuration revision (ETag). */
+                "If-Match"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitHubPluginInstall"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginStore"];
+                };
+            };
+            /** @description Missing or unknown API key (unauthorized). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Model or task not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Configuration changed; reload before saving. */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description A current If-Match revision is required. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No usable generation service is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    putManagementPlugin: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Current configuration revision (ETag). */
+                "If-Match"?: string | null;
+            };
+            path: {
+                plugin_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PluginOptions"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginStore"];
+                };
+            };
+            /** @description Missing or unknown API key (unauthorized). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Model or task not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Configuration changed; reload before saving. */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description A current If-Match revision is required. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No usable generation service is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    deleteManagementPlugin: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Current configuration revision (ETag). */
+                "If-Match"?: string | null;
+            };
+            path: {
+                plugin_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginStore"];
+                };
+            };
+            /** @description Missing or unknown API key (unauthorized). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Model or task not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Configuration changed; reload before saving. */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description A current If-Match revision is required. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No usable generation service is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    reloadManagementPlugin: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Current configuration revision (ETag). */
+                "If-Match"?: string | null;
+            };
+            path: {
+                plugin_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginStore"];
+                };
+            };
+            /** @description Missing or unknown API key (unauthorized). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Model or task not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Configuration changed; reload before saving. */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description A current If-Match revision is required. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No usable generation service is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    updateManagementGitHubPlugin: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Current configuration revision (ETag). */
+                "If-Match"?: string | null;
+            };
+            path: {
+                plugin_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginStore"];
+                };
+            };
+            /** @description Missing or unknown API key (unauthorized). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Model or task not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Configuration changed; reload before saving. */
+            412: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description A current If-Match revision is required. */
+            428: {
                 headers: {
                     [name: string]: unknown;
                 };

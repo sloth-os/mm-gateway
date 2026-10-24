@@ -126,7 +126,7 @@ class ManagementService:
         self.app = app
         self.started_at = time.monotonic()
         self.revision = uuid4().hex
-        self._lock = asyncio.Lock()
+        self._lock = app.state.plugins.runtime_lock
 
     def configuration(self) -> dict:
         settings = self.app.state.settings
@@ -147,7 +147,18 @@ class ManagementService:
         previous = next((entry for entry in config_from_settings(settings).model_dump()["backends"]
                          if entry["name"] == backend.name), None)
         restored = _restore(backend.model_dump(), previous)
-        return {"data": await discover_models(BackendConfig(**restored), settings.outbound_proxy)}
+        plugins = self.app.state.plugins
+        cfg = BackendConfig(**restored)
+        async with plugins.lease_extensions() as loaded:
+            active = {p.manifest.id: p for p in loaded}
+            prepared, unavailable = await plugins.prepare_backends(dataclasses.replace(settings, backends=[cfg]), active)
+            if cfg.name in unavailable:
+                raise GatewayError("The backend authentication plugin is unavailable.", code="plugin_auth_error", status_code=503)
+            account_id = cfg.accounts()[0][0]
+            cfg = prepared.get((cfg.name, account_id), cfg)
+            async with plugins.backend_scope(cfg):
+                return {"data": await discover_models(cfg, settings.outbound_proxy,
+                                                       provider_factories=plugins.provider_factories(active))}
 
     def _check_revision(self, if_match: str | None) -> None:
         if not if_match:
@@ -192,7 +203,13 @@ class ManagementService:
             config = ManagementConfig.model_validate(merged)
             json.dumps(config.model_dump(), allow_nan=False)
             new_settings = settings_from_config(settings, config)
-            candidate = await asyncio.to_thread(self._prepare_registry, new_settings)
+            plugins = self.app.state.plugins
+            factories = plugins.provider_factories()
+            prepared, unavailable = await plugins.prepare_backends(new_settings, plugins._active)
+            if factories or prepared or unavailable:
+                candidate = await asyncio.to_thread(self._prepare_registry, new_settings, factories, prepared, unavailable)
+            else:
+                candidate = await asyncio.to_thread(self._prepare_registry, new_settings)
         except (PydanticValidationError, ValueError, TypeError, ImportError) as exc:
             raise GatewayError("Configuration is invalid; no changes were applied.",
                                code="invalid_config", status_code=422) from exc
@@ -221,7 +238,8 @@ class ManagementService:
         # Publish in one event-loop step, retaining the registry object shared by
         # HTTP and MCP services. Existing task monitors keep their owning client.
         registry = self.app.state.registry
-        for name in ("_backends", "_configs", "_accounts", "_backend_accounts", "_proxies", "_catalog", "_aliases", "_alias_backends"):
+        for name in ("_backends", "_configs", "_accounts", "_backend_accounts", "_proxies", "_catalog", "_aliases", "_alias_backends",
+                     "provider_factories", "prepared_backends"):
             setattr(registry, name, getattr(candidate, name))
         registry.settings = candidate.settings
         self.app.state.settings = candidate.settings
@@ -230,21 +248,27 @@ class ManagementService:
                  persistent=bool(settings.management_config_path))
         return self.configuration()
 
-    def _prepare_registry(self, settings: Settings) -> Registry:
+    def _prepare_registry(self, settings: Settings, provider_factories=None, prepared_backends=None,
+                          unavailable_backends=None, force_rebuild=None, missing_types=None) -> Registry:
         previous = self.app.state.registry
+        provider_factories = provider_factories or {}
+        unavailable_backends = unavailable_backends or set()
+        force_rebuild = force_rebuild or set()
         canonical_previous = settings_from_config(previous.settings, config_from_settings(previous.settings))
         reused = {cfg.name for cfg in settings.backends
                   if cfg.enabled and canonical_previous.backend(cfg.name) == cfg
-                  and settings.outbound_proxy == previous.settings.outbound_proxy}
+                  and settings.outbound_proxy == previous.settings.outbound_proxy and cfg.name not in force_rebuild}
         changed = [cfg for cfg in settings.backends if cfg.name not in reused]
         if {cfg.name for cfg in settings.backends} & {proxy.host for proxy in settings.proxies}:
             raise GatewayError("Proxy domains must not collide with backend names.", code="invalid_config", status_code=422)
         for cfg in changed:
-            if cfg.enabled and cfg.type not in _PROVIDER_CLASSES:
+            if cfg.enabled and cfg.type not in _PROVIDER_CLASSES and cfg.type not in provider_factories and cfg.type not in (missing_types or set()):
                 raise GatewayError(f"Unknown backend type: {cfg.type}.", code="invalid_config", status_code=422)
-        candidate = Registry(dataclasses.replace(settings, backends=changed))
+        build_backends = [dataclasses.replace(cfg, enabled=False) if cfg.name in unavailable_backends else cfg for cfg in changed]
+        candidate = Registry(dataclasses.replace(settings, backends=build_backends), provider_factories=provider_factories,
+                             prepared_backends=prepared_backends)
         for cfg in changed:
-            if cfg.enabled and cfg.configured:
+            if cfg.enabled and (cfg.configured or cfg.type in provider_factories) and cfg.name not in unavailable_backends and cfg.type not in ((missing_types or set()) - provider_factories.keys()):
                 actual = candidate._backend_accounts.get(cfg.name, [])
                 if set(actual) != {account[0] for account in cfg.accounts()}:
                     raise GatewayError(f"Could not initialize every account for backend {cfg.name}; no changes were applied.",
@@ -286,14 +310,14 @@ class ManagementService:
         for cfg in settings.backends:
             provider = registry.providers.get(cfg.name)
             backends.append({"name": cfg.name, "type": cfg.type, "enabled": cfg.enabled,
-                             "configured": cfg.configured, "active": provider is not None,
+                             "configured": cfg.configured or (provider is not None and cfg.type in registry.provider_factories), "active": provider is not None,
                              "tags": cfg.tags, "accounts": registry._backend_accounts.get(cfg.name, []),
                              "models": {m: list(getattr(provider, f"{m}_models", []))
                                         for m in ("image", "video", "music", "audio")}})
         return {"status": "ok", "version": self.app.version,
                 "uptime_seconds": time.monotonic() - self.started_at, "revision": self.revision,
                 "persistent": bool(settings.management_config_path), "metrics_enabled": settings.enable_metrics,
-                "backend_types": sorted(_PROVIDER_CLASSES), "backends": backends,
+                "backend_types": sorted(_PROVIDER_CLASSES.keys() | registry.provider_factories.keys()), "backends": backends,
                 "proxies": [{"domain": p.host, "enabled": p.enabled, "active": p.host in registry._proxies,
                              "accounts": [aid for aid, _ in p.enumerate_accounts()]} for p in settings.proxies],
                 "keys_count": len(settings.keys), "enabled_keys_count": sum(k.enabled for k in settings.keys),

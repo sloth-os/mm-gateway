@@ -1,0 +1,10 @@
+{
+  "id": "route-preference",
+  "name": "Backend routing preference",
+  "version": "1.0.0",
+  "api_version": "1",
+  "description": "Prefer configured backend names among admissible candidates, retaining gateway permission, cost and budget checks.",
+  "author": "mm-gateway contributors",
+  "hooks": ["route"],
+  "default_config": {"preferred_backends": []}
+}

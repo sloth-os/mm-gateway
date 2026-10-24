@@ -28,6 +28,7 @@ import {
   LogOut,
   Network,
   Plus,
+  Puzzle,
   RefreshCw,
   Search,
   Server,
@@ -52,6 +53,7 @@ import {
 } from "./sdk/management";
 import { BackendModelsEditor } from "./BackendModelsEditor";
 import { ConfigurationExample } from "./ConfigurationExample";
+import { PluginStore } from "./PluginStore";
 
 type Page =
   | "Overview"
@@ -61,6 +63,7 @@ type Page =
   | "Backends"
   | "API keys"
   | "Proxies"
+  | "Plugin Store"
   | "Routing";
 type Section = "backends" | "keys" | "proxies";
 type Resource = Backend | Key | Proxy;
@@ -83,6 +86,7 @@ const icons = {
   Backends: Server,
   "API keys": KeyRound,
   Proxies: Network,
+  "Plugin Store": Puzzle,
   Routing: SlidersHorizontal,
 };
 const pages = Object.keys(icons) as Page[];
@@ -494,6 +498,8 @@ function App() {
     Backends: "Connect providers and manage upstream accounts.",
     "API keys": "Control access, routing permissions, and spend limits.",
     Proxies: "Manage pass-through services and their account pools.",
+    "Plugin Store":
+      "Hot reload traffic hooks, backend authentication, providers, and routing policies.",
     Routing: "Tune default selection, routing profiles, and model policies.",
   };
 
@@ -815,13 +821,15 @@ function App() {
               {notice}
             </div>
           )}
-          {!configuration.persistent && pages.indexOf(page) >= 4 && (
-            <div className="persistence-note">
-              <Clock3 size={16} /> Changes apply immediately and last until this
-              gateway restarts. Configure a management storage path to keep
-              changes.
-            </div>
-          )}
+          {!configuration.persistent &&
+            pages.indexOf(page) >= 4 &&
+            page !== "Plugin Store" && (
+              <div className="persistence-note">
+                <Clock3 size={16} /> Changes apply immediately and last until
+                this gateway restarts. Configure a management storage path to
+                keep changes.
+              </div>
+            )}
           {page === "Overview" && (
             <>
               <div className="overview-banner">
@@ -1350,6 +1358,9 @@ function App() {
           {page === "Backends" && resourceList("backends")}
           {page === "API keys" && resourceList("keys")}
           {page === "Proxies" && resourceList("proxies")}
+          {page === "Plugin Store" && (
+            <PluginStore api={api} updatedAt={updatedAt} />
+          )}
           {page === "Routing" && (
             <RoutingEditor
               key={configuration.revision}
@@ -1759,8 +1770,10 @@ function ResourceEditor({
                       Leave Base URL empty for the provider’s default endpoint.
                       Provider options accept settings such as{" "}
                       <code>outbound_proxy</code>, <code>audio_only</code>, and{" "}
-                      <code>models_path</code>. A credential pool uses its
-                      account keys in place of the single provider key.
+                      <code>models_path</code>. Set <code>auth_plugin</code> to
+                      an installed authentication plugin ID to supply backend
+                      credentials. A credential pool uses its account keys in
+                      place of the single provider key.
                     </p>
                     <BackendModelsEditor
                       key={String(draft.type)}
@@ -1831,6 +1844,7 @@ function ResourceEditor({
                       />
                     </label>
                     {field("outbound_proxy", "Outbound proxy URL", true)}
+                    {field("auth_plugin", "HTTP authentication plugin ID")}
                     {jsonField("headers", "Shared headers (JSON)")}
                     {jsonField("accounts", "Account pool (JSON)")}
                   </>

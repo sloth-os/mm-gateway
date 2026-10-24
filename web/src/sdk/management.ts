@@ -17,6 +17,10 @@ export type Key = Schema["ManagedKey"];
 export type Proxy = Schema["ManagedProxy"];
 export type ModelCatalog = Schema["BackendModelCatalog"];
 export type ModelDiscovery = Schema["BackendModelDiscovery"];
+export type PluginStoreData = Schema["PluginStore"];
+export type PluginEntry = Schema["PluginEntry"];
+export type PluginOptions = Schema["PluginOptions"];
+export type GitHubPluginInstall = Schema["GitHubPluginInstall"];
 export type TaskFilters = {
   status?: string;
   modality?: string;
@@ -35,6 +39,7 @@ export class ManagementApi extends MetaApi {
     data?: unknown,
     revision?: string,
     params?: object,
+    timeout?: number,
   ) {
     const options = this.configuration?.baseOptions || {};
     const configured = this.configuration?.accessToken;
@@ -47,6 +52,7 @@ export class ManagementApi extends MetaApi {
       url: this.basePath + ROOT + path,
       data,
       params,
+      ...(timeout ? { timeout } : {}),
       headers: {
         ...options.headers,
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -131,6 +137,54 @@ export class ManagementApi extends MetaApi {
       `/proxies/${encodeURIComponent(domain)}`,
       undefined,
       revision,
+    );
+  }
+  getManagementPluginStore() {
+    return this.json<PluginStoreData>("GET", "/plugins");
+  }
+  putManagementPlugin(id: string, options: PluginOptions, revision: string) {
+    return this.json<PluginStoreData>(
+      "PUT",
+      `/plugins/${encodeURIComponent(id)}`,
+      options,
+      revision,
+    );
+  }
+  deleteManagementPlugin(id: string, revision: string) {
+    return this.json<PluginStoreData>(
+      "DELETE",
+      `/plugins/${encodeURIComponent(id)}`,
+      undefined,
+      revision,
+    );
+  }
+  reloadManagementPlugin(id: string, revision: string) {
+    return this.json<PluginStoreData>(
+      "POST",
+      `/plugins/${encodeURIComponent(id)}/reload`,
+      undefined,
+      revision,
+    );
+  }
+  installManagementGitHubPlugin(body: GitHubPluginInstall, revision: string) {
+    // Fetching a repository can take longer than ordinary configuration edits.
+    return this.json<PluginStoreData>(
+      "POST",
+      "/plugins/install",
+      body,
+      revision,
+      undefined,
+      180000,
+    );
+  }
+  updateManagementGitHubPlugin(id: string, revision: string) {
+    return this.json<PluginStoreData>(
+      "POST",
+      `/plugins/${encodeURIComponent(id)}/update`,
+      undefined,
+      revision,
+      undefined,
+      180000,
     );
   }
 }

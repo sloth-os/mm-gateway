@@ -539,7 +539,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
         cost in USD, every candidate with its lifecycle and why it is or is not
         admissible, and the budget scope's state.
         """
-        from mm_gateway.auto_mode import estimate_route, resolve_policy
+        from mm_gateway.auto_mode import estimate_route_with_plugins, resolve_policy
 
         key = _key(ctx)
         payload = {"model": model, "input": input, "parameters": parameters or {},
@@ -555,7 +555,7 @@ def _build_mcp_server(app: FastAPI) -> MCPServer:
             unified = from_video_request(VideoRequest.model_validate(payload))
         else:
             unified = from_music_request(MusicRequest.model_validate(payload))
-        body = estimate_route(registry, app.state.ledger, unified, key=key, modality="audio" if modality == "voice" else modality,
+        body = await estimate_route_with_plugins(registry, app.state.ledger, unified, key=key, modality="audio" if modality == "voice" else modality,
                               policy=resolve_policy(app.state.settings, routing))
         return EstimateResponse.model_validate(body).model_dump_json(exclude_none=True)
 

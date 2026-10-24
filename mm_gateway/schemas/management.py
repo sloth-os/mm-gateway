@@ -107,6 +107,7 @@ class ManagedProxy(ManagementModel):
     accounts: list[ProxyAccount] = Field(default_factory=list)
     timeout: float = Field(default=120, gt=0)
     outbound_proxy: str | None = None
+    auth_plugin: str | None = Field(default=None, description="Plugin providing on_backend_request for HTTP proxy authentication.")
 
     @field_validator("base_url")
     @classmethod

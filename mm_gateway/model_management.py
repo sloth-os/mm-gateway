@@ -13,19 +13,21 @@ from mm_gateway.config import BackendConfig, _valid_model_id
 from mm_gateway.core.base import AudioProvider, ImageProvider, MusicProvider, VideoProvider
 from mm_gateway.core.exceptions import GatewayError
 from mm_gateway.providers._http import proxy_kwargs
+from mm_gateway.observability.httplog import backend_event_hooks
 
 MODALITIES = {"image": ImageProvider, "video": VideoProvider,
               "music": MusicProvider, "audio": AudioProvider}
 
 
-def builtin_models(provider_type: str) -> dict[str, list[str]]:
+def builtin_models(provider_type: str, provider_factories: dict | None = None) -> dict[str, list[str]]:
     # Reading class metadata does not initialize SDK clients or require credentials.
     from mm_gateway.registry import _PROVIDER_CLASSES
 
+    factory = (provider_factories or {}).get(provider_type)
     class_name = _PROVIDER_CLASSES.get(provider_type)
-    if not class_name:
+    if not class_name and not factory:
         raise GatewayError("Unknown backend type.", code="invalid_config", status_code=422)
-    provider = getattr(importlib.import_module(f"mm_gateway.providers.{provider_type}"), class_name)
+    provider = factory.provider_class if factory else getattr(importlib.import_module(f"mm_gateway.providers.{provider_type}"), class_name)
     return {modality: list(getattr(provider, f"{modality}_models", []))
             for modality, capability in MODALITIES.items() if issubclass(provider, capability)}
 
@@ -76,8 +78,8 @@ def _listing_request(backend: BackendConfig, outbound_proxy: str | None) -> tupl
     return base.rstrip("/") + "/" + path.lstrip("/"), headers, extra.get("outbound_proxy") or outbound_proxy
 
 
-async def discover_models(backend: BackendConfig, outbound_proxy: str | None = None) -> list[dict]:
-    builtins = builtin_models(backend.type)
+async def discover_models(backend: BackendConfig, outbound_proxy: str | None = None, *, provider_factories=None) -> list[dict]:
+    builtins = builtin_models(backend.type, provider_factories)
     try:
         url, headers, proxy = _listing_request(backend, outbound_proxy)
         request_proxy = proxy_kwargs(proxy)
@@ -92,7 +94,7 @@ async def discover_models(backend: BackendConfig, outbound_proxy: str | None = N
     params: dict[str, str] = {}
     pages: set[str] = set()
     try:
-        async with asyncio.timeout(12), httpx.AsyncClient(timeout=10, **request_proxy) as client:
+        async with asyncio.timeout(12), httpx.AsyncClient(timeout=10, event_hooks=backend_event_hooks(), **request_proxy) as client:
             for _ in range(100):
                 response = await client.get(httpx.URL(url).copy_merge_params(params), headers=headers)
                 if response.status_code >= 400:

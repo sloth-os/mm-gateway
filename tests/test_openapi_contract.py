@@ -42,6 +42,12 @@ EXPECTED_OPERATIONS = {
     ("/v1/management/metrics", "get"): "getManagementMetrics",
     ("/v1/management/tasks", "get"): "listManagementTasks",
     ("/v1/management/usage", "get"): "listManagementUsage",
+    ("/v1/management/plugins", "get"): "getManagementPluginStore",
+    ("/v1/management/plugins/install", "post"): "installManagementGitHubPlugin",
+    ("/v1/management/plugins/{plugin_id}", "put"): "putManagementPlugin",
+    ("/v1/management/plugins/{plugin_id}", "delete"): "deleteManagementPlugin",
+    ("/v1/management/plugins/{plugin_id}/reload", "post"): "reloadManagementPlugin",
+    ("/v1/management/plugins/{plugin_id}/update", "post"): "updateManagementGitHubPlugin",
 }
 
 # The general pass-through proxy is a separate public surface: one catch-all

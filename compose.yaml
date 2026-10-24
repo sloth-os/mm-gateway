@@ -18,6 +18,7 @@ services:
       GATEWAY_API_KEY: "${GATEWAY_API_KEY:-}"
       MANAGEMENT_API_KEY: "${MANAGEMENT_API_KEY:-mm-gateway-admin}"
       MANAGEMENT_CONFIG_PATH: /app/data/management.json
+      PLUGINS_DIR: "${PLUGINS_DIR:-/app/data/plugins}"
       MM_GATEWAY_SECRET_KEY_FILE: "${MM_GATEWAY_SECRET_KEY_FILE:-/app/data/.mm-gateway.key}"
     volumes:
       - mm-gateway-data:/app/data

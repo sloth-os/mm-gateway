@@ -110,6 +110,26 @@ The `/proxy/{domain}/{path}` surface (documented below) forwards any HTTP
 method — and WebSocket upgrades — verbatim to a configured upstream root URL,
 matched by its upstream domain.
 
+### Plugin Store
+
+Open **Plugin Store** in `/admin/` to install bundled or local plugins, or install
+a contributor package from a public GitHub repository. GitHub installs support
+branches, tags, commits and plugin subdirectories, and record the resolved commit.
+Enable, configure, reload, update or uninstall plugins without restarting the gateway.
+
+Plugins can monitor and modify HTTP requests, JSON responses and stream chunks;
+supply backend SDK credentials and sign outgoing HTTP requests; register new
+provider adapters; and implement routing policies over admissible candidates.
+The store includes request monitoring, response headers, backend bearer
+authentication and backend routing preference plugins.
+
+Contributors can run `mm-gateway-plugin new my-plugin`, then
+`mm-gateway-plugin check plugins/my-plugin`. Install the package in the console;
+source edits hot reload automatically. Failed reloads keep the previous working
+generation, and accepted tasks keep their owning provider generation until completion.
+See the [plugin development and installation guide](docs/plugins.md) and the
+[example image provider](examples/plugins/example_provider/plugin.py).
+
 Generation is always asynchronous. A successful `POST` returns `202 Accepted`
 with the complete current task representation. The `Location` and
 `Link: <...>; rel="self"` headers identify the canonical task URL. Poll that URL

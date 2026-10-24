@@ -744,7 +744,7 @@ class EstimateCandidate(BaseModel):
     admissible: bool = True
     reason: str | None = Field(
         None,
-        description="Why the candidate is not admissible: limits, retired, max_cost, unpriced or budget.",
+        description="Why the candidate is not admissible: limits, retired, max_cost, unpriced, budget or plugin_policy.",
     )
 
 

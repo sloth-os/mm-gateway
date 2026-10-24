@@ -57,12 +57,14 @@ socks = [
 
 [project.scripts]
 mm-gateway = "mm_gateway.server.app:run"
+mm-gateway-plugin = "mm_gateway.plugins.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["mm_gateway*"]
 
 [tool.setuptools.package-data]
 "mm_gateway.server" = ["static/admin/*", "static/admin/assets/*"]
+"mm_gateway.plugins" = ["builtin/*/plugin.json", "builtin/*/plugin.py"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

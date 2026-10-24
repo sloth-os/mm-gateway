@@ -54,6 +54,9 @@ def resolve_key(settings: Settings, token: str | None) -> KeyConfig:
 
 def get_api_key(request: Request) -> KeyConfig:
     """FastAPI dependency: resolve the bearer token on the request to a KeyConfig."""
+    original = getattr(request.state, "plugin_api_key", None)
+    if original is not None:
+        return original
     return resolve_key(request.app.state.settings, _extract_token(request))
 
 

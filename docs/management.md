@@ -308,6 +308,13 @@ underlying rates and latencies.
 
 ## TypeScript SDK and frontend development
 
+The console's **Plugin Store** manages contributor packages, GitHub installs,
+live configuration and reloads. Its revision/ETag is independent of the gateway
+configuration revision. Provider plugins add their types to the backend editor;
+set a backend's provider option `auth_plugin` to use an installed authentication
+plugin. The proxy editor also accepts an HTTP authentication plugin ID.
+See [plugin installation, API and development](plugins.md).
+
 The console depends on `@sloth-os/mm-gateway-ts` directly from a pinned commit
 of `sloth-os/mm-gateway-ts`. The current upstream SDK predates the management
 endpoints. `web/src/sdk/management.ts` extends its `MetaApi` and shares the
