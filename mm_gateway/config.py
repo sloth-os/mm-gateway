@@ -35,6 +35,11 @@ def _env(name: str, default: str | None = None) -> str | None:
     return val if val not in (None, "") else default
 
 
+def _valid_model_id(value: Any) -> bool:
+    return (isinstance(value, str) and 0 < len(value) <= 256 and value.lower() != "auto"
+            and not any(c.isspace() for c in value))
+
+
 def _is_socks_proxy(url: str | None) -> bool:
     """True iff the URL is a SOCKS proxy scheme (``socks4``/``socks4a``/``socks5``/``socks5h``).
 
@@ -90,6 +95,29 @@ class BackendConfig:
     # account enumeration (but still gate ``configured`` below).
     credentials: list[dict[str, Any]] = field(default_factory=list)
     enabled: bool = True
+    # None retains the adapter's defaults. An explicit mapping is an allowlist:
+    # omitted modalities and empty lists have no active models.
+    models: dict[str, list[str]] | None = None
+    model_aliases: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.models is not None:
+            if not isinstance(self.models, dict):
+                raise ValueError("Backend models must be a modality-to-model-list mapping or null.")
+            for modality, models in self.models.items():
+                if modality not in {"image", "video", "music", "audio"} or not isinstance(models, list):
+                    raise ValueError("Backend models must use image, video, music or audio model lists.")
+                if any(not _valid_model_id(model) for model in models) or len(models) != len(set(models)):
+                    raise ValueError("Active model ids must be unique, nonempty and contain no whitespace.")
+        if not isinstance(self.model_aliases, dict):
+            raise ValueError("Model aliases must map alias names to target model ids.")
+        for alias, target in self.model_aliases.items():
+            if not _valid_model_id(alias) or not _valid_model_id(target) or alias.lower() == "auto":
+                raise ValueError("Model aliases and targets must be nonempty ids; 'auto' is reserved.")
+            if alias == target or target in self.model_aliases:
+                raise ValueError("Model aliases must point directly to a model, without alias chains.")
+            if self.models is not None and not any(target in models for models in self.models.values()):
+                raise ValueError(f"Alias '{alias}' must target an active model.")
 
     @property
     def configured(self) -> bool:
@@ -498,6 +526,8 @@ class Settings:
                                            b.get("outbound_proxy")),
                 credentials=list(b.get("credentials") or []),
                 enabled=_bool(b.get("enabled", True)),
+                models=b.get("models"),
+                model_aliases=dict(b.get("model_aliases") or {}),
             )
             for b in (raw.get("backends") or [])
         ]

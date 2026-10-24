@@ -1132,6 +1132,130 @@ td {
   color: #6c807b;
   padding: 15px 0;
 }
+.configuration-example {
+  margin: 20px 0;
+  padding: 15px 18px !important;
+  border: 1px solid #dfe8db;
+  border-radius: 8px;
+  background: #f7faf5;
+  color: #52695a;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.configuration-example summary {
+  font-weight: 600;
+  color: #385b42;
+}
+.configuration-example pre {
+  padding: 12px;
+  border-radius: 6px;
+  background: #eef3ec;
+  font-size: 11px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.example-description code {
+  overflow-wrap: anywhere;
+}
+.backend-models {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid #e9edef;
+}
+.backend-models h3 {
+  margin: 16px 0 12px;
+  font-size: 14px;
+}
+.backend-models h4 {
+  margin: 0;
+  font-size: 12px;
+}
+.backend-models .field-hint {
+  color: #64776e;
+  font-size: 11px;
+}
+.model-options {
+  border: 1px solid #e2e9e4;
+  border-radius: 7px;
+  margin: 16px 0;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.model-options legend {
+  font-size: 11px;
+  color: #627a68;
+  padding: 0 5px;
+}
+.model-option {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 0;
+  font-size: 11px;
+  color: #52695a;
+}
+.model-option code, .model-alias code {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.model-option span {
+  margin-left: auto;
+  color: #748278;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.model-toolbar, .model-entry, .alias-entry, .model-alias {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.model-toolbar {
+  justify-content: space-between;
+  margin: 25px 0 12px;
+}
+.model-entry, .alias-entry {
+  align-items: flex-end;
+  margin-bottom: 20px;
+}
+.model-entry .field, .alias-entry .field {
+  flex: 1 1 150px;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.model-entry button, .alias-entry button {
+  margin-bottom: 0;
+  min-height: 40px;
+}
+.model-alias {
+  font-size: 11px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e9edef;
+}
+.model-alias button {
+  margin-left: auto;
+}
+.model-alias select {
+  flex: 1 1 150px;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid #dfe7df;
+  border-radius: 5px;
+  padding: 8px;
+  background: #fff;
+}
+.model-results {
+  max-height: 240px;
+  overflow-y: auto;
+}
+.model-notice {
+  color: #86682e;
+  background: #fcfaf1;
+  padding: 10px 12px;
+  font-size: 11px;
+  border-radius: 6px;
+}
 summary {
   cursor: pointer;
 }

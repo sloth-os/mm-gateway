@@ -136,6 +136,90 @@ runtime configuration and revision intact. Unchanged backends retain their SDK
 clients. Background monitors for already accepted tasks keep their owning
 provider client, and administrative observation never initiates provider polling.
 
+### Active models, discovery and aliases
+
+The backend editor shows built-in models for the selected provider, can **List
+models from backend**, and accepts a **Manual model ID** for new releases. Choose
+the model's modality (image, video, music or audio), activate the models you want,
+then save. Upstream discovery reads the draft credentials and Base URL without
+saving configuration. Existing redacted credentials are resolved on the server;
+the browser never receives them. Account pools use the first account with an API
+key. Fetching a list never activates models automatically.
+
+`GET /v1/management/backend-types/{provider_type}/models` returns built-in model
+IDs by supported modality without requiring provider credentials.
+`POST /v1/management/backends/discover-models` accepts a `ManagedBackend` draft
+and returns `data: [{"id": "...", "modalities": ["image"]}]`. Unknown model
+modalities are returned as an empty list, so the operator chooses the appropriate
+generation endpoint. Both endpoints require the management token.
+
+Discovery supports the standard `/models` response (`data`), Google-style
+`models` responses and plain arrays. Defaults are supplied for OpenAI,
+OpenRouter, Google, xAI, Volcengine and ElevenLabs, with provider-specific auth
+headers and pagination. A custom Base URL is supported. For a compatible
+service with a different model-list path, set provider options, for example:
+
+```json
+{
+  "models_path": "available-models",
+  "models_headers": {"X-Project": "my-project"}
+}
+```
+
+Paths are relative to the Base URL. Header values are redacted and encrypted
+like other credentials. Providers without a models API can use built-in or
+manual model selection. Discovery failures leave the draft available for editing.
+
+The `models` field is the authoritative backend allowlist. `null` (the default)
+keeps the adapter's default model behavior; an explicit mapping enables only
+the listed model IDs for each modality. Missing modalities and empty lists
+disable generation for those modalities. `{}` disables all models. The allowlist
+applies to public model lists, limits, explicit requests, aliases, estimates and
+automatic routing. An explicit backend selection cannot bypass it. To keep an
+approved set fixed as the gateway's built-in catalog grows, turn off **Use
+provider defaults** and save an explicit selection.
+
+For example, this backend enables one image model and gives it a stable alias:
+
+```json
+{
+  "name": "images-production",
+  "type": "openai",
+  "api_key": "<provider-api-key>",
+  "tags": ["production"],
+  "models": {"image": ["gpt-image-1"]},
+  "model_aliases": {"company-image": "gpt-image-1"}
+}
+```
+
+A client can submit:
+
+```json
+{
+  "model": "company-image",
+  "input": [{"type": "text", "text": "A watercolor landscape"}]
+}
+```
+
+The gateway sends `model: gpt-image-1` to `images-production`. The public task
+continues to name `company-image`; limits, cost estimates and lifecycle use the
+target model. Aliases appear in `/v1/models` only for keys allowed to use their
+backend. An alias is tied to its named backend, so another account/backend of
+the same provider type cannot serve it accidentally. Built-in gateway aliases
+also respect explicit allowlists.
+
+To release a new model, add its ID manually or discover it, activate it, then
+change the alias target. Existing clients keep using the alias. Alias names
+must be unique across backends and cannot conflict with active model IDs or
+built-in aliases. Targets must be active upstream model IDs; alias chains and
+`auto` aliases are rejected. Remove an alias before deactivating its target.
+Disabling or removing the backend also removes its aliases from access.
+
+These same `models` and `model_aliases` fields work in YAML backend entries and
+persist through management overlay restarts. Configuration examples in the
+console explain backend pools, key permissions and budgets, proxy accounts,
+routing profiles, catalog overrides and model aliases alongside the controls.
+
 ## Persistence and deployment
 
 `MANAGEMENT_CONFIG_PATH` (or YAML `management.config_path`) selects a JSON

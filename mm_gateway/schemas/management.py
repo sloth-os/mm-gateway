@@ -14,6 +14,8 @@ Identifier = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.
 Optimize = Literal["balanced", "cost", "latency"]
 Fallback = Literal["none", "same_model", "any"]
 Modality = Literal["image", "video", "music", "audio", "voice"]
+ModelModality = Literal["image", "video", "music", "audio"]
+ModelId = Annotated[str, StringConstraints(min_length=1, max_length=256, pattern=r"^\S+$")]
 TaskStatus = Literal["pending", "running", "succeeded", "failed", "cancelled", "expired"]
 Amount = Annotated[float, Field(ge=0)]
 
@@ -38,13 +40,32 @@ class ManagedBackend(ManagementModel):
     tags: list[str] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
     credentials: list[BackendCredential] = Field(default_factory=list)
+    models: dict[ModelModality, list[ModelId]] | None = Field(
+        default=None, description="Active model allowlist by modality. Null uses provider defaults; {} disables all models.")
+    model_aliases: dict[ModelId, ModelId] = Field(
+        default_factory=dict, description="Public alias to active upstream model id, scoped to this backend.")
 
     @model_validator(mode="after")
     def unique_accounts(self):
         ids = [entry.id for entry in self.credentials]
         if len(ids) != len(set(ids)):
             raise ValueError("Backend credential ids must be unique.")
+        from mm_gateway.config import BackendConfig
+        BackendConfig(name=self.name, type=self.type, models=self.models, model_aliases=self.model_aliases)
         return self
+
+
+class BackendModelCatalog(ManagementModel):
+    models: dict[ModelModality, list[str]]
+
+
+class DiscoveredModel(ManagementModel):
+    id: str
+    modalities: list[ModelModality] = Field(default_factory=list)
+
+
+class BackendModelDiscovery(ManagementModel):
+    data: list[DiscoveredModel]
 
 
 class ManagedBudget(ManagementModel):

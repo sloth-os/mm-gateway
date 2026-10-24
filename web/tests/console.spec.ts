@@ -230,6 +230,183 @@ test("shows a revision conflict and lets the operator reload", async ({
   );
 });
 
+test("selects built-in, discovered and manual models and routes aliases", async ({
+  page,
+  request,
+}) => {
+  await connect(page);
+  await page.getByRole("button", { name: "Backends", exact: true }).click();
+  await page.getByRole("button", { name: "Add backend" }).click();
+  await page.getByLabel("Backend name", { exact: true }).fill("model-controls");
+  await page.getByLabel("Provider type").selectOption("fake");
+  await page
+    .getByLabel("Provider API key", { exact: true })
+    .fill("browser-model-secret");
+  await page
+    .getByLabel("Base URL", { exact: true })
+    .fill("http://127.0.0.1:8765/browser-upstream/v1");
+  await expect(
+    page.getByText("Backend setup example", { exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Use provider defaults", { exact: true }).uncheck();
+  await page
+    .getByLabel("Activate video model fake-video-1", { exact: true })
+    .uncheck();
+  await page
+    .getByLabel("Activate music model fake-music-1", { exact: true })
+    .uncheck();
+  await page.getByRole("button", { name: "List models from backend" }).click();
+  await expect(
+    page.getByText("2 models returned by the upstream."),
+  ).toBeVisible();
+  await page
+    .getByLabel("Activate discovered image model upstream-image-next", {
+      exact: true,
+    })
+    .check();
+  await page
+    .getByLabel("Manual model ID", { exact: true })
+    .fill("manual-image-next");
+  await page.getByRole("button", { name: "Add model", exact: true }).click();
+  await page.getByLabel("Model alias", { exact: true }).fill("browser-stable");
+  await page
+    .getByLabel("Alias target model", { exact: true })
+    .selectOption("manual-image-next");
+  await page.getByRole("button", { name: "Add alias", exact: true }).click();
+  await expect(
+    page.getByText("Model selection & alias example", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("heading", { name: "Active models", exact: true })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "test-results/backend-models-desktop.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByLabel("Target for alias browser-stable", { exact: true })
+    .scrollIntoViewIfNeeded();
+  expect(
+    await page
+      .getByRole("dialog")
+      .evaluate((element) => element.scrollWidth <= element.clientWidth),
+  ).toBe(true);
+  await page.screenshot({ path: "test-results/backend-models-mobile.png" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  const card = page.locator(".resource-card").filter({
+    has: page.getByRole("heading", { name: "model-controls", exact: true }),
+  });
+  await expect(card).toContainText("Active models 3");
+  await expect(card).toContainText("1 alias");
+  const admin = { Authorization: "Bearer management-test" };
+  const loaded = await request.get("v1/management/config", { headers: admin });
+  const backend = (await loaded.json()).config.backends.find(
+    (item: { name: string }) => item.name === "model-controls",
+  );
+  expect(backend.models).toEqual({
+    image: ["fake-image-1", "upstream-image-next", "manual-image-next"],
+    video: [],
+    music: [],
+  });
+  expect(backend.model_aliases).toEqual({
+    "browser-stable": "manual-image-next",
+  });
+  const submitted = await request.post("v1/images", {
+    headers: { Authorization: "Bearer browser-generation" },
+    data: {
+      model: "browser-stable",
+      input: [{ type: "text", text: "alias integration" }],
+    },
+  });
+  expect(submitted.status()).toBe(202);
+  const task = await submitted.json();
+  const tasks = await request.get("v1/management/tasks", {
+    headers: admin,
+    params: { backend: "model-controls" },
+  });
+  expect(
+    (await tasks.json()).data.find(
+      (item: { id: string }) => item.id === task.id,
+    ).model,
+  ).toBe("browser-stable");
+  await card.getByRole("button", { name: "Configure" }).click();
+  await expect(
+    page.getByLabel("Activate image model manual-image-next", { exact: true }),
+  ).toBeChecked();
+  await expect(page.getByText("browser-stable", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "List models from backend" }).click();
+  await expect(
+    page.getByText("2 models returned by the upstream."),
+  ).toBeVisible();
+  await page
+    .getByLabel("Target for alias browser-stable", { exact: true })
+    .selectOption("upstream-image-next");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const updated = await request.get("v1/management/config", { headers: admin });
+  expect(
+    (await updated.json()).config.backends.find(
+      (item: { name: string }) => item.name === "model-controls",
+    ).model_aliases,
+  ).toEqual({ "browser-stable": "upstream-image-next" });
+  await card.getByRole("button", { name: "Configure" }).click();
+  await page.getByLabel("Use provider defaults", { exact: true }).check();
+  await page
+    .getByRole("button", { name: "Remove alias browser-stable", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await card
+    .getByRole("button", { name: "Delete model-controls", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Delete resource", exact: true })
+    .click();
+  await expect(card).toHaveCount(0);
+});
+
+test("shows actionable configuration examples and supports manual models after discovery failure", async ({
+  page,
+}) => {
+  await connect(page);
+  await page.getByRole("button", { name: "Backends", exact: true }).click();
+  await page.getByRole("button", { name: "Add backend" }).click();
+  await page.getByLabel("Backend name", { exact: true }).fill("manual-only");
+  await page.getByLabel("Provider type").selectOption("fake");
+  await page
+    .getByLabel("Provider API key", { exact: true })
+    .fill("manual-secret");
+  await page.getByRole("button", { name: "List models from backend" }).click();
+  await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
+    "no default model-list API",
+  );
+  await page
+    .getByLabel("Manual model ID", { exact: true })
+    .fill("future-manual-only");
+  await page.getByRole("button", { name: "Add model", exact: true }).click();
+  await expect(
+    page.getByLabel("Activate image model future-manual-only", { exact: true }),
+  ).toBeChecked();
+  await page.getByRole("button", { name: "Close editor" }).click();
+  await page.getByRole("button", { name: "API keys", exact: true }).click();
+  await page.getByRole("button", { name: "Add API key" }).click();
+  await expect(
+    page.getByText("API key permissions & budget example", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close editor" }).click();
+  await page.getByRole("button", { name: "Proxies", exact: true }).click();
+  await page.getByRole("button", { name: "Add proxy" }).click();
+  await expect(
+    page.getByText("Proxy account pool example", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close editor" }).click();
+  await page.getByRole("button", { name: "Routing", exact: true }).click();
+  await expect(
+    page.getByText("Routing profile & request example", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Model catalog override example", { exact: true }),
+  ).toBeVisible();
+});
+
 test("renders a usable dashboard on desktop and mobile", async ({ page }) => {
   await connect(page);
   await page.screenshot({

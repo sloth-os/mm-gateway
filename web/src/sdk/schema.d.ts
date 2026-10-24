@@ -226,6 +226,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/management/backend-types/{provider_type}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Builtin Models */
+        get: operations["getManagementBuiltinModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/management/backends/discover-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discover Backend Models
+         * @description Read the draft backend's upstream models API without saving any configuration.
+         */
+        post: operations["discoverManagementBackendModels"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/management/backends/{name}": {
         parameters: {
             query?: never;
@@ -712,6 +749,18 @@ export interface components {
             /** Id */
             id: string;
         };
+        /** BackendModelCatalog */
+        BackendModelCatalog: {
+            /** Models */
+            models: {
+                [key: string]: string[];
+            };
+        };
+        /** BackendModelDiscovery */
+        BackendModelDiscovery: {
+            /** Data */
+            data: components["schemas"]["DiscoveredModel"][];
+        };
         /** BackendRuntime */
         BackendRuntime: {
             /** Accounts */
@@ -795,6 +844,13 @@ export interface components {
             height: number;
             /** Width */
             width: number;
+        };
+        /** DiscoveredModel */
+        DiscoveredModel: {
+            /** Id */
+            id: string;
+            /** Modalities */
+            modalities?: ("image" | "video" | "music" | "audio")[];
         };
         /** EstimateCandidate */
         EstimateCandidate: {
@@ -1050,6 +1106,20 @@ export interface components {
             extra?: {
                 [key: string]: unknown;
             };
+            /**
+             * Model Aliases
+             * @description Public alias to active upstream model id, scoped to this backend.
+             */
+            model_aliases?: {
+                [key: string]: string;
+            };
+            /**
+             * Models
+             * @description Active model allowlist by modality. Null uses provider defaults; {} disables all models.
+             */
+            models?: {
+                [key: string]: string[];
+            } | null;
             /** Name */
             name: string;
             /** Tags */
@@ -3566,6 +3636,124 @@ export interface operations {
             };
             /** @description Generation service timed out. */
             504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    getManagementBuiltinModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_type: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendModelCatalog"];
+                };
+            };
+            /** @description Missing or unknown API key (unauthorized). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Model or task not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No usable generation service is configured. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    discoverManagementBackendModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedBackend"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackendModelDiscovery"];
+                };
+            };
+            /** @description Missing or unknown API key (unauthorized). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Model or task not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description No usable generation service is configured. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

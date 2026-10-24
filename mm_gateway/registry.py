@@ -113,12 +113,14 @@ class Registry:
         # backend name -> ordered account ids (at least one: "default").
         self._backend_accounts: dict[str, list[str]] = {}
         self._aliases = dict(_MODEL_ALIASES)
+        self._alias_backends: dict[str, str] = {}
         # proxy domain -> ProxyConfig (the configured, pass-through proxies).
         self._proxies: dict[str, ProxyConfig] = {}
         # Limits, lifecycle and prices, with the operator's catalog overrides
         # (docs/design/auto-mode.md). Shared by routing, estimates and listings.
         self._catalog = Catalog(parse_overrides(settings.catalog_models))
         self._build()
+        self._build_aliases()
 
     @property
     def catalog(self) -> Catalog:
@@ -216,6 +218,7 @@ class Registry:
         return BackendConfig(
             name=cfg.name, type=cfg.type, api_key=api_key or cfg.api_key,
             base_url=base_url or cfg.base_url, tags=list(cfg.tags), extra=merged,
+            models=cfg.models, model_aliases=cfg.model_aliases,
         )
 
     def _resolve_proxy(self, proxy: ProxyConfig) -> ProxyConfig:
@@ -257,6 +260,42 @@ class Registry:
         extra_music = cfg.extra.get("music_model")
         if extra_music and provider.supports_music and extra_music not in provider.music_models:
             provider.music_models = [*provider.music_models, extra_music]
+        if cfg.models is not None:
+            for modality in ("image", "video", "music", "audio"):
+                models = list(cfg.models.get(modality, []))
+                if models and not self._serves_modality(provider, modality):
+                    raise GatewayError(f"Backend '{cfg.name}' does not support {modality} models.",
+                                       code="invalid_config", status_code=422)
+                setattr(provider, f"{modality}_models", models)
+
+    def _build_aliases(self) -> None:
+        """Keep custom aliases tied to their named backend, including disabled ones."""
+        self._aliases = dict(_MODEL_ALIASES)
+        self._alias_backends = {}
+        custom_aliases = {alias for cfg in self.settings.backends for alias in cfg.model_aliases}
+        for cfg in self.settings.backends:
+            if any(model in self._aliases for models in (cfg.models or {}).values() for model in models):
+                raise GatewayError("Active model IDs must name upstream models, not built-in gateway aliases.",
+                                   code="invalid_config", status_code=422)
+        raw_ids = {model for cfg in self.settings.backends for models in (cfg.models or {}).values() for model in models}
+        raw_ids.update(model for provider in self._backends.values()
+                       for modality in ("image", "video", "music", "audio")
+                       for model in self._modality_models(provider, modality))
+        for cfg in self.settings.backends:
+            for alias, target in cfg.model_aliases.items():
+                if alias in self._aliases or alias in raw_ids:
+                    raise GatewayError(f"Model alias '{alias}' conflicts with an existing model or alias.",
+                                       code="invalid_config", status_code=422)
+                if target in _MODEL_ALIASES or target in custom_aliases:
+                    raise GatewayError("Model aliases must point to upstream models, not other aliases.",
+                                       code="invalid_config", status_code=422)
+                provider = self._backends.get(cfg.name)
+                if provider and not any(target in self._modality_models(provider, modality)
+                                        for modality in ("image", "video", "music", "audio")):
+                    raise GatewayError(f"Alias '{alias}' must target an active model on backend '{cfg.name}'.",
+                                       code="invalid_config", status_code=422)
+                self._aliases[alias] = (cfg.type, target)
+                self._alias_backends[alias] = cfg.name
 
     @property
     def providers(self) -> dict[str, Provider]:
@@ -338,10 +377,17 @@ class Registry:
         models: list[dict[str, Any]] = []
         usable = self.usable_backends(key) if key else list(self._backends)
         for alias, (btype, real) in self._aliases.items():
-            modality = next((m for m in ("video", "music", "audio") if m in alias), "image")
-            if any(self._configs[name].type == btype and self._serves_modality(self._backends[name], modality)
-                   for name in usable if name in self._configs):
-                models.append({"id": alias, "type": btype, "underlying": real, "modality": modality})
+            custom_backend = getattr(self, "_alias_backends", {}).get(alias)
+            modalities = ("image", "video", "music", "audio") if custom_backend else (
+                next((m for m in ("video", "music", "audio") if m in alias), "image"),)
+            for modality in modalities:
+                if any(self._configs[name].type == btype
+                       and (not custom_backend or name == custom_backend)
+                       and self._serves_modality(self._backends[name], modality)
+                       and (real in self._modality_models(self._backends[name], modality)
+                            or (not custom_backend and self._configs[name].models is None))
+                       for name in usable if name in self._configs):
+                    models.append({"id": alias, "type": btype, "underlying": real, "modality": modality})
         for name in usable:
             prov = self._backends[name]
             for m in prov.image_models:
@@ -445,44 +491,7 @@ class Registry:
         if key and not usable:
             raise ForbiddenError(f"API key '{key.id}' is not allowed to use any backend.")
 
-        # Resolve the model alias (if any) to (type, real_model). Aliases pin a
-        # backend *type*, not a name — any usable backend of that type serves it.
-        alias_type: str | None = None
-        real_model = model
-        if model in self._aliases:
-            alias_type, real_model = self._aliases[model]
-        elif "/" in model:
-            prefix, rest = model.split("/", 1)
-            if prefix in (self._configs[n].type for n in usable):
-                alias_type, real_model = prefix, rest
-
-        def serves(name: str) -> bool:
-            prov = self._backends[name]
-            # An explicit backend pin trusts the caller's choice entirely; the
-            # service layer validates modality support afterwards. This lets a
-            # pinned provider with a dynamic catalogue (or a brand-new model id
-            # not yet in its advertised list) still be reached.
-            if backend_name and name == backend_name:
-                return True
-            # A backend that doesn't implement the requested modality cannot
-            # serve it, regardless of its advertised model list.
-            if modality == "image" and not prov.supports_image:
-                return False
-            if modality == "video" and not prov.supports_video:
-                return False
-            if modality == "audio" and not prov.supports_audio:
-                return False
-            if modality == "music" and not prov.supports_music:
-                return False
-            known = self._modality_models(prov, modality)
-            # A backend serves the request if it knows the real model, or if the
-            # model is an alias of its type, or if it advertises no fixed list
-            # (OpenRouter's catalogue is dynamic).
-            return real_model in known or alias_type == self._configs[name].type or not known
-
-        candidates = [n for n in usable if serves(n)]
-        if not candidates:
-            raise ModelNotFoundError(f"No backend configured for model '{model}'.")
+        real_model, candidates = self.backends_serving(model, key, modality=modality, backend_name=backend_name)
 
         chosen: str | None = None
         if backend_name and backend_name in candidates:
@@ -718,6 +727,11 @@ class Registry:
         """``(alias backend type or None, real model id)`` for a pinned model id."""
         if model in self._aliases:
             return self._aliases[model]
+        # A slash may be part of a native upstream id (e.g. OpenRouter).
+        # An explicitly advertised id takes precedence over legacy type/id syntax.
+        if any(model in self._modality_models(self._backends[name], modality)
+               for name in usable for modality in ("image", "video", "music", "audio")):
+            return None, model
         if "/" in model:
             prefix, rest = model.split("/", 1)
             if prefix in (self._configs[n].type for n in usable if n in self._configs):
@@ -738,9 +752,18 @@ class Registry:
         if key and not usable:
             raise ForbiddenError(f"API key '{key.id}' is not allowed to use any backend.")
         alias_type, real_model = self.resolve_model_id(model, usable)
+        alias_backend = getattr(self, "_alias_backends", {}).get(model)
 
         def serves(name: str) -> bool:
             prov = self._backends[name]
+            if alias_backend and name != alias_backend:
+                return False
+            if alias_type and self._configs[name].type != alias_type:
+                return False
+            # Explicit allowlists are authoritative, even for aliases, empty
+            # lists, dynamic adapters and explicit backend pins.
+            if self._configs[name].models is not None:
+                return self._serves_modality(prov, modality) and real_model in self._modality_models(prov, modality)
             if backend_name and name == backend_name:
                 return True
             if not self._serves_modality(prov, modality):

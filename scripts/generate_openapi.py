@@ -58,6 +58,8 @@ EXPECTED_PATHS = {
     "/v1/management/status",
     "/v1/management/config",
     "/v1/management/backends/{name}",
+    "/v1/management/backend-types/{provider_type}/models",
+    "/v1/management/backends/discover-models",
     "/v1/management/keys/{key_id}",
     "/v1/management/proxies/{domain}",
     "/v1/management/metrics",

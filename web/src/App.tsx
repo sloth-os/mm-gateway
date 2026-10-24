@@ -50,6 +50,8 @@ import {
   type TaskList,
   type UsageList,
 } from "./sdk/management";
+import { BackendModelsEditor } from "./BackendModelsEditor";
+import { ConfigurationExample } from "./ConfigurationExample";
 
 type Page =
   | "Overview"
@@ -328,6 +330,8 @@ function App() {
             tags: [],
             extra: {},
             credentials: [],
+            models: null,
+            model_aliases: {},
           }
         : section === "keys"
           ? {
@@ -595,6 +599,10 @@ function App() {
                   ? status.proxies.find((p) => p.domain === id)
                   : null;
             const tags = (item.tags || item.allow_tags || []) as string[];
+            const aliasCount =
+              section === "backends"
+                ? Object.keys((resource as Backend).model_aliases || {}).length
+                : 0;
             return (
               <article className="resource-card" key={id}>
                 <div className="resource-top">
@@ -655,6 +663,16 @@ function App() {
                     </>
                   )}
                 </div>
+                {section === "backends" && live && "models" in live && (
+                  <div className="resource-detail">
+                    Active models{" "}
+                    <strong>{Object.values(live.models).flat().length}</strong>
+                    <span>
+                      {" "}
+                      · {aliasCount} {aliasCount === 1 ? "alias" : "aliases"}
+                    </span>
+                  </div>
+                )}
                 <div className="resource-actions">
                   <button onClick={() => openEditor(section, resource)}>
                     <Settings2 size={15} /> Configure
@@ -1360,6 +1378,7 @@ function App() {
       {editor && (
         <ResourceEditor
           editor={editor}
+          api={api}
           types={status.backend_types}
           busy={busy}
           error={error}
@@ -1506,6 +1525,7 @@ function Labels({ labels }: { labels: Record<string, string> }) {
 
 function ResourceEditor({
   editor,
+  api,
   types,
   busy,
   error,
@@ -1513,6 +1533,7 @@ function ResourceEditor({
   onSave,
 }: {
   editor: Editor;
+  api: ManagementApi;
   types: string[];
   busy: boolean;
   error: string;
@@ -1715,7 +1736,14 @@ function ResourceEditor({
                       Provider type
                       <select
                         value={String(draft.type)}
-                        onChange={(event) => set("type", event.target.value)}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            type: event.target.value,
+                            models: null,
+                            model_aliases: {},
+                          }))
+                        }
                       >
                         {types.map((type) => (
                           <option key={type}>{type}</option>
@@ -1727,6 +1755,21 @@ function ResourceEditor({
                     {tags("tags", "Routing tags")}
                     {jsonField("credentials", "Account pool (JSON)")}
                     {jsonField("extra", "Provider options (JSON)")}
+                    <p className="field-hint">
+                      Leave Base URL empty for the provider’s default endpoint.
+                      Provider options accept settings such as{" "}
+                      <code>outbound_proxy</code>, <code>audio_only</code>, and{" "}
+                      <code>models_path</code>. A credential pool uses its
+                      account keys in place of the single provider key.
+                    </p>
+                    <BackendModelsEditor
+                      key={String(draft.type)}
+                      api={api}
+                      backend={draft as Backend}
+                      onChange={(next) =>
+                        setDraft(next as unknown as Record<string, unknown>)
+                      }
+                    />
                   </>
                 )}
                 {editor.section === "keys" && (
@@ -1802,6 +1845,10 @@ function ResourceEditor({
                 </label>
               </>
             )}
+            <ResourceExample
+              section={editor.section}
+              providerType={String(draft.type || "openai")}
+            />
           </div>
           <div className="dialog-footer">
             <button
@@ -1824,6 +1871,125 @@ function ResourceEditor({
         </form>
       </div>
     </div>
+  );
+}
+
+function ResourceExample({
+  section,
+  providerType,
+}: {
+  section: Section;
+  providerType: string;
+}) {
+  if (section === "backends")
+    return (
+      <ConfigurationExample
+        title="Backend setup example"
+        value={
+          providerType === "vertex"
+            ? {
+                name: "media-production",
+                type: "vertex",
+                tags: ["production"],
+                extra: {
+                  project: "my-cloud-project",
+                  location: "global",
+                  credentials_file: "/run/secrets/vertex.json",
+                },
+              }
+            : {
+                name: "media-production",
+                type: providerType,
+                tags: ["production"],
+                base_url: null,
+                credentials: [
+                  { id: "primary", api_key: "<first-provider-key>" },
+                  { id: "overflow", api_key: "<second-provider-key>" },
+                ],
+                extra:
+                  providerType === "azure"
+                    ? { region: "eastus" }
+                    : { outbound_proxy: "http://127.0.0.1:8080" },
+              }
+        }
+      >
+        <p>
+          A backend is one named provider account or account pool. The{" "}
+          <code>production</code> tag lets API keys and routing profiles select
+          it. Use your provider’s real credentials and omit optional settings
+          you do not need.
+        </p>
+        <p>
+          {providerType === "vertex"
+            ? "Vertex uses a service account or application default credentials instead of an API key."
+            : "For one account, enter Provider API key and leave Account pool as []. With a pool, give every account a unique ID; automatic routing can retry another account when one is unavailable."}{" "}
+          The Enabled switch controls whether the backend accepts new requests.
+        </p>
+      </ConfigurationExample>
+    );
+  if (section === "keys")
+    return (
+      <ConfigurationExample
+        title="API key permissions & budget example"
+        value={{
+          id: "image-app",
+          key: "<client-token>",
+          allow_tags: ["production"],
+          allow_backends: ["media-fallback"],
+          deny_tags: ["media-staging"],
+          default_image_backend: "media-production",
+          budget: { limit_usd: 50, period: "month", scopes_limit_usd: 10 },
+        }}
+      >
+        <p>
+          The client authenticates with{" "}
+          <code>Authorization: Bearer &lt;client-token&gt;</code>. This key can
+          use backends tagged <code>production</code> or named{" "}
+          <code>media-fallback</code>. The denied backend{" "}
+          <code>media-staging</code> is excluded even if tagged production.
+        </p>
+        <p>
+          The budget permits $50 per month across the key, with $10 for each
+          request budget scope. Use <code>null</code> for no budget. Default
+          image backend is a preference among permitted backends; it does not
+          grant access. Disabling the key revokes its token immediately.
+        </p>
+      </ConfigurationExample>
+    );
+  return (
+    <ConfigurationExample
+      title="Proxy account pool example"
+      value={{
+        base_url: "https://api.example.com/v1",
+        tags: ["production"],
+        timeout: 120,
+        headers: { "X-Project": "my-project" },
+        accounts: [
+          {
+            id: "primary",
+            headers: { Authorization: "Bearer <first-upstream-key>" },
+          },
+          {
+            id: "overflow",
+            headers: { Authorization: "Bearer <second-upstream-key>" },
+          },
+        ],
+        outbound_proxy: null,
+      }}
+    >
+      <p>
+        A client calls <code>/proxy/api.example.com/models</code> using its
+        gateway token. The gateway forwards to{" "}
+        <code>https://api.example.com/v1/models</code> and injects the selected
+        account’s upstream credentials. Account headers override shared headers.
+      </p>
+      <p>
+        Allow this proxy through its domain in Allowed backend names or a
+        matching tag. Timeout is the time to receive upstream response headers.
+        Outbound proxy URL optionally routes traffic through an HTTP or SOCKS
+        proxy.
+      </p>
+    </ConfigurationExample>
   );
 }
 
@@ -1949,6 +2115,34 @@ function RoutingEditor({
             fast: { optimize: "latency", tags: ["production"] },
           })}
         </p>
+        <ConfigurationExample
+          title="Routing profile & request example"
+          value={{
+            profiles: {
+              fast: {
+                tags: ["production"],
+                optimize: "latency",
+                fallback: "same_model",
+                max_cost_usd: 0.1,
+              },
+            },
+            request: { model: "auto", routing: { profile: "fast" } },
+          }}
+        >
+          <p>
+            Enter the contents of <code>profiles</code> in Routing profiles
+            above. A client selects <code>fast</code> in its request to choose
+            production backends, prefer low latency and cap estimated cost at
+            $0.10.
+          </p>
+          <p>
+            Balanced considers health, latency and cost; Cost prefers lower
+            estimated cost; Latency prefers faster responses. For a pinned
+            model, <code>same_model</code> retries the same model on another
+            permitted account or backend. <code>any</code> also permits other
+            active models; <code>none</code> keeps one attempt.
+          </p>
+        </ConfigurationExample>
         <JsonField
           label="Model catalog overrides (JSON)"
           value={draft.catalog_models}
@@ -1959,6 +2153,31 @@ function RoutingEditor({
             })
           }
         />
+        <ConfigurationExample
+          title="Model catalog override example"
+          value={{
+            "provider-image-next": {
+              modality: "image",
+              max_prompt_chars: 4000,
+              price: { per_image: 0.04 },
+            },
+          }}
+        >
+          <p>
+            Add this model ID to a backend’s active models first. This entry
+            describes its limits and an example price of $0.04 per image for
+            routing, estimates and budgets. Replace the example price with your
+            provider’s actual price. Catalog overrides alone do not activate a
+            model.
+          </p>
+          <p>
+            Global outbound proxy accepts an HTTP or SOCKS URL, for example{" "}
+            <code>http://127.0.0.1:8080</code>. Leave it empty for the default
+            connection. Allow unpriced models lets budgeted requests use models
+            whose cost cannot be estimated; those requests cannot reserve a
+            known cost.
+          </p>
+        </ConfigurationExample>
         <label className="field">
           Global outbound proxy
           <input

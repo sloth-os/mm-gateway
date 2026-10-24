@@ -22,7 +22,7 @@ from mm_gateway.observability.logging import get_logger
 from mm_gateway.observability.metrics import STORE as METRICS
 from mm_gateway.observability.selection import STORE as SELECTION
 from mm_gateway.registry import Registry, _PROVIDER_CLASSES
-from mm_gateway.schemas.management import ManagementConfig, REDACTED
+from mm_gateway.schemas.management import ManagedBackend, ManagementConfig, REDACTED
 from mm_gateway.secrets import SecretError, SecretStore, atomic_write, is_header_map, is_secret
 
 log = get_logger("management")
@@ -130,9 +130,24 @@ class ManagementService:
 
     def configuration(self) -> dict:
         settings = self.app.state.settings
+        config = config_from_settings(settings).model_dump()
+        redacted = _redact(config)
+        # Alias names are public identifiers, even when they contain words such
+        # as "token". Do not interpret those map keys as credential field names.
+        for backend, original in zip(redacted["backends"], config["backends"]):
+            backend["model_aliases"] = original["model_aliases"]
         return {"revision": self.revision,
                 "persistent": bool(settings.management_config_path),
-                "config": _redact(config_from_settings(settings).model_dump())}
+                "config": redacted}
+
+    async def discover_backend_models(self, backend: ManagedBackend) -> dict:
+        from mm_gateway.model_management import discover_models
+
+        settings = self.app.state.settings
+        previous = next((entry for entry in config_from_settings(settings).model_dump()["backends"]
+                         if entry["name"] == backend.name), None)
+        restored = _restore(backend.model_dump(), previous)
+        return {"data": await discover_models(BackendConfig(**restored), settings.outbound_proxy)}
 
     def _check_revision(self, if_match: str | None) -> None:
         if not if_match:
@@ -206,7 +221,7 @@ class ManagementService:
         # Publish in one event-loop step, retaining the registry object shared by
         # HTTP and MCP services. Existing task monitors keep their owning client.
         registry = self.app.state.registry
-        for name in ("_backends", "_configs", "_accounts", "_backend_accounts", "_proxies", "_catalog"):
+        for name in ("_backends", "_configs", "_accounts", "_backend_accounts", "_proxies", "_catalog", "_aliases", "_alias_backends"):
             setattr(registry, name, getattr(candidate, name))
         registry.settings = candidate.settings
         self.app.state.settings = candidate.settings
@@ -245,6 +260,7 @@ class ManagementService:
         if collisions:
             raise GatewayError("Proxy domains must not collide with backend names.", code="invalid_config", status_code=422)
         candidate.settings = settings
+        candidate._build_aliases()
         # Retain configured order: it also defines the initial routing preference.
         candidate._backends = {cfg.name: candidate._backends[cfg.name]
                                for cfg in settings.backends if cfg.name in candidate._backends}

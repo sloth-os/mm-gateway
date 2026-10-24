@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 
 from mm_gateway.schemas.management import (
-    ManagedBackend, ManagedKey, ManagedProxy, ManagementConfig, ManagementConfigResponse,
+    BackendModelCatalog, BackendModelDiscovery, ManagedBackend, ManagedKey, ManagedProxy, ManagementConfig, ManagementConfigResponse,
     ManagementMetrics, ManagementStatus, ManagementTaskList, ManagementUsageList, Modality, TaskStatus,
 )
 from mm_gateway.server.auth import require_management_key
@@ -37,6 +37,20 @@ async def get_config(request: Request, response: Response):
 async def replace_config(request: Request, response: Response, body: ManagementConfig, if_match: IfMatch = None):
     result = await request.app.state.management.update(body, if_match)
     return config_response(request, response, result)
+
+
+@router.get("/backend-types/{provider_type}/models", operation_id="getManagementBuiltinModels",
+            response_model=BackendModelCatalog)
+async def get_builtin_models(provider_type: str):
+    from mm_gateway.model_management import builtin_models
+    return {"models": builtin_models(provider_type)}
+
+
+@router.post("/backends/discover-models", operation_id="discoverManagementBackendModels",
+             response_model=BackendModelDiscovery)
+async def discover_backend_models(request: Request, body: ManagedBackend):
+    """Read the draft backend's upstream models API without saving any configuration."""
+    return await request.app.state.management.discover_backend_models(body)
 
 
 @router.put("/backends/{name}", operation_id="putManagementBackend", response_model=ManagementConfigResponse,

@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import uvicorn
+from fastapi import Header, HTTPException
 import tests.conftest as fakes
 from mm_gateway.config import BackendConfig, KeyConfig, Settings
 from mm_gateway.registry import _PROVIDER_CLASSES
@@ -24,6 +25,13 @@ settings = Settings(
     log_level="WARNING",
 )
 app = create_app(settings)
+
+
+@app.get("/browser-upstream/v1/models")
+async def upstream_models(authorization: str | None = Header(default=None)):
+    if authorization != "Bearer browser-model-secret":
+        raise HTTPException(status_code=401)
+    return {"data": [{"id": "fake-image-1"}, {"id": "upstream-image-next"}]}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("GATEWAY_TEST_PORT", "8765")),

@@ -63,6 +63,15 @@ backends:
     type: openai
     api_key: ${OPENAI_API_KEY}
     tags: [prod, image-primary]
+    # Optional explicit allowlist. Omit or use null for provider defaults;
+    # missing modalities / [] disable that modality; {} disables all models.
+    # Add new upstream IDs here without waiting for a gateway release.
+    # models:
+    #   image: [gpt-image-1]
+    # Model aliases map stable public names directly to active upstream IDs.
+    # Requests for company-image are sent to gpt-image-1 on this backend.
+    # model_aliases:
+    #   company-image: gpt-image-1
     # Route just this backend's outbound traffic through a different proxy than
     # the global `outbound_proxy` above (or nested under `extra.outbound_proxy`,
     # which is equivalent and wins if both are set).

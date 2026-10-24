@@ -33,6 +33,8 @@ EXPECTED_OPERATIONS = {
     ("/v1/management/config", "put"): "replaceManagementConfig",
     ("/v1/management/backends/{name}", "put"): "putManagementBackend",
     ("/v1/management/backends/{name}", "delete"): "deleteManagementBackend",
+    ("/v1/management/backend-types/{provider_type}/models", "get"): "getManagementBuiltinModels",
+    ("/v1/management/backends/discover-models", "post"): "discoverManagementBackendModels",
     ("/v1/management/keys/{key_id}", "put"): "putManagementKey",
     ("/v1/management/keys/{key_id}", "delete"): "deleteManagementKey",
     ("/v1/management/proxies/{domain}", "put"): "putManagementProxy",

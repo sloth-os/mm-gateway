@@ -15,6 +15,8 @@ export type UsageList = Schema["ManagementUsageList"];
 export type Backend = Schema["ManagedBackend"];
 export type Key = Schema["ManagedKey"];
 export type Proxy = Schema["ManagedProxy"];
+export type ModelCatalog = Schema["BackendModelCatalog"];
+export type ModelDiscovery = Schema["BackendModelDiscovery"];
 export type TaskFilters = {
   status?: string;
   modality?: string;
@@ -81,6 +83,15 @@ export class ManagementApi extends MetaApi {
       body,
       revision,
     );
+  }
+  getManagementBuiltinModels(providerType: string) {
+    return this.json<ModelCatalog>(
+      "GET",
+      `/backend-types/${encodeURIComponent(providerType)}/models`,
+    );
+  }
+  discoverManagementBackendModels(body: Backend) {
+    return this.json<ModelDiscovery>("POST", "/backends/discover-models", body);
   }
   deleteManagementBackend(name: string, revision: string) {
     return this.json<ConfigResponse>(
