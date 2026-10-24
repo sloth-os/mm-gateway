@@ -1824,74 +1824,7 @@
         "title": "ManagedUsage",
         "type": "object"
       },
-      "ManagementConfig-Input": {
-        "additionalProperties": false,
-        "properties": {
-          "backends": {
-            "items": {
-              "$ref": "#/components/schemas/ManagedBackend"
-            },
-            "title": "Backends",
-            "type": "array"
-          },
-          "budget_allow_unpriced": {
-            "default": false,
-            "title": "Budget Allow Unpriced",
-            "type": "boolean"
-          },
-          "catalog_models": {
-            "additionalProperties": true,
-            "title": "Catalog Models",
-            "type": "object"
-          },
-          "keys": {
-            "items": {
-              "$ref": "#/components/schemas/ManagedKey"
-            },
-            "title": "Keys",
-            "type": "array"
-          },
-          "outbound_proxy": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Outbound Proxy"
-          },
-          "proxies": {
-            "items": {
-              "$ref": "#/components/schemas/ManagedProxy"
-            },
-            "title": "Proxies",
-            "type": "array"
-          },
-          "routing_default_optimize": {
-            "default": "balanced",
-            "enum": [
-              "balanced",
-              "cost",
-              "latency"
-            ],
-            "title": "Routing Default Optimize",
-            "type": "string"
-          },
-          "routing_profiles": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/ManagedRoutingProfile"
-            },
-            "title": "Routing Profiles",
-            "type": "object"
-          }
-        },
-        "required": [],
-        "title": "ManagementConfig",
-        "type": "object"
-      },
-      "ManagementConfig-Output": {
+      "ManagementConfig": {
         "additionalProperties": false,
         "properties": {
           "backends": {
@@ -1962,7 +1895,7 @@
         "additionalProperties": false,
         "properties": {
           "config": {
-            "$ref": "#/components/schemas/ManagementConfig-Output"
+            "$ref": "#/components/schemas/ManagementConfig"
           },
           "persistent": {
             "title": "Persistent",
@@ -8637,7 +8570,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ManagementConfig-Input"
+                "$ref": "#/components/schemas/ManagementConfig"
               }
             }
           },
