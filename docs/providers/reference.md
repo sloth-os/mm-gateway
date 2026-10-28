@@ -210,8 +210,25 @@ differs.
   calls"); the gateway wraps both as a synthetic in-memory task.
   - Models: `wanx2.1-t2i-turbo`, `wanx2.1-t2i-plus`, `wanx2.1-t2i-flash`,
     `qwen-image-2.0-pro`.
-- **Video (Wan)**: `AioVideoSynthesis.async_call(model, prompt, size, duration, img_url, prompt_extend)` → task; poll `AioVideoSynthesis.fetch(task_id)`; result `output.video_url` (single temp OSS URL).
+- **Video (Wan 2.x)**: `AioVideoSynthesis.async_call(model, prompt, size, duration, img_url, prompt_extend)` → task; poll `AioVideoSynthesis.fetch(task_id)`; result `output.video_url` (single temp OSS URL).
   - Models: `wanx2.1-t2v-turbo`, `wanx2.1-i2v-turbo`, `wanx2.1-t2v-plus`, `wanx2.1-i2v-plus`.
+- **Video (Wan 3.x, `wan3*`)**: the native body, posted with `X-DashScope-Async: enable` to
+  `<video base>/services/aigc/video-generation/video-synthesis` (the SDK only sends `img_url`):
+  `{model, input: {prompt, media: [{type, url}]}, parameters: {resolution, ratio, duration, audio, seed,
+  prompt_extend, watermark}}`
+  ([API reference](https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-api-reference)).
+  - `media`: image parts by role (`first_frame`, `last_frame`, `reference_image`), `reference_video`,
+    `reference_audio`. A first or last frame **cannot be combined with references**: a request carrying both keeps
+    its frames and drops the references (logged as `dashscope_wan3_references_dropped_for_frames`). Reference mode
+    keeps at most 10 images, 5 videos and 5 audio clips.
+  - `parameters`: `resolution` is the tier nearest the requested short side (`480P`, `720P`, `1080P`) or the
+    request's `resolution`; `ratio` the requested aspect ratio when Wan knows it (otherwise Wan's `adaptive`);
+    `duration` clamped to 2–30 s (`-1`: the model chooses); `audio` from `include_audio`; `seed` within
+    `[0, 2147483647]`; `prompt_extend` from `enhance_prompt`; `parameters.extra` is merged last. There is **no
+    negative prompt**: clients write exclusions in the prompt.
+  - Models: `wan3.0-video`, `wan3.0-video-prime` (the faster one): 2–30 s, 30 fps, sound by default, up to 8
+    shots in one prompt (`Shot N [start-end s]: …`, 2–5 s each,
+    [prompt guide](https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-prompt-guide)).
 - **Sync vs async URL**: image calls carry `base_address=backend.base_url`
   (the `*_IMAGE_BASE_URL` sync endpoint); video calls carry
   `base_address=backend.extra["video_base_url"]` (the `*_VIDEO_BASE_URL` async

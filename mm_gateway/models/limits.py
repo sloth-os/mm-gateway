@@ -107,6 +107,12 @@ class ModelLimits:
     # motion, timing) and a ``first_frame`` with the character, and return the character performing it
     # (docs/design/auto-mode.md#capabilities-performance).
     supports_performance: bool | None = None
+    # ``True``: a ``first_frame``/``last_frame`` cannot be combined with reference images, videos or audio in one
+    # request (Wan 3.0); the adapter keeps the frames and drops the references.
+    exclusive_frames_and_references: bool | None = None
+    # ``False``: the model has no negative prompt field; ``negative_prompt`` is dropped, so exclusions belong in the
+    # prompt text.
+    supports_negative_prompt: bool | None = None
     supports_voice_cloning: bool | None = None
     supports_instructions: bool | None = None
     max_voice_samples: int | None = None
@@ -164,7 +170,8 @@ class ModelLimits:
             "supports_continuation_audio", "supports_lyrics", "supports_reference_image",
             "supports_audio_output", "supports_upscale", "supports_frame_interpolation",
             "supports_segmentation", "supports_performance", "deprecated_on", "retired_on", "replacement",
-            "supports_voice_cloning", "supports_instructions",
+            "supports_voice_cloning", "supports_instructions", "exclusive_frames_and_references",
+            "supports_negative_prompt",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -542,6 +549,34 @@ _LIMITS["wanx2.1-i2v-turbo"] = replace(_wanx21_i2v, supported_sizes=("480P", "72
 _LIMITS["wanx2.1-i2v-plus"] = replace(_wanx21_i2v, supported_sizes=("720P",),
     min_duration_seconds=5,
     notes="I2V (first-frame image via img_url), silent; duration fixed at 5s (not the turbo's 3-5s); 30 fps, MP4.",
+)
+
+_wan3_video = ModelLimits(
+    modality="video", input_modalities=(_TEXT, _IMAGE, _VIDEO, _AUDIO),
+    max_prompt_chars=20000, max_input_images=10,
+    min_duration_seconds=2, max_duration_seconds=30, max_fps=30,
+    supported_sizes=("480P", "720P", "1080P"),
+    aspect_ratios=("adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"),
+    supports_first_frame=True, supports_last_frame=True, supports_reference_image=True,
+    supports_reference_video=True, supports_reference_audio=True, supports_audio_output=True,
+    exclusive_frames_and_references=True, supports_negative_prompt=False,
+    # The prompt sets the shots: "Shot N [start-end s]: ..." segments of 2-5 s each; the guide's examples run up to
+    # eight shots in 25-30 s.
+    max_shots=8,
+    notes=(
+        "Native media body (input.media: first_frame | last_frame | up to 10 reference_image, 5 reference_video and "
+        "5 reference_audio, the reference clips at most 15 s together). A first or last frame cannot be combined with "
+        "references. Duration 2-30 s (-1: the model chooses); 30 fps MP4 with sound unless audio=false. No negative "
+        "prompt: write exclusions in the prompt. prompt_extend (on by default) rewrites the prompt."
+    ),
+    source_urls=(
+        "https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-api-reference",
+        "https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-prompt-guide",
+    ),
+)
+_LIMITS["wan3.0-video"] = _wan3_video
+_LIMITS["wan3.0-video-prime"] = replace(
+    _wan3_video, notes="High-speed Wan 3.0 with the standard model's capabilities. " + _wan3_video.notes,
 )
 
 # --------------------------------------------------------------------------- #

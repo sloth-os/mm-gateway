@@ -38,6 +38,7 @@ Regression note: ``_generate_image`` must not touch ``request.prompt_extend`` â€
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -55,7 +56,7 @@ from mm_gateway.providers.dashscope import DashScopeProvider
 from mm_gateway.schemas.image import UnifiedImageRequest
 from mm_gateway.schemas.image import image_part as image_image_part
 from mm_gateway.schemas.image import text_part as image_text_part
-from mm_gateway.schemas.video import UnifiedVideoRequest, image_part, text_part
+from mm_gateway.schemas.video import UnifiedVideoRequest, audio_part, image_part, text_part, video_part
 
 
 def _succeeded(url: str = "https://dashscope.test/img.png") -> Any:
@@ -1068,3 +1069,95 @@ def test_video_poll_maps_usage(provider: DashScopeProvider) -> None:
     assert task.usage is not None
     assert task.usage.video_count == 1 and task.usage.video_duration == 5
     assert task.usage.extra == {"video_ratio": "16:9"}
+
+
+# --------------------------------------------------------------------------- #
+# Wan 3.x: the native media body
+# --------------------------------------------------------------------------- #
+
+
+def _mount_submit(provider: DashScopeProvider, reply: httpx.Response | None = None) -> list[httpx.Request]:
+    """Capture the native submit (and answer it with ``reply`` or a pending task)."""
+    seen: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return reply or httpx.Response(200, json={"output": {"task_id": "wan3-task", "task_status": "PENDING"}})
+
+    provider._client_video = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    return seen
+
+
+def test_wan3_first_frame_mode_sends_frames_and_drops_references(provider: DashScopeProvider) -> None:
+    seen = _mount_submit(provider)
+    task = asyncio.run(
+        provider.create_video_task(
+            UnifiedVideoRequest(
+                model="wan3.0-video-prime",
+                content=[
+                    text_part("One continuous shot, no cuts. Rosie waves."),
+                    image_part("data:image/png;base64,AAA", "first_frame"),
+                    image_part("data:image/png;base64,BBB", "last_frame"),
+                    image_part("data:image/png;base64,CCC", "reference_image"),
+                ],
+                width=1920,
+                height=1080,
+                duration=45,
+                seed=4294967295,
+                generate_audio=True,
+                prompt_extend=False,
+                watermark=False,
+            )
+        )
+    )
+    assert task.task_id == "wan3-task"
+    assert provider._fake_video.call_kwargs is None  # type: ignore[attr-defined]  # not the SDK path
+    request = seen[0]
+    assert str(request.url) == "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
+    assert request.headers["X-DashScope-Async"] == "enable"
+    body = json.loads(request.content)
+    assert body["model"] == "wan3.0-video-prime"
+    assert body["input"]["prompt"] == "One continuous shot, no cuts. Rosie waves."
+    assert body["input"]["media"] == [
+        {"type": "first_frame", "url": "data:image/png;base64,AAA"},
+        {"type": "last_frame", "url": "data:image/png;base64,BBB"},
+    ]
+    assert body["parameters"] == {
+        "resolution": "1080P",
+        "ratio": "16:9",
+        "duration": 30,
+        "audio": True,
+        "seed": 2147483647,
+        "prompt_extend": False,
+        "watermark": False,
+    }
+
+
+def test_wan3_reference_mode_caps_each_kind(provider: DashScopeProvider) -> None:
+    seen = _mount_submit(provider)
+    content = [text_part("Image 1 is Sammy. Shot 1 [0-3s]: he waves.")]
+    content += [image_part(f"https://img.test/{i}.png", "reference_image") for i in range(12)]
+    content += [video_part("https://vid.test/a.mp4"), audio_part("https://aud.test/a.wav")]
+    asyncio.run(
+        provider.create_video_task(
+            UnifiedVideoRequest(model="wan3.0-video", content=content, resolution="720p", duration=1)
+        )
+    )
+    body = json.loads(seen[0].content)
+    kinds = [m["type"] for m in body["input"]["media"]]
+    assert kinds.count("reference_image") == 10
+    assert kinds[-2:] == ["reference_video", "reference_audio"]
+    assert body["parameters"] == {"resolution": "720P", "duration": 2}
+
+
+def test_wan3_submit_error_surfaces_the_upstream_code(provider: DashScopeProvider) -> None:
+    _mount_submit(
+        provider,
+        httpx.Response(400, json={"code": "InvalidParameter", "message": "The two modes are mutually exclusive."}),
+    )
+    with pytest.raises(ProviderRequestError) as err:
+        asyncio.run(
+            provider.create_video_task(UnifiedVideoRequest(model="wan3.0-video-prime", content=[text_part("x")]))
+        )
+    assert err.value.details["upstream_code"] == "InvalidParameter"
+    assert "mutually exclusive" in str(err.value)

@@ -73,6 +73,18 @@ def test_doc_grounded_limits_pinned_against_official_docs():
     i2v_plus = limits_for("wanx2.1-i2v-plus", "video")
     assert i2v_plus.min_duration_seconds == 5  # i2v-plus: fixed 5s (turbo is 3-5).
     assert i2v_plus.max_duration_seconds == 5
+    # Wan 3.0: 2-30 s, 10 reference images, frames exclusive with references, no negative prompt.
+    for model in ("wan3.0-video", "wan3.0-video-prime"):
+        wan3 = limits_for(model, "video")
+        assert (wan3.min_duration_seconds, wan3.max_duration_seconds) == (2, 30)
+        assert wan3.max_input_images == 10
+        assert wan3.max_prompt_chars == 20000
+        assert wan3.exclusive_frames_and_references is True
+        assert wan3.supports_negative_prompt is False
+        assert wan3.supports_audio_output is True
+        public = wan3.to_public_dict()
+        assert public["exclusive_frames_and_references"] is True
+        assert public["supports_negative_prompt"] is False
 
 
 # --------------------------------------------------------------------------- #

@@ -83,11 +83,18 @@ Combined with the existing role checks, this is how a client asks for **lip-sync
 line in the prompt, `include_audio: true`, and the speaker's voice as a `reference_audio` part; only models
 that accept reference audio and render audio remain candidates.
 
+Two more flags tell a client how to shape a request: `exclusive_frames_and_references: true` (a `first_frame` or
+`last_frame` cannot be combined with reference images, videos or audio in one request: the adapter keeps the frames
+and drops the references, so the client chooses the mode) and `supports_negative_prompt: false` (the model has no
+negative prompt field: `negative_prompt` is dropped and exclusions belong in the prompt). Both are documented for
+Wan 3.0.
+
 ## Capabilities: multi-shot and enhancement
 
 Some video models render a whole sequence in one request: several shots separated by hard cuts, described in the
 prompt. The catalogue records how many as `max_shots`; clients (Rideo groups a scene's shots by it) keep the
-request within `max_shots` and `max_duration_seconds`.
+request within `max_shots` and `max_duration_seconds`. Wan 3.0 is one: up to 8 shots of 2–5 s in at most 30 s, each
+introduced as `Shot N [start-end s]:` after an overall description.
 
 Enhancement models take a `reference_video` and return it upscaled to the requested `dimensions`
 (`supports_upscale`) or interpolated to the requested `fps` (`supports_frame_interpolation`, up to `max_fps`).

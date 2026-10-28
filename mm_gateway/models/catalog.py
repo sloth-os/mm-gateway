@@ -27,7 +27,7 @@ _OVERRIDABLE = {
     "max_duration_seconds", "max_input_images", "notes", "max_shots", "max_fps",
     "supports_upscale", "supports_frame_interpolation", "supports_segmentation", "supports_performance",
     "supports_voice_cloning", "supports_instructions", "max_voice_samples", "max_prompt_chars",
-    "min_speed", "max_speed",
+    "min_speed", "max_speed", "exclusive_frames_and_references", "supports_negative_prompt",
 }
 _DATES = {"deprecated_on", "retired_on"}
 

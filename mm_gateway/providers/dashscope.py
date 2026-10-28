@@ -112,7 +112,14 @@ from mm_gateway.schemas.image import (
     UnifiedImageRequest,
     UnifiedImageResponse,
 )
-from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask, VideoUsage
+from mm_gateway.schemas.video import (
+    UnifiedVideoRequest,
+    UnifiedVideoTask,
+    VideoAudioPart,
+    VideoImagePart,
+    VideoUsage,
+    VideoVideoPart,
+)
 
 log = get_logger("provider.dashscope")
 
@@ -358,6 +365,94 @@ def _is_async_rejection(status_code: Any, code: Any, message: Any) -> bool:
 
 class _AsyncNotSupported(Exception):
     """Internal sentinel: the backend rejected async task submission."""
+
+
+# Wan 3.0 and later take the native video-synthesis body: typed ``input.media`` items (``first_frame``,
+# ``last_frame``, up to 10 ``reference_image``, 5 ``reference_video`` and 5 ``reference_audio``) and ``parameters``
+# (``resolution`` tier, ``ratio``, ``duration`` 2-30 s, ``audio``, ``seed``, ``prompt_extend``, ``watermark``). A
+# first or last frame cannot be combined with references, so a request that carries both keeps its frames and drops
+# the references. There is no negative prompt
+# (https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-api-reference).
+_NATIVE_MEDIA_PREFIXES = ("wan3",)
+_WAN3_RESOLUTIONS = (("480P", 480), ("720P", 720), ("1080P", 1080))
+_WAN3_RATIOS = frozenset({"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"})
+_WAN3_MAX = {"reference_image": 10, "reference_video": 5, "reference_audio": 5}
+WAN3_MIN_DURATION, WAN3_MAX_DURATION = 2, 30
+_SEED_MAX = 2147483647
+
+
+def native_media_model(model: str | None) -> bool:
+    """Models that take the native ``input.media`` body rather than the SDK's ``img_url``."""
+    return bool(model) and model.lower().startswith(_NATIVE_MEDIA_PREFIXES)
+
+
+def _wan3_resolution(request: UnifiedVideoRequest) -> str | None:
+    if request.resolution:
+        tier = request.resolution.strip().upper()
+        return tier if tier.endswith("P") else f"{tier}P"
+    if request.width is None or request.height is None:
+        return None
+    short = min(request.width, request.height)
+    return min(_WAN3_RESOLUTIONS, key=lambda t: abs(t[1] - short))[0]
+
+
+def wan3_body(request: UnifiedVideoRequest) -> dict[str, Any]:
+    """The native Wan 3.x request body of ``request``."""
+    frames: list[dict[str, str]] = []
+    references: list[dict[str, str]] = []
+    for part in request.content:
+        item = part.root
+        if isinstance(item, VideoImagePart):
+            entry = {"type": item.role, "url": item.image_url.url}
+            if item.role in ("first_frame", "last_frame"):
+                if not any(f["type"] == item.role for f in frames):
+                    frames.append(entry)
+            else:
+                references.append(entry)
+        elif isinstance(item, VideoVideoPart):
+            references.append({"type": "reference_video", "url": item.video_url.url})
+        elif isinstance(item, VideoAudioPart):
+            references.append({"type": "reference_audio", "url": item.audio_url.url})
+    if frames:
+        if references:
+            log.info(
+                "dashscope_wan3_references_dropped_for_frames",
+                model=request.model,
+                dropped=len(references),
+            )
+        media = frames
+    else:
+        counts: dict[str, int] = {}
+        media = []
+        for ref in references:
+            counts[ref["type"]] = counts.get(ref["type"], 0) + 1
+            if counts[ref["type"]] <= _WAN3_MAX[ref["type"]]:
+                media.append(ref)
+    parameters: dict[str, Any] = {}
+    if resolution := _wan3_resolution(request):
+        parameters["resolution"] = resolution
+    ratio = aspect_ratio(request)
+    if ratio in _WAN3_RATIOS:
+        parameters["ratio"] = ratio
+    if request.duration is not None:
+        parameters["duration"] = (
+            -1
+            if request.duration < 0
+            else max(WAN3_MIN_DURATION, min(WAN3_MAX_DURATION, int(round(request.duration))))
+        )
+    if request.generate_audio is not None:
+        parameters["audio"] = bool(request.generate_audio)
+    if request.seed is not None:
+        parameters["seed"] = request.seed if request.seed == -1 else request.seed % (_SEED_MAX + 1)
+    if request.prompt_extend is not None:
+        parameters["prompt_extend"] = request.prompt_extend
+    if request.watermark is not None:
+        parameters["watermark"] = request.watermark
+    parameters.update(request.extra)
+    payload: dict[str, Any] = {"prompt": request.prompt() or ""}
+    if media:
+        payload["media"] = media
+    return {"model": request.model, "input": payload, "parameters": parameters}
 
 
 class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
@@ -863,6 +958,8 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         )
 
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
+        if native_media_model(request.model):
+            return await self._create_native_video_task(request)
         kwargs: dict[str, Any] = {
             "model": request.model,
             "prompt": request.prompt() or "",
@@ -905,6 +1002,47 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
                 status_code=_map_status(status) if isinstance(status, int) else 502,
                 details={
                     "upstream_status": status,
+                    "upstream_code": code,
+                    "upstream_message": message,
+                },
+            )
+        return UnifiedVideoTask(
+            task_id=task_id, provider=self.name, model=request.model, status="pending"
+        )
+
+    async def _create_native_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
+        """Submit a Wan 3.x task with the native body (``input.media`` + ``parameters``).
+
+        The SDK's ``AioVideoSynthesis`` only knows ``img_url``: last frames, reference images, videos and audio, the
+        ``audio`` switch and the resolution tier never reached the model. The poll stays the hand-rolled
+        ``get_video_task``.
+        """
+        body = wan3_body(request)
+        base = (self._video_base or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
+        url = f"{base}/services/aigc/video-generation/video-synthesis"
+        try:
+            resp = await self._client_video.post(url, json=body, headers={"X-DashScope-Async": "enable"})
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError(f"dashscope video submit timed out: {exc}", provider="dashscope") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderRequestError(
+                f"dashscope video submit failed: {exc}", provider="dashscope"
+            ) from exc
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+        output = data.get("output") if isinstance(data, dict) else None
+        task_id = output.get("task_id") if isinstance(output, dict) else None
+        if resp.status_code >= 400 or not task_id:
+            code = data.get("code") if isinstance(data, dict) else None
+            message = data.get("message") if isinstance(data, dict) else None
+            raise ProviderRequestError(
+                f"dashscope video submit returned HTTP {resp.status_code}: code={code} message={message}",
+                provider="dashscope",
+                status_code=_map_status(resp.status_code) if resp.status_code >= 400 else 502,
+                details={
+                    "upstream_status": resp.status_code,
                     "upstream_code": code,
                     "upstream_message": message,
                 },
