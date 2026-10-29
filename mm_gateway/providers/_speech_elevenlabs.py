@@ -19,7 +19,8 @@ _FORMATS = {
 
 
 class ElevenLabsSpeechMixin(SpeechTaskMixin):
-    audio_models = ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3"]
+    audio_models = ["eleven_multilingual_v2", "eleven_flash_v2_5", "eleven_turbo_v2_5", "eleven_v3",
+                    "eleven_v4", "eleven_v4_turbo"]
     default_voice = "JBFqnCBsd6RMkjVDRZzb"
     default_speech_base = "https://api.elevenlabs.io"
 

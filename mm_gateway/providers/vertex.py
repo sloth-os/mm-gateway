@@ -44,7 +44,9 @@ the same wire shape the AI Studio adapter uses, authenticated with the ADC
 bearer token rather than an ``x-goog-api-key``. Lyria is synchronous — a
 single Interactions call returns the audio inline — so, like the AI Studio
 adapter, we wrap it as a synthetic in-memory task for the gateway's uniform
-poll surface.
+poll surface. Gemini Omni video uses the same surface as a background
+interaction: the create returns its id and the poll ``get``s it (see
+:mod:`mm_gateway.providers._omni`).
 """
 
 from __future__ import annotations
@@ -75,8 +77,10 @@ from mm_gateway.providers._lyria import (
     lyria_body,
     lyria_media_type,
 )
+from mm_gateway.providers._omni import TASK_PREFIX, omni_body, omni_model, omni_task
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
+from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 log = get_logger("provider.vertex")
 
@@ -109,16 +113,25 @@ class VertexProvider(
     name = "vertex"
     # Vertex serves the same model ids as AI Studio (Imagen/Veo/Lyria).
     image_models: ClassVar[list[str]] = [
+        "gemini-nano-banana-2.1",
+        "gemini-3-pro-image",
+        "gemini-3.1-flash-image",
+        "gemini-3.1-flash-lite-image",
+        "gemini-2.5-flash-image",
         "imagen-4.0-generate-001",
         "imagen-3.0-generate-001",
-        "gemini-2.5-flash-image",
     ]
     video_models: ClassVar[list[str]] = [
-        "veo-2.0-generate-001",
-        "veo-3.0-generate-001",
+        "veo-3.1-generate-001",
+        "veo-3.1-fast-generate-001",
+        "veo-3.1-lite-generate-001",
+        # Served by the Interactions API (see ``_omni``), not generate_videos.
+        "gemini-omni-1.1-flash-preview",
         "veo-3.1-generate-preview",
+        "veo-3.0-generate-001",
+        "veo-2.0-generate-001",
     ]
-    music_models: ClassVar[list[str]] = ["lyria-3"]
+    music_models: ClassVar[list[str]] = ["lyria-3-pro-preview", "lyria-3-clip-preview"]
 
     def __init__(self, backend):
         super().__init__(backend)
@@ -138,6 +151,7 @@ class VertexProvider(
         # Resolved effective outbound proxy (backend override, else the global
         # the registry folded in); shared by every genai SDK client.
         proxy_url = backend.extra.get("outbound_proxy")
+        self._proxy_url = proxy_url
         self._client = self._build_vertex_client(credentials, project, location, image_base, _IMAGE_TIMEOUT_MS, proxy_url)
         self._client_video = self._build_vertex_client(credentials, project, location, video_base, _VIDEO_TIMEOUT_MS, proxy_url)
         # Lyria (Interactions) gets its own client so an operator can pin a
@@ -203,6 +217,29 @@ class VertexProvider(
             kwargs["http_options"] = types.HttpOptions(timeout=timeout_ms, **http_kwargs)
         return genai.Client(**kwargs)
 
+    # -- Gemini Omni video (Interactions) ---------------------------------- #
+
+    async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
+        if not omni_model(request.model):
+            return await super().create_video_task(request)
+        try:
+            interaction = await self._client_video.aio.interactions.create(**omni_body(request))
+        except Exception as exc:
+            raise ProviderRequestError(f"vertex interaction create failed: {exc}", provider="vertex") from exc
+        if not getattr(interaction, "id", None):
+            raise ProviderRequestError("vertex interaction create returned no id", provider="vertex")
+        return omni_task(f"{TASK_PREFIX}{interaction.id}", self.name, request.model, interaction)
+
+    async def get_video_task(self, task_id: str) -> UnifiedVideoTask:
+        if not task_id.startswith(TASK_PREFIX):
+            return await super().get_video_task(task_id)
+        try:
+            interaction = await self._client_video.aio.interactions.get(
+                task_id.removeprefix(TASK_PREFIX), stream=False)
+        except Exception as exc:
+            raise ProviderRequestError(f"vertex interaction poll failed: {exc}", provider="vertex") from exc
+        return omni_task(task_id, self.name, str(getattr(interaction, "model", None) or ""), interaction)
+
     # -- Lyria music ------------------------------------------------------- #
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
@@ -214,7 +251,7 @@ class VertexProvider(
             )
         task_id = f"lyria-{uuid.uuid4().hex}"
         _MUSIC_TASKS[task_id] = {
-            "model": request.model or "lyria-3",
+            "model": request.model or "lyria-3-pro-preview",
             "request": request,
             "status": "pending",
             "created_at": int(time.time()),

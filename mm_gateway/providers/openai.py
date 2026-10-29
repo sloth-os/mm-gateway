@@ -35,9 +35,11 @@ def _logged_httpx(proxy_url: str | None = None) -> httpx.AsyncClient:
 class OpenAIProvider(OpenAISpeechMixin, SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "openai"
     image_models: ClassVar[list[str]] = [
+        "gpt-image-2.5-sunburst",
+        "gpt-image-2.5-flare",
+        "gpt-image-2",
         "gpt-image-1",
         "gpt-image-1-mini",
-        "gpt-image-2",
         "dall-e-2",
         "dall-e-3",
     ]

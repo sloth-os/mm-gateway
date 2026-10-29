@@ -198,7 +198,7 @@ def test_legacy_env_plural_keys_build_multi_account_backend(monkeypatch):
 class _RecordingImage(ImageProvider):
     """An image provider that records which credential it was built with."""
 
-    image_models = ["gpt-image-1"]
+    image_models = ["gpt-image-2"]
     name = "openai"
 
     def __init__(self, backend: Any):
@@ -214,7 +214,7 @@ class _RecordingImage(ImageProvider):
 
     async def get_image_task(self, task_id):
         return UnifiedImageTask(task_id=task_id, provider=self.name,
-                                model="gpt-image-1", status="succeeded")
+                                model="gpt-image-2", status="succeeded")
 
 
 def _build_registry_with_accounts(monkeypatch):
@@ -254,7 +254,7 @@ def test_enumerate_auto_candidates_lists_one_entry_per_account(monkeypatch):
     accounts = {aid for _p, aid, _m, _b in cands}
     assert accounts == {"prod", "staging"}
     # Both advertise the same fitting model.
-    assert {m for _p, _a, m, _b in cands} == {"gpt-image-1"}
+    assert {m for _p, _a, m, _b in cands} == {"gpt-image-2"}
 
 
 def test_enumerate_ranks_healthy_candidate_above_rate_limited(monkeypatch):
@@ -262,7 +262,7 @@ def test_enumerate_ranks_healthy_candidate_above_rate_limited(monkeypatch):
     req = UnifiedImageRequest(model="auto", content=[text_part("hi")])
     key = KeyConfig(id="t", key="")
     # Drive the prod account into a rate-limit cooldown.
-    SELECTION_STORE.observe(backend="oai", account="prod", model="gpt-image-1",
+    SELECTION_STORE.observe(backend="oai", account="prod", model="gpt-image-2",
                             modality="image", outcome="failure", rate_limited=True)
     cands = reg.enumerate_auto_candidates(req, key, modality="image")
     # The healthy staging account must rank first; prod sinks to the bottom.
@@ -282,7 +282,7 @@ class _ScriptedImage(ImageProvider):
     Records the call order so a test can assert which accounts were tried.
     """
 
-    image_models = ["gpt-image-1"]
+    image_models = ["gpt-image-2"]
     name = "openai"
 
     def __init__(self, backend: Any, behaviours):
@@ -304,7 +304,7 @@ class _ScriptedImage(ImageProvider):
         raise RuntimeError("not used")
 
 
-def _candidate(prov, account_id, model="gpt-image-1", backend="oai"):
+def _candidate(prov, account_id, model="gpt-image-2", backend="oai"):
     return (prov, account_id, model, backend)
 
 
@@ -315,7 +315,7 @@ def test_retry_succeeds_on_second_candidate_after_retryable_failure():
     ok = _ScriptedImage(BackendConfig(name="oai", type="openai", api_key="k",
                                        extra={"__account_id": "b"}),
                          [UnifiedImageTask(task_id="ok-1", provider="oai",
-                                           model="gpt-image-1", status="succeeded")])
+                                           model="gpt-image-2", status="succeeded")])
     cands = [_candidate(failing, "a"), _candidate(ok, "b")]
 
     async def attempt(prov, account_id, model, backend):
@@ -337,7 +337,7 @@ def test_retry_stops_immediately_on_non_retryable_client_error():
     ok = _ScriptedImage(BackendConfig(name="oai", type="openai", api_key="k",
                                        extra={"__account_id": "b"}),
                          [UnifiedImageTask(task_id="ok", provider="oai",
-                                           model="gpt-image-1", status="succeeded")])
+                                           model="gpt-image-2", status="succeeded")])
     cands = [_candidate(terminal, "a"), _candidate(ok, "b")]
 
     async def attempt(prov, account_id, model, backend):
@@ -376,7 +376,7 @@ def test_retry_records_outcomes_in_selection_store():
     ok = _ScriptedImage(BackendConfig(name="oai", type="openai", api_key="k",
                                        extra={"__account_id": "b"}),
                          [UnifiedImageTask(task_id="ok", provider="oai",
-                                           model="gpt-image-1", status="succeeded")])
+                                           model="gpt-image-2", status="succeeded")])
     cands = [_candidate(failing, "a"), _candidate(ok, "b")]
 
     async def attempt(prov, account_id, model, backend):
@@ -385,9 +385,9 @@ def test_retry_records_outcomes_in_selection_store():
     asyncio.run(retry_across_backends(candidates=cands, attempt=attempt,
                                       modality="image", key=None))
     # The failed (rate-limited) account is now in cooldown; the ok one is healthy.
-    assert SELECTION_STORE.is_rate_limited(backend="oai", account="a", model="gpt-image-1",
+    assert SELECTION_STORE.is_rate_limited(backend="oai", account="a", model="gpt-image-2",
                                            modality="image") is True
-    assert SELECTION_STORE.score(backend="oai", account="b", model="gpt-image-1",
+    assert SELECTION_STORE.score(backend="oai", account="b", model="gpt-image-2",
                                   modality="image") > 0.5
 
 
@@ -414,7 +414,7 @@ class _PerAccountScripted(ImageProvider):
     across all instances so a test can assert retry order across accounts.
     """
 
-    image_models = ["gpt-image-1"]
+    image_models = ["gpt-image-2"]
     name = "openai"
     behaviours: dict[str, list[Any]] = {}
     tried_order: list[str] = []
@@ -445,7 +445,7 @@ class _FlakyThenOKImage(ImageProvider):
     only across accounts of one backend.
     """
 
-    image_models = ["gpt-image-1"]
+    image_models = ["gpt-image-2"]
     name = "openai"
 
     def __init__(self, backend: Any, behaviour):
@@ -500,7 +500,7 @@ def test_image_service_auto_retries_next_backend_on_retryable_failure(monkeypatc
     )
     ok = _FlakyThenOKImage(
         BackendConfig(name="bbb", type="openai", api_key="k", extra={"__account_id": "default"}),
-        UnifiedImageTask(task_id="ok-1", provider="bbb", model="gpt-image-1", status="succeeded"),
+        UnifiedImageTask(task_id="ok-1", provider="bbb", model="gpt-image-2", status="succeeded"),
     )
     reg = _registry_two_backends(fail, ok, monkeypatch)
     svc = ImageService(reg, max_sync_wait=1.0, poll_interval=0.01, sync_default=False)
@@ -520,7 +520,7 @@ def test_image_service_auto_surfaces_terminal_error_without_trying_others(monkey
     )
     ok = _FlakyThenOKImage(
         BackendConfig(name="bbb", type="openai", api_key="k", extra={"__account_id": "default"}),
-        UnifiedImageTask(task_id="ok-1", provider="bbb", model="gpt-image-1", status="succeeded"),
+        UnifiedImageTask(task_id="ok-1", provider="bbb", model="gpt-image-2", status="succeeded"),
     )
     reg = _registry_two_backends(terminal, ok, monkeypatch)
     svc = ImageService(reg, max_sync_wait=1.0, poll_interval=0.01, sync_default=False)
@@ -549,7 +549,7 @@ def test_image_service_auto_retries_across_accounts_of_one_backend(monkeypatch):
     _PerAccountScripted.behaviours = {
         "prod": [ProviderRequestError("429", status_code=429, provider="oai")],
         "staging": [UnifiedImageTask(task_id="ok-stg", provider="oai",
-                                     model="gpt-image-1", status="succeeded")],
+                                     model="gpt-image-2", status="succeeded")],
     }
     reg = Registry(settings)
     svc = ImageService(reg, max_sync_wait=1.0, poll_interval=0.01, sync_default=False)

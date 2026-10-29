@@ -1161,3 +1161,94 @@ def test_wan3_submit_error_surfaces_the_upstream_code(provider: DashScopeProvide
         )
     assert err.value.details["upstream_code"] == "InvalidParameter"
     assert "mutually exclusive" in str(err.value)
+
+
+# -- Model-specific request shapes (2026-10 model refresh) ------------------ #
+
+
+@pytest.mark.parametrize(("model", "generation"), [
+    ("wan2.7-image-pro", True),
+    ("wan2.7-image", True),
+    ("wan2.6-image", True),
+    ("wan2.6-t2i", True),  # the new T2I protocol: messages on the generation surface
+    ("wan2.5-t2i-preview", False),
+    ("wan2.2-t2i-flash", False),
+    ("wanx2.1-t2i-turbo", False),
+    ("qwen-image-3.0-pro", False),
+    ("qwen-image-2.0-pro", False),
+])
+def test_image_surface_per_model(model: str, generation: bool) -> None:
+    assert DashScopeProvider._is_generation_model(model) is generation
+
+
+def test_i2v_models_send_a_resolution_tier_not_a_size(provider: DashScopeProvider) -> None:
+    req = UnifiedVideoRequest(
+        model="wan2.6-i2v-flash", content=[text_part("waves"), image_part("https://x.test/f.png")],
+        width=1920, height=1080, ratio="16:9", duration=10,
+    )
+    asyncio.run(provider.create_video_task(req))
+    kw = provider._fake_video.call_kwargs  # type: ignore[attr-defined]
+    assert kw["resolution"] == "1080P" and kw["img_url"] == "https://x.test/f.png"
+    # The output follows the input image, so neither a size nor a ratio is sent.
+    assert "size" not in kw and "ratio" not in kw
+    assert kw["duration"] == 10
+
+
+def test_wan27_t2v_sends_resolution_and_ratio(provider: DashScopeProvider) -> None:
+    req = UnifiedVideoRequest(model="wan2.7-t2v", content=[text_part("a city")],
+                              width=1280, height=720, duration=12)
+    asyncio.run(provider.create_video_task(req))
+    kw = provider._fake_video.call_kwargs  # type: ignore[attr-defined]
+    assert kw["resolution"] == "720P" and kw["ratio"] == "16:9" and "size" not in kw
+
+
+def test_legacy_t2v_keeps_the_exact_size(provider: DashScopeProvider) -> None:
+    req = UnifiedVideoRequest(model="wan2.6-t2v", content=[text_part("a city")],
+                              width=1920, height=1080, duration=8)
+    asyncio.run(provider.create_video_task(req))
+    kw = provider._fake_video.call_kwargs  # type: ignore[attr-defined]
+    assert kw["size"] == "1920*1080" and "resolution" not in kw
+
+
+def test_happyhorse_modes_send_their_native_media(provider: DashScopeProvider) -> None:
+    seen = _mount_submit(provider)
+    images = [image_part("https://x.test/a.png"), image_part("https://x.test/b.png", "reference_image")]
+    for model, content in (
+        ("happyhorse-1.1-t2v", [text_part("a horse runs")]),
+        ("happyhorse-1.1-i2v", [text_part("it runs"), image_part("https://x.test/a.png")]),
+        ("happyhorse-1.1-r2v", [text_part("[Image 1] meets [Image 2]"), *images]),
+    ):
+        asyncio.run(provider.create_video_task(UnifiedVideoRequest(
+            model=model, content=content, width=1280, height=720, duration=20, generate_audio=True,
+            prompt_extend=True, watermark=False)))
+    t2v, i2v, r2v = (json.loads(r.content) for r in seen)
+    assert "media" not in t2v["input"]
+    assert t2v["parameters"] == {"resolution": "720P", "duration": 15, "watermark": False, "ratio": "16:9"}
+    # Image-to-video keeps the frame's ratio: no ratio parameter.
+    assert i2v["input"]["media"] == [{"type": "first_frame", "url": "https://x.test/a.png"}]
+    assert "ratio" not in i2v["parameters"]
+    # Every reference-to-video image is a reference; HappyHorse has no audio or prompt_extend switch.
+    assert r2v["input"]["media"] == [{"type": "reference_image", "url": "https://x.test/a.png"},
+                                     {"type": "reference_image", "url": "https://x.test/b.png"}]
+    assert "audio" not in r2v["parameters"] and "prompt_extend" not in r2v["parameters"]
+
+
+def test_wan27_i2v_sends_frames_and_driving_audio(provider: DashScopeProvider) -> None:
+    seen = _mount_submit(provider)
+    asyncio.run(provider.create_video_task(UnifiedVideoRequest(
+        model="wan2.7-i2v",
+        content=[text_part("she sings"), image_part("https://x.test/last.png", "last_frame"),
+                 image_part("https://x.test/first.png", "first_frame"),
+                 image_part("https://x.test/ref.png", "reference_image"),
+                 audio_part("https://x.test/song.mp3"), video_part("https://x.test/clip.mp4")],
+        width=640, height=480, duration=1, negative_prompt="blur", prompt_extend=False, seed=7,
+    )))
+    body = json.loads(seen[0].content)
+    assert body["input"]["media"] == [
+        {"type": "first_frame", "url": "https://x.test/first.png"},
+        {"type": "last_frame", "url": "https://x.test/last.png"},
+        {"type": "driving_audio", "url": "https://x.test/song.mp3"},
+    ]
+    assert body["input"]["negative_prompt"] == "blur"
+    # 480 snaps to the nearest wan2.7-i2v tier and the duration to its 2 s floor.
+    assert body["parameters"] == {"resolution": "720P", "duration": 2, "seed": 7, "prompt_extend": False}

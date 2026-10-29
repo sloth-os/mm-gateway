@@ -195,6 +195,8 @@ _LIMITS: dict[str, ModelLimits] = {}
 # --------------------------------------------------------------------------- #
 # OpenAI
 # --------------------------------------------------------------------------- #
+# Lifecycle dates below are OpenAI's deprecations page (announcement -> shutdown).
+_OPENAI_DEPRECATIONS = "https://developers.openai.com/api/docs/deprecations"
 # gpt-image-1 / -mini: multimodal (text+image edit), sizes incl. auto, n up to 10.
 _openai_img = ModelLimits(
     modality="image", input_modalities=(_TEXT, _IMAGE),
@@ -204,34 +206,59 @@ _openai_img = ModelLimits(
     source_urls=("https://platform.openai.com/docs/guides/image-generation",
                  "https://platform.openai.com/docs/api-reference/images/create"),
 )
-_LIMITS["gpt-image-1"] = _openai_img
+_LIMITS["gpt-image-1"] = replace(_openai_img,
+    deprecated_on="2026-04-22", retired_on="2026-10-23", replacement="gpt-image-2.5-sunburst",
+    notes="Output always base64; supports edits endpoint with masks. Shut down on 2026-10-23.",
+    source_urls=(*_openai_img.source_urls, _OPENAI_DEPRECATIONS))
 _LIMITS["gpt-image-1-mini"] = replace(_openai_img,
-    notes="Smaller/faster variant of gpt-image-1 with the same API surface.")
+    deprecated_on="2026-06-02", retired_on="2026-12-01", replacement="gpt-image-2.5-flare",
+    notes="Smaller/faster variant of gpt-image-1 with the same API surface; shuts down on 2026-12-01.",
+    source_urls=(*_openai_img.source_urls, _OPENAI_DEPRECATIONS))
 _LIMITS["gpt-image-2"] = ModelLimits(
     modality="image", input_modalities=(_TEXT, _IMAGE),
     supports_image_to_image=True, max_prompt_chars=32000, max_output_count=10,
     supported_sizes=("1024x1024", "1536x1024", "1024x1536", "2048x2048",
                      "2048x1152", "3840x2160", "2160x3840", "auto"),
     max_output_longest_side=3840,
-    notes="Newest model; arbitrary WxH (both divisible by 16, ratio 1:3-3:1).",
-    source_urls=("https://platform.openai.com/docs/guides/image-generation",
-                 "https://platform.openai.com/docs/api-reference/images/create"),
+    notes="Snapshot gpt-image-2-2026-04-21; arbitrary WxH (both divisible by 16, ratio 1:3-3:1), "
+          "above 2560x1440 experimental; quality up to high.",
+    source_urls=("https://developers.openai.com/api/docs/models/gpt-image-2",
+                 "https://developers.openai.com/api/docs/guides/image-generation"),
 )
+# GPT Image 2.5 (2026-09-08 snapshots): Sunburst is the quality model, Flare the fastest.
+_gpt_image_25 = ModelLimits(
+    modality="image", input_modalities=(_TEXT, _IMAGE),
+    supports_image_to_image=True, max_prompt_chars=32000, max_output_count=10,
+    supported_sizes=("1024x1024", "1536x1024", "1024x1536", "auto"),
+    max_output_longest_side=3840,
+    notes="Snapshot -2026-09-08. Arbitrary WxH: sides multiples of 16, ratio 1:3-3:1, edge <= 3840, total "
+          "655,360-8,294,400 px (above 2560x1440 experimental). Quality low/medium/high/xhigh/max/auto; "
+          "transparent background with png/webp; edits take a mask (< 50 MB).",
+    source_urls=("https://developers.openai.com/api/docs/guides/image-generation",
+                 "https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst"),
+)
+_LIMITS["gpt-image-2.5-sunburst"] = _gpt_image_25
+_LIMITS["gpt-image-2.5-flare"] = replace(_gpt_image_25,
+    notes="OpenAI's fastest image model; same sizes and quality levels as gpt-image-2.5-sunburst. "
+          + _gpt_image_25.notes,
+    source_urls=("https://developers.openai.com/api/docs/guides/image-generation",
+                 "https://developers.openai.com/api/docs/models/gpt-image-2.5-flare"))
+_DALL_E_RETIREMENT = dict(deprecated_on="2025-11-14", retired_on="2026-05-12", replacement="gpt-image-2")
 _LIMITS["dall-e-2"] = ModelLimits(
     modality="image", input_modalities=(_TEXT, _IMAGE),
     supports_image_to_image=True, max_prompt_chars=1000, max_output_count=10,
     supported_sizes=("256x256", "512x512", "1024x1024"),
-    notes="Supports edits + variations with image/mask input; deprecated.",
-    source_urls=("https://platform.openai.com/docs/api-reference/images/create",
-                 "https://platform.openai.com/docs/models/dall-e-2"),
+    **_DALL_E_RETIREMENT,
+    notes="Supports edits + variations with image/mask input; shut down on 2026-05-12.",
+    source_urls=("https://platform.openai.com/docs/api-reference/images/create", _OPENAI_DEPRECATIONS),
 )
 _LIMITS["dall-e-3"] = ModelLimits(
     modality="image", input_modalities=(_TEXT,),
     supports_image_to_image=False, max_prompt_chars=4000, max_output_count=1,
     supported_sizes=("1024x1024", "1792x1024", "1024x1792"),
-    notes="Text-only (no image input/edit); returns revised_prompt; deprecated.",
-    source_urls=("https://platform.openai.com/docs/api-reference/images/create",
-                 "https://platform.openai.com/docs/models/dall-e-3"),
+    **_DALL_E_RETIREMENT,
+    notes="Text-only (no image input/edit); returns revised_prompt; shut down on 2026-05-12.",
+    source_urls=("https://platform.openai.com/docs/api-reference/images/create", _OPENAI_DEPRECATIONS),
 )
 # Sora 2: durations 4/8/12/16/20s; i2v via a single input_reference image.
 # OpenAI announced the Sora 2 API shutdown on 2026-03-24; the Videos API and
@@ -239,10 +266,7 @@ _LIMITS["dall-e-3"] = ModelLimits(
 _SORA_RETIREMENT = dict(
     deprecated_on="2026-03-24", retired_on="2026-09-24",
 )
-_SORA_SHUTDOWN_SOURCES = (
-    "https://heydev.us/blog/openai-model-shutdowns-september-2026-audit-your-app",
-    "https://note.com/ai__worker/n/nac92877ddbf6",
-)
+_SORA_SHUTDOWN_SOURCES = (_OPENAI_DEPRECATIONS,)
 _LIMITS["sora-2"] = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE),
     supports_first_frame=True, supports_last_frame=False,
@@ -272,6 +296,10 @@ _LIMITS["sora-2-pro"] = ModelLimits(
 # --------------------------------------------------------------------------- #
 # Google (Imagen / Gemini-Flash-Image / Veo / Lyria)
 # --------------------------------------------------------------------------- #
+# The Gemini API and Vertex AI (Gemini Enterprise Agent Platform) serve the same ids; an id's lifecycle is the
+# Gemini API's deprecations table unless only Vertex lists it (its model-versions table).
+_GEMINI_DEPRECATIONS = "https://ai.google.dev/gemini-api/docs/deprecations"
+_VERTEX_LIFECYCLE = "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions"
 _imagen = ModelLimits(
     modality="image", input_modalities=(_TEXT,),
     supports_image_to_image=False, max_prompt_tokens=480, max_output_count=4,
@@ -280,58 +308,153 @@ _imagen = ModelLimits(
     source_urls=("https://ai.google.dev/gemini-api/docs/imagen",
                  "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/image/generate-images"),
 )
-_LIMITS["imagen-4.0-generate-001"] = _imagen
+_LIMITS["imagen-4.0-generate-001"] = replace(_imagen,
+    deprecated_on="2026-06-15", retired_on="2026-08-17", replacement="gemini-nano-banana-2.1",
+    notes="Text-only; sampleCount 1-4. Shut down on the Gemini API on 2026-08-17 (Vertex: 2026-06-30).",
+    source_urls=(_GEMINI_DEPRECATIONS, _VERTEX_LIFECYCLE))
 _LIMITS["imagen-3.0-generate-001"] = replace(_imagen,
-    notes="Text-only; aspect ratios 1:1/3:4/4:3/9:16/16:9; 1K only.")
+    retired_on="2026-06-30", replacement="gemini-2.5-flash-image",
+    notes="Text-only; aspect ratios 1:1/3:4/4:3/9:16/16:9; 1K only. Vertex retired it on 2026-06-30.",
+    source_urls=(_VERTEX_LIFECYCLE,))
 _LIMITS["gemini-2.5-flash-image"] = ModelLimits(
     modality="image", input_modalities=(_TEXT, _IMAGE),
     supports_image_to_image=True, max_prompt_tokens=65536,
     max_input_images=3, max_output_count=10, max_output_longest_side=1536,
     aspect_ratios=("1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"),
-    notes="a.k.a. nano-banana; up to 3 input images, up to 10 output images.",
+    retired_on="2027-03-15", replacement="gemini-3.1-flash-lite-image",
+    notes="a.k.a. nano-banana; up to 3 input images, up to 10 output images. Shuts down on 2027-03-15.",
     source_urls=("https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-image",
+                 "https://ai.google.dev/gemini-api/docs/image-generation", _GEMINI_DEPRECATIONS),
+)
+# Gemini 3 image models ("Nano Banana"): up to 14 reference images per request; 131,072 input tokens.
+_GEMINI_IMAGE_RATIOS = ("1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9")
+_GEMINI_IMAGE_EXTENDED_RATIOS = (*_GEMINI_IMAGE_RATIOS, "1:4", "4:1", "1:8", "8:1")
+_gemini3_image = ModelLimits(
+    modality="image", input_modalities=(_TEXT, _IMAGE),
+    supports_image_to_image=True, max_prompt_tokens=131072, max_input_images=14,
+    aspect_ratios=_GEMINI_IMAGE_EXTENDED_RATIOS, supported_sizes=("1K", "2K", "4K"),
+    notes="Nano Banana 2.1: up to 14 reference images (10 objects, 4 characters); 1K (default)/2K/4K, no 512px; "
+          "1:4/4:1/1:8/8:1 ratios.",
+    source_urls=("https://ai.google.dev/gemini-api/docs/models/gemini-nano-banana-2.1",
                  "https://ai.google.dev/gemini-api/docs/image-generation"),
 )
+_LIMITS["gemini-nano-banana-2.1"] = _gemini3_image
+_LIMITS["gemini-3.1-flash-image"] = replace(_gemini3_image,
+    supported_sizes=("0.5K", "1K", "2K", "4K"), deprecated_on="2026-10-06", replacement="gemini-nano-banana-2.1",
+    notes="Nano Banana 2: up to 14 reference images (10 objects, 4 characters); 0.5K/1K (default)/2K/4K. "
+          "Deprecated on 2026-10-06 in favour of gemini-nano-banana-2.1 (no shutdown date yet).",
+    source_urls=("https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-image",
+                 "https://ai.google.dev/gemini-api/docs/changelog", _GEMINI_DEPRECATIONS))
+_LIMITS["gemini-3.1-flash-lite-image"] = replace(_gemini3_image,
+    aspect_ratios=_GEMINI_IMAGE_RATIOS, supported_sizes=("1K",),
+    notes="Nano Banana 2 Lite: low latency and cost; up to 14 reference images, 1K only; not optimized for many "
+          "references or multi-turn editing.",
+    source_urls=("https://ai.google.dev/gemini-api/docs/image-generation", _GEMINI_DEPRECATIONS))
+_LIMITS["gemini-3-pro-image"] = replace(_gemini3_image,
+    aspect_ratios=_GEMINI_IMAGE_RATIOS,
+    notes="Nano Banana Pro: up to 14 reference images (6 objects, 5 characters, 3 styles); 1K (default)/2K/4K.",
+    source_urls=("https://ai.google.dev/gemini-api/docs/image-generation", _GEMINI_DEPRECATIONS))
+# Veo 2.0 / 3.0: the Gemini API announced the shutdown on 2026-06-15; both surfaces stopped serving them on
+# 2026-06-30 (Vertex's upgrade: veo-3.1-generate-001).
+_VEO_RETIREMENT = dict(deprecated_on="2026-06-15", retired_on="2026-06-30", replacement="veo-3.1-generate-001")
 _LIMITS["veo-2.0-generate-001"] = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE),
     supports_first_frame=True, supports_last_frame=True,
     supports_reference_video=False, max_input_images=1, max_output_count=2,
     min_duration_seconds=5, max_duration_seconds=8,
-    aspect_ratios=("16:9", "9:16"), supports_audio_output=False,
-    notes="Silent (no audio); durations 5/6/8s; 720p only.",
-    source_urls=("https://ai.google.dev/gemini-api/docs/models/veo-2.0-generate-001",
-                 "https://ai.google.dev/gemini-api/docs/veo"),
+    aspect_ratios=("16:9", "9:16"), supports_audio_output=False, **_VEO_RETIREMENT,
+    notes="Silent (no audio); durations 5/6/8s; 720p only. Shut down on 2026-06-30.",
+    source_urls=("https://ai.google.dev/gemini-api/docs/changelog", _GEMINI_DEPRECATIONS, _VERTEX_LIFECYCLE),
 )
 _LIMITS["veo-3.0-generate-001"] = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE),
     supports_first_frame=True, supports_last_frame=True,
     supports_reference_video=False, max_input_images=1, max_output_count=1,
     max_prompt_tokens=1024, min_duration_seconds=4, max_duration_seconds=8,
-    aspect_ratios=("16:9", "9:16"), supports_audio_output=True,
-    notes="Always generates audio; durations 4/6/8s; 720p/1080p; 1 video per request.",
-    source_urls=("https://ai.google.dev/gemini-api/docs/veo",
-                 "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-0-generate"),
+    aspect_ratios=("16:9", "9:16"), supports_audio_output=True, **_VEO_RETIREMENT,
+    notes="Always generates audio; durations 4/6/8s; 720p/1080p; 1 video per request. Shut down on 2026-06-30.",
+    source_urls=("https://ai.google.dev/gemini-api/docs/changelog", _GEMINI_DEPRECATIONS, _VERTEX_LIFECYCLE),
 )
-_LIMITS["veo-3.1-generate-preview"] = ModelLimits(
+# The Veo 3.1 previews left the Gemini API on 2026-10-22 (replacement: gemini-omni-1.1-flash).
+_veo31_preview = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE, _VIDEO),
     supports_first_frame=True, supports_last_frame=True,
     supports_reference_video=True, max_input_images=3, max_output_count=1,
     max_prompt_tokens=1024, min_duration_seconds=4, max_duration_seconds=8,
     aspect_ratios=("16:9", "9:16"), supports_audio_output=True,
-    notes="Audio on; supports video extension + up to 3 reference images; 1 video per request.",
-    source_urls=("https://ai.google.dev/gemini-api/docs/veo",
-                 "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate"),
+    retired_on="2026-10-22", replacement="gemini-omni-1.1-flash",
+    notes="Audio on; supports video extension + up to 3 reference images; 1 video per request. "
+          "Shut down on 2026-10-22.",
+    source_urls=("https://ai.google.dev/gemini-api/docs/video", _GEMINI_DEPRECATIONS),
 )
-_LIMITS["lyria-3"] = ModelLimits(
+_LIMITS["veo-3.1-generate-preview"] = _veo31_preview
+_LIMITS["veo-3.1-fast-generate-preview"] = replace(_veo31_preview,
+    notes="Faster Veo 3.1 preview. Shut down on 2026-10-22.")
+_LIMITS["veo-3.1-lite-generate-preview"] = replace(_veo31_preview,
+    input_modalities=(_TEXT, _IMAGE), supports_reference_video=False, max_input_images=1,
+    notes="Lowest-cost Veo 3.1 preview (720p/1080p). Shut down on 2026-10-22.")
+# Veo 3.1 GA (Vertex AI only): 4/6/8 s, 24 fps, up to 4 videos per prompt; retirement "2026-11-17 or later".
+_veo31_ga = ModelLimits(
+    modality="video", input_modalities=(_TEXT, _IMAGE),
+    supports_first_frame=True, supports_last_frame=True, supports_reference_image=True,
+    supports_reference_video=False, max_input_images=3, max_output_count=4,
+    min_duration_seconds=4, max_duration_seconds=8, max_fps=24,
+    aspect_ratios=("16:9", "9:16"), supports_audio_output=True,
+    notes="Vertex GA (us-central1): 4/6/8 s at 24 fps; 720p/1080p/4K; up to 4 videos per prompt; input images "
+          "<= 20 MB; reference images only with 8 s. Retirement 2026-11-17 or later.",
+    source_urls=("https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate",
+                 _VERTEX_LIFECYCLE),
+)
+_LIMITS["veo-3.1-generate-001"] = _veo31_ga
+_LIMITS["veo-3.1-fast-generate-001"] = replace(_veo31_ga,
+    notes="Vertex GA fast tier: 4/6/8 s at 24 fps; 720p/1080p; up to 4 videos per prompt; reference images "
+          "only with 8 s. Retirement 2026-11-17 or later.")
+_LIMITS["veo-3.1-lite-generate-001"] = replace(_veo31_ga,
+    supports_last_frame=None, supports_reference_image=False, max_input_images=1,
+    notes="Vertex preview (2026-04-02): 4/6/8 s at 24 fps; 720p/1080p; no reference images.")
+# Gemini Omni Flash: video through the Interactions API (POST /v1beta/interactions), not generate_videos.
+_omni_video = ModelLimits(
+    modality="video", input_modalities=(_TEXT, _IMAGE, _VIDEO),
+    supports_first_frame=True, supports_last_frame=True, supports_reference_image=True,
+    supports_reference_video=True, supports_reference_audio=False, supports_audio_output=True,
+    supports_negative_prompt=False, max_input_images=10, max_output_count=1,
+    min_duration_seconds=3, max_duration_seconds=10, max_fps=24,
+    aspect_ratios=("16:9", "9:16"),
+    notes="Interactions API; 3-10 s at 24 fps with sound described in the prompt; 360p/720p (default)/1080p/4k; "
+          "first+last frame (two images), reference images, up to 3 reference videos of <= 3 s; videos to edit "
+          "or extend <= 10 s. No audio input, negative prompt or system instructions.",
+    source_urls=("https://ai.google.dev/gemini-api/docs/omni",
+                 "https://ai.google.dev/gemini-api/docs/models/gemini-omni-flash"),
+)
+_LIMITS["gemini-omni-1.1-flash"] = _omni_video
+_LIMITS["gemini-omni-1.1-flash-preview"] = replace(_omni_video,
+    max_prompt_tokens=131072,
+    notes="Vertex preview (global, 2026-08-27): 131,072 input tokens, 10 images and 3 videos per prompt. "
+          + _omni_video.notes,
+    source_urls=("https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/omni-1-1-flash",
+                 "https://ai.google.dev/gemini-api/docs/omni"))
+# Lyria (Interactions API): text plus images in, MP3 (or WAV) and the lyrics out. Single turn.
+_lyria = ModelLimits(
     modality="music", input_modalities=(_TEXT, _IMAGE),
-    supports_image_to_image=None, max_prompt_tokens=131072, max_input_images=10,
-    max_output_count=1, min_duration_seconds=30, max_duration_seconds=180,
-    supports_lyrics=True, supports_reference_audio=False,
-    supports_continuation_audio=False,
-    notes="Single-turn (no reference/continuation audio); structured lyrics supported.",
+    max_prompt_tokens=131072, max_input_images=10, max_output_count=1,
+    supports_lyrics=True, supports_reference_audio=False, supports_continuation_audio=False,
+    supported_sample_rates=(44100,),
+    notes="Full-length songs whose length follows the prompt; up to 10 images; MP3 by default or WAV, 44.1 kHz "
+          "stereo; lyrics in the prompt. Single-turn (no reference/continuation audio).",
     source_urls=("https://ai.google.dev/gemini-api/docs/music-generation",
-                 "https://ai.google.dev/gemini-api/docs/models/lyria-3-pro-preview"),
+                 "https://ai.google.dev/gemini-api/docs/models/lyria-3.5"),
 )
+_LIMITS["lyria-3.5"] = _lyria
+_LIMITS["lyria-3-pro-preview"] = replace(_lyria,
+    max_duration_seconds=184, supported_sample_rates=(), replacement="lyria-3.5",
+    notes="Previous generation (preview, 2026-03-25): full songs up to 184 s; MP3. Single-turn.",
+    source_urls=("https://ai.google.dev/gemini-api/docs/models/lyria-3-pro-preview",
+                 "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/lyria/lyria-3"))
+_LIMITS["lyria-3-clip-preview"] = replace(_lyria,
+    min_duration_seconds=30, max_duration_seconds=30, supported_sample_rates=(),
+    notes="Preview (2026-03-25): 30-second clips; MP3. Single-turn.",
+    source_urls=("https://ai.google.dev/gemini-api/docs/models/lyria-3-clip-preview",
+                 "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/lyria/lyria-3"))
 
 # --------------------------------------------------------------------------- #
 # xAI (Grok Imagine)
@@ -346,28 +469,54 @@ _xai_img = ModelLimits(
                  "https://docs.x.ai/developers/models/grok-imagine-image"),
 )
 _LIMITS["grok-imagine-image"] = _xai_img
+_LIMITS["grok-imagine-image-2.0"] = replace(_xai_img,
+    aspect_ratios=(*_xai_img.aspect_ratios[:-1], "21:9", "5:2", "auto"),
+    notes="Recommended xAI image model: resolution 1k (default)/2k; quality low/medium/auto (extra); n 1-10; "
+          "the edits endpoint takes up to five source images (this adapter calls generations only).",
+    source_urls=("https://docs.x.ai/developers/model-capabilities/images/generation",
+                 "https://docs.x.ai/developers/models/grok-imagine-image-2.0"))
+# grok-imagine-image-pro was retired on 2026-05-15 (its slug now redirects); grok-imagine-image-quality's 60-day
+# notice began on 2026-09-02 and it retires on 2026-11-02, after which the slug is served by 2.0 at low quality.
 _LIMITS["grok-imagine-image-pro"] = replace(_xai_img,
-    notes="Pro tier; resolution 1K/2K; text-to-image takes no image input.")
+    retired_on="2026-05-15", replacement="grok-imagine-image-2.0",
+    notes="Retired on 2026-05-15; the slug is an alias of grok-imagine-image-quality.",
+    source_urls=("https://docs.x.ai/developers/migration/may-15-retirement",
+                 "https://docs.x.ai/developers/models/grok-imagine-image-pro"))
 _LIMITS["grok-imagine-image-quality"] = replace(_xai_img,
-    notes="Quality tier; resolution 1K/2K; output as url or base64.")
+    deprecated_on="2026-09-02", retired_on="2026-11-02", replacement="grok-imagine-image-2.0",
+    notes="Quality tier; resolution 1K/2K; output as url or base64. Retires on 2026-11-02.",
+    source_urls=("https://docs.x.ai/developers/migration/imagine-image-quality-nov-2",
+                 "https://docs.x.ai/developers/models/grok-imagine-image-pro"))
+_XAI_VIDEO_RATIOS = ("1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9", "5:2")
 _LIMITS["grok-imagine-video"] = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE, _VIDEO),
-    supports_first_frame=True, supports_last_frame=None,
-    supports_reference_video=None, min_duration_seconds=1, max_duration_seconds=15,
-    aspect_ratios=("1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"),
-    notes="Resolution 480p/720p only (no 1080p); i2v via image param.",
+    supports_first_frame=True, supports_last_frame=None, supports_reference_image=True,
+    supports_reference_video=None, max_input_images=7, min_duration_seconds=1, max_duration_seconds=15,
+    aspect_ratios=_XAI_VIDEO_RATIOS, supports_audio_output=True,
+    notes="Resolution 480p (default)/720p; i2v via image param; up to 7 reference images (reference-to-video "
+          "<= 10 s, not combined with image); edits keep the input's length (<= 8.7 s). Sound by default.",
     source_urls=("https://docs.x.ai/developers/model-capabilities/video/generation",
-                 "https://docs.x.ai/developers/models/grok-imagine-video"),
+                 "https://docs.x.ai/developers/model-capabilities/video/reference-to-video"),
 )
-_LIMITS["grok-imagine-video-1.5-preview"] = ModelLimits(
-    modality="video", input_modalities=(_TEXT, _IMAGE, _AUDIO),
-    supports_first_frame=True, min_duration_seconds=1, max_duration_seconds=15,
-    supports_reference_audio=True, supports_audio_output=True,
-    aspect_ratios=("1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"),
-    notes="480p/720p/1080p; up to 7 reference images and 3 preset voices.",
+_xai_video_15 = ModelLimits(
+    modality="video", input_modalities=(_TEXT, _IMAGE),
+    supports_first_frame=True, supports_reference_image=True, supports_reference_audio=False,
+    max_input_images=14, min_duration_seconds=1, max_duration_seconds=15,
+    aspect_ratios=_XAI_VIDEO_RATIOS, supports_audio_output=True,
+    notes="Native 1080p text/image-to-video (reference-to-video up to 720p); up to 14 reference images and 4 "
+          "keyframes; lip-synced speech, up to 3 preset voices via reference_audios (extra).",
     source_urls=("https://docs.x.ai/developers/model-capabilities/video/generation",
-                 "https://docs.x.ai/developers/models/grok-imagine-video-1.5-preview"),
+                 "https://docs.x.ai/developers/model-capabilities/video/reference-to-video",
+                 "https://docs.x.ai/developers/models/grok-imagine-video-1.5"),
 )
+_LIMITS["grok-imagine-video-1.5"] = _xai_video_15
+_LIMITS["grok-imagine-video-1.5-preview"] = replace(_xai_video_15,
+    notes="Alias of grok-imagine-video-1.5. " + _xai_video_15.notes)
+_LIMITS["grok-imagine-video-1.5-lite"] = replace(_xai_video_15,
+    supports_reference_image=False, max_input_images=1,
+    notes="Text/image-to-video; 1080p by upscaling 720p; lip-synced speech; no reference-to-video.",
+    source_urls=("https://docs.x.ai/developers/model-capabilities/video/generation",
+                 "https://docs.x.ai/developers/models/grok-imagine-video-1.5-lite"))
 
 # --------------------------------------------------------------------------- #
 # Stability (SD3.5 / SDXL / Stable-Image / Stable-Video)
@@ -383,6 +532,12 @@ _sd35 = ModelLimits(
 _LIMITS["sd3.5-large"] = _sd35
 _LIMITS["sd3.5-medium"] = replace(_sd35,
     notes="Same endpoint/params as sd3.5-large; 1MP output.")
+_LIMITS["sd3.5-large-turbo"] = replace(_sd35,
+    notes="Distilled SD3.5 Large (4 steps) on the same endpoint; 1MP output.",
+    source_urls=("https://docs.stability.ai/api-reference/generate/stable-diffusion-35",))
+_LIMITS["sd3.5-flash"] = replace(_sd35,
+    notes="Fastest SD3.5 model on the same endpoint (image-to-image works best at strength 0.94-0.97).",
+    source_urls=("https://docs.stability.ai/api-reference/generate/stable-diffusion-35",))
 _LIMITS["sdxl"] = ModelLimits(
     modality="image", input_modalities=(_TEXT, _IMAGE),
     supports_image_to_image=True, max_prompt_chars=10000,
@@ -404,19 +559,23 @@ _LIMITS["stable-image-ultra"] = ModelLimits(
     modality="image", input_modalities=(_TEXT,),
     supports_image_to_image=False, max_prompt_chars=10000,
     aspect_ratios=("16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"),
-    notes="Powered by SD3.5 Large; output 1MP (1024x1024).",
-    source_urls=("https://platform.stability.ai/docs/api-reference",
+    notes="Powered by SD3.5 Large; output 1MP (1024x1024). The upstream also takes an image for image-to-image; "
+          "this adapter sends text only.",
+    source_urls=("https://docs.stability.ai/api-reference/generate/stable-image-ultra",
                  "https://platform.stability.ai/pricing"),
 )
+# Stability stopped serving the Stable Video Diffusion API on 2025-07-24 (no API replacement).
 _svd = ModelLimits(
     modality="video", input_modalities=(_IMAGE,),
     supports_first_frame=True, max_fps=25, supports_audio_output=False,
-    notes="Image-to-video only (init_image required, no text-to-video); silent; motion_bucket_id 1-255.",
-    source_urls=("https://platform.stability.ai/docs/api-reference",
+    deprecated_on="2025-07-24", retired_on="2025-07-24",
+    notes="Image-to-video only (init_image required, no text-to-video); silent; motion_bucket_id 1-255. "
+          "The API was discontinued on 2025-07-24.",
+    source_urls=("https://docs.stability.ai/release-notes",
                  "https://docs.api.nvidia.com/nim/reference/stabilityai-stable-video-diffusion"),
 )
-_LIMITS["stable-video-1-1"] = replace(_svd, notes="i2v only; native 1024x576; ~25 frames (~2s).")
-_LIMITS["stable-video-1-0"] = replace(_svd, notes="i2v only; native 576x1024; superseded by 1.1.")
+_LIMITS["stable-video-1-1"] = replace(_svd, notes="i2v only; native 1024x576; ~25 frames (~2s). " + _svd.notes)
+_LIMITS["stable-video-1-0"] = replace(_svd, notes="i2v only; native 576x1024; superseded by 1.1. " + _svd.notes)
 _LIMITS["stable-video-diffusion"] = _svd
 
 # --------------------------------------------------------------------------- #
@@ -446,48 +605,88 @@ _LIMITS["flux-2-pro-remix-image"] = _flux_remix
 # --------------------------------------------------------------------------- #
 # Volcengine Ark (Seedream image / Seedance video)
 # --------------------------------------------------------------------------- #
+# Lifecycle: Ark's model-deprecation notice (docs/82379/1350667). deprecated_on is the batch's notification
+# date, retired_on its EOS (service offline) date; generation models are shut down, not migrated.
+_ARK_MODELS = "https://docs.volcengine.com/docs/82379/1330310"
+_ARK_DEPRECATIONS = "https://docs.volcengine.com/docs/82379/1350667"
+_ARK_IMAGE_API = "https://docs.volcengine.com/docs/82379/1541523"
+_ARK_VIDEO_API = "https://docs.volcengine.com/docs/82379/1520757"
 _LIMITS["doubao-seedream-3-0-t2i-250415"] = ModelLimits(
     modality="image", input_modalities=(_TEXT,),
     supports_image_to_image=False,
     supported_sizes=("512x512", "1024x1024", "2048x2048"),
-    notes="T2I only; size explicit W*H, sides in [512, 2048]; default 1024x1024.",
-    source_urls=("https://docs.volcengine.com/docs/6492/2172373",
-                 "https://www.volcengine.com/docs/82379/1330310"),
+    deprecated_on="2026-04-03", retired_on="2026-05-11", replacement="doubao-seedream-5-0-pro-260628",
+    notes="T2I only; size explicit W*H, sides in [512, 2048]; default 1024x1024. Offline since 2026-05-11.",
+    source_urls=("https://docs.volcengine.com/docs/6492/2172373", _ARK_DEPRECATIONS),
 )
-_LIMITS["doubao-seedream-4-0-t2i-250828"] = ModelLimits(
+_LIMITS["doubao-seedream-4-0-250828"] = ModelLimits(
     modality="image", input_modalities=(_TEXT, _IMAGE),
     supports_image_to_image=True, max_input_images=14, max_output_longest_side=4096,
-    supported_sizes=("1024x1024", "1280x720", "2048x2048", "4096x4096"),
-    notes="T2I + single/multi-ref image edit (up to 14 reference images; ref+output <= 15); sides [1280, 4096].",
-    source_urls=("https://docs.volcengine.com/docs/6492/2172373",
-                 "https://developer.volcengine.com/articles/7553203404664176650"),
+    supported_sizes=("1K", "2K", "4K", "1024x1024", "1280x720", "2048x2048", "4096x4096"),
+    deprecated_on="2026-09-22", retired_on="2026-11-24",
+    notes="T2I + single/multi-ref image edit (up to 14 reference images; references + group outputs <= 15); "
+          "1K/2K/4K or WxH with 921,600-16,777,216 px and ratio 1/16-16. Goes offline on 2026-11-24 (Ark names "
+          "doubao-seedream-4-0-20260415 as the migration target).",
+    source_urls=(_ARK_IMAGE_API, _ARK_DEPRECATIONS),
 )
+# Seedream 5.0 pro / flash: one image per request (no group generation), up to 10 reference images, layer split.
+_seedream5 = ModelLimits(
+    modality="image", input_modalities=(_TEXT, _IMAGE),
+    supports_image_to_image=True, max_input_images=10, max_output_count=1,
+    supported_sizes=("1K", "1.5K", "2K"),
+    notes="T2I, single-image and multi-reference (up to 10) editing; one image per request; size 1K/1.5K/2K "
+          "(default 2K) or WxH with 921,600-4,624,220 px and ratio 1/16-16; png/jpeg; layer_decomposition and "
+          "transparent backgrounds via extra.",
+    source_urls=(_ARK_IMAGE_API, _ARK_MODELS),
+)
+_LIMITS["doubao-seedream-5-0-pro-260628"] = _seedream5
+_LIMITS["doubao-seedream-5-0-flash-260915"] = replace(_seedream5,
+    notes="Faster Seedream 5.0 tier with pro's capabilities. " + _seedream5.notes)
+_ARK_VIDEO_RATIOS = ("16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive")
+# Seedance 1.0 renders silent video (generate_audio is a Seedance 2.x parameter).
 _seedance1 = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE),
     supports_first_frame=True, supports_last_frame=True,
-    supports_reference_video=False,
+    supports_reference_video=False, supports_audio_output=False,
     min_duration_seconds=2, max_duration_seconds=12,
-    aspect_ratios=("16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"),
-    notes="24 fps, mp4; duration 2-12s, default 5s; default resolution 1080p.",
-    source_urls=("https://www.volcengine.com/docs/6492/2165104",
-                 "https://www.volcengine.com/docs/82379/1330310"),
+    aspect_ratios=_ARK_VIDEO_RATIOS,
+    notes="Silent; 24 fps, mp4; duration 2-12s, default 5s; 480p/720p/1080p, default 1080p.",
+    source_urls=(_ARK_VIDEO_API, _ARK_MODELS),
 )
-_LIMITS["doubao-seedance-1-0-pro-250528"] = _seedance1
-_LIMITS["doubao-seedance-1-0-pro-i2v-250528"] = replace(_seedance1,
-    notes="I2V-only pro variant; shares Seedance 1.0 specs.")
+_LIMITS["doubao-seedance-1-0-pro-250528"] = replace(_seedance1,
+    deprecated_on="2026-09-22", retired_on="2026-11-24", replacement="doubao-seedance-2-0-mini-260615",
+    notes=_seedance1.notes + " Goes offline on 2026-11-24.",
+    source_urls=(_ARK_VIDEO_API, _ARK_DEPRECATIONS))
 _LIMITS["doubao-seedance-1-0-lite-i2v-250428"] = replace(_seedance1,
-    max_input_images=4,
-    notes="I2V only (first frame, first+last frame, reference images up to 4); 1080p unsupported in reference-image mode.")
-_LIMITS["doubao-seedance-2-0-260128"] = ModelLimits(
+    max_input_images=4, deprecated_on="2026-04-03", retired_on="2026-05-11",
+    replacement="doubao-seedance-2-0-fast-260128",
+    notes="I2V only (first frame, first+last frame, reference images up to 4); 1080p unsupported in "
+          "reference-image mode. Offline since 2026-05-11.",
+    source_urls=(_ARK_DEPRECATIONS,))
+# Seedance 2.x: one omni model per tier; first frame, first+last frame and multimodal references are three
+# mutually exclusive modes, so the adapter keeps the frames and drops the references.
+_seedance2 = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE, _VIDEO, _AUDIO),
-    supports_first_frame=True, supports_last_frame=True,
-    supports_reference_video=True, supports_reference_audio=True,
-    min_duration_seconds=4, max_duration_seconds=15, supports_audio_output=True,
-    aspect_ratios=("16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"),
-    notes="Omni (T2V/I2V/r2v/edit/extend) with generated audio; up to 3 reference videos + 3 reference audios; 4k is 10-bit.",
-    source_urls=("https://docs.volcengine.com/docs/6492/2595411",
-                 "https://www.volcengine.com/docs/82379/1330310"),
+    supports_first_frame=True, supports_last_frame=True, supports_reference_image=True,
+    supports_reference_video=True, supports_reference_audio=True, supports_audio_output=True,
+    exclusive_frames_and_references=True, max_input_images=9,
+    min_duration_seconds=4, max_duration_seconds=15, max_fps=24,
+    aspect_ratios=_ARK_VIDEO_RATIOS, supported_sizes=("480p", "720p", "1080p", "4k"),
+    notes="Omni (T2V/I2V/r2v/edit/extend) with generated audio; references: 9 images, 3 videos and 3 audio clips "
+          "(2-15 s each, 15 s in total; audio needs an image or video). 4-15 s or -1 (model chooses); 4k is 10-bit.",
+    source_urls=(_ARK_VIDEO_API, "https://docs.volcengine.com/docs/82379/2291680", _ARK_MODELS),
 )
+_LIMITS["doubao-seedance-2-0-260128"] = _seedance2
+_LIMITS["doubao-seedance-2-0-fast-260128"] = replace(_seedance2,
+    supported_sizes=("480p", "720p"), notes="Faster Seedance 2.0 tier; 480p/720p. " + _seedance2.notes)
+_LIMITS["doubao-seedance-2-0-mini-260615"] = replace(_seedance2,
+    supported_sizes=("480p", "720p"), notes="Lowest-cost Seedance 2.0 tier; 480p/720p. " + _seedance2.notes)
+_LIMITS["doubao-seedance-2-5-260628"] = replace(_seedance2,
+    max_input_images=30, max_duration_seconds=30, supported_sizes=("480p", "720p", "1080p"),
+    notes="Omni with generated audio; 4-30 s or -1; references: 30 images, 10 videos and 10 audio clips (30 s in "
+          "total; audio alone works); 1080p is 10-bit; mp4 or mov; draft (preview) mode. Edit, extend and "
+          "first-frame tasks keep the input's ratio (ratio adaptive).",
+    source_urls=(_ARK_VIDEO_API, "https://docs.volcengine.com/docs/82379/2607688", _ARK_MODELS))
 
 # --------------------------------------------------------------------------- #
 # Alibaba DashScope (Wanx / Qwen-Image / Wan2.x image + Wan2.1 video)
@@ -502,8 +701,18 @@ _wanx21 = ModelLimits(
 )
 _LIMITS["wanx2.1-t2i-turbo"] = _wanx21
 _LIMITS["wanx2.1-t2i-plus"] = replace(_wanx21, notes="T2I only (Wan 2.1 Pro); each side [512,1440].")
-_LIMITS["wanx2.1-t2i-flash"] = replace(_wanx21, notes="Wan 2.1 Flash variant; shares the wanx2.1 family limits.")
-_LIMITS["qwen-image-2.0-pro"] = ModelLimits(
+_LIMITS["wan2.2-t2i-flash"] = replace(_wanx21, notes="T2I only (Wan 2.2 Flash); each side [512,1440].")
+_LIMITS["wan2.2-t2i-plus"] = replace(_wanx21, notes="T2I only (Wan 2.2 Plus); each side [512,1440].")
+# Wan 2.5+ T2I: total pixels 1280*1280-1440*1440 at ratio 1:4-4:1, so the long side reaches 2880 (e.g. 768*2700).
+_LIMITS["wan2.5-t2i-preview"] = replace(_wanx21,
+    max_prompt_chars=2000, supported_sizes=("1280x1280", "1440x1440"), max_output_longest_side=2880,
+    notes="T2I only; size W*H with total pixels 1280*1280-1440*1440 and ratio 1:4-4:1; default 1280*1280.")
+_LIMITS["wan2.6-t2i"] = replace(_wanx21,
+    max_prompt_chars=2100, max_output_longest_side=2880,
+    supported_sizes=("1280x1280", "1104x1472", "1472x1104", "960x1696", "1696x960"),
+    notes="T2I on the messages-shaped generation surface; size W*H with total pixels 1280*1280-1440*1440 and "
+          "ratio 1:4-4:1; default 1280*1280; n 1-4.")
+_qwen_image = ModelLimits(
     modality="image", input_modalities=(_TEXT, _IMAGE),
     supports_image_to_image=True, max_output_count=6, max_output_longest_side=2688,
     supported_sizes=("512x512", "1024x1024", "2048x2048", "2688x1536",
@@ -511,6 +720,21 @@ _LIMITS["qwen-image-2.0-pro"] = ModelLimits(
     notes="T2I + image editing; messages-shaped multimodal input; default 2048x2048.",
     source_urls=("https://help.aliyun.com/en/model-studio/qwen-image-api",
                  "https://help.aliyun.com/en/model-studio/image-model"),
+)
+_LIMITS["qwen-image-2.0-pro"] = _qwen_image
+_LIMITS["qwen-image-2.0"] = replace(_qwen_image, notes="Faster Qwen-Image 2.0 tier. " + _qwen_image.notes)
+_LIMITS["qwen-image-3.0-pro"] = replace(_qwen_image,
+    max_prompt_tokens=4500,
+    notes="Flagship Qwen-Image: dense layouts, fine print, multilingual typefaces; up to 4.5k input tokens. "
+          + _qwen_image.notes)
+_LIMITS["qwen-image-3.0"] = replace(_qwen_image, notes="Faster Qwen-Image 3.0 tier. " + _qwen_image.notes)
+_LIMITS["wan2.7-image-pro"] = ModelLimits(
+    modality="image", input_modalities=(_TEXT, _IMAGE),
+    supports_image_to_image=True, max_prompt_chars=5000, max_output_count=4,
+    max_input_images=9, max_output_longest_side=4096,
+    notes="Messages-shaped T2I + editing; up to 9 input images; 4096x4096 text-to-image, 2048x2048 editing.",
+    source_urls=("https://help.aliyun.com/en/model-studio/image-model",
+                 "https://help.aliyun.com/en/model-studio/wan-image-edit"),
 )
 _LIMITS["wan2.7-image"] = ModelLimits(
     modality="image", input_modalities=(_TEXT, _IMAGE),
@@ -528,28 +752,70 @@ _LIMITS["wan2.6-image"] = ModelLimits(
     source_urls=("https://help.aliyun.com/en/model-studio/wan-image-edit",
                  "https://help.aliyun.com/en/model-studio/image-model"),
 )
+# Text-to-video, legacy protocol (Wan 2.6 and earlier): an exact size W*H from the model's list.
+_WAN_T2V_LEGACY = "https://www.alibabacloud.com/help/en/model-studio/legacy-wan-text-to-video-api-reference"
 _wanx21_t2v = ModelLimits(
     modality="video", input_modalities=(_TEXT,),
-    max_duration_seconds=5, supports_audio_output=False,
+    max_prompt_chars=800, max_duration_seconds=5, supports_audio_output=False,
     notes="T2V, silent; 5s fixed, 30 fps, MP4 (H.264).",
-    source_urls=("https://help.aliyun.com/en/model-studio/video-generate-edit-model",
-                 "https://help.aliyun.com/en/model-studio/text-to-video-guide"),
+    source_urls=("https://help.aliyun.com/en/model-studio/video-generate-edit-model", _WAN_T2V_LEGACY),
 )
 _LIMITS["wanx2.1-t2v-turbo"] = replace(_wanx21_t2v, supported_sizes=("480P", "720P"))
 _LIMITS["wanx2.1-t2v-plus"] = replace(_wanx21_t2v, supported_sizes=("720P",))
+_LIMITS["wan2.2-t2v-plus"] = replace(_wanx21_t2v,
+    supported_sizes=("832x480", "480x832", "624x624", "1920x1080", "1080x1920", "1440x1440", "1632x1248",
+                     "1248x1632"),
+    notes="T2V, silent; 5s fixed; 480P or 1080P sizes (default 1920*1080); 30 fps, MP4.")
+_LIMITS["wan2.5-t2v-preview"] = replace(_wanx21_t2v,
+    max_prompt_chars=1500, min_duration_seconds=5, max_duration_seconds=10, supports_audio_output=True,
+    supported_sizes=("832x480", "480x832", "624x624", "1280x720", "720x1280", "960x960", "1088x832",
+                     "832x1088", "1920x1080", "1080x1920", "1440x1440", "1632x1248", "1248x1632"),
+    notes="T2V with generated audio (or input.audio_url); 5 or 10 s; 480P/720P/1080P sizes; 30 fps, MP4.")
+_LIMITS["wan2.6-t2v"] = replace(_wanx21_t2v,
+    max_prompt_chars=1500, min_duration_seconds=2, max_duration_seconds=15, supports_audio_output=True,
+    supported_sizes=("1280x720", "720x1280", "960x960", "1088x832", "832x1088", "1920x1080", "1080x1920",
+                     "1440x1440", "1632x1248", "1248x1632"),
+    notes="T2V with generated audio (or input.audio_url); 2-15 s; 720P/1080P sizes (default 1920*1080); "
+          "multi-shot via shot_type=multi with prompt_extend; 30 fps, MP4.")
+_LIMITS["wan2.7-t2v"] = ModelLimits(
+    modality="video", input_modalities=(_TEXT,),
+    max_prompt_chars=5000, min_duration_seconds=2, max_duration_seconds=15, supports_audio_output=True,
+    supported_sizes=("720P", "1080P"), aspect_ratios=("16:9", "9:16", "1:1", "4:3", "3:4"),
+    notes="T2V with generated audio (or input.audio_url, 2-30 s); resolution 720P/1080P (default) and ratio "
+          "instead of size; 2-15 s; multi-shot from the prompt; 30 fps, MP4.",
+    source_urls=("https://help.aliyun.com/en/model-studio/text-to-video-api-reference",
+                 "https://help.aliyun.com/en/model-studio/video-generate-edit-model"),
+)
+# Image-to-video: the first frame as img_url and a resolution tier (no size or ratio: the output follows the image).
+_WAN_I2V = "https://help.aliyun.com/en/model-studio/image-to-video-api-reference"
 _wanx21_i2v = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE),
-    supports_first_frame=True, min_duration_seconds=3, max_duration_seconds=5,
+    supports_first_frame=True, supports_last_frame=False, max_input_images=1,
+    max_prompt_chars=800, min_duration_seconds=3, max_duration_seconds=5,
     supports_audio_output=False,
-    notes="I2V (first-frame image via img_url), silent; 30 fps, MP4.",
-    source_urls=("https://help.aliyun.com/en/model-studio/video-generate-edit-model",
-                 "https://help.aliyun.com/en/model-studio/text-to-video-guide"),
+    notes="I2V (first-frame image via img_url), silent; 3-5 s; resolution 480P/720P (default 720P); 30 fps, MP4.",
+    source_urls=("https://help.aliyun.com/en/model-studio/video-generate-edit-model", _WAN_I2V),
 )
 _LIMITS["wanx2.1-i2v-turbo"] = replace(_wanx21_i2v, supported_sizes=("480P", "720P"))
 _LIMITS["wanx2.1-i2v-plus"] = replace(_wanx21_i2v, supported_sizes=("720P",),
     min_duration_seconds=5,
     notes="I2V (first-frame image via img_url), silent; duration fixed at 5s (not the turbo's 3-5s); 30 fps, MP4.",
 )
+_LIMITS["wan2.2-i2v-flash"] = replace(_wanx21_i2v, supported_sizes=("480P", "720P", "1080P"),
+    min_duration_seconds=5,
+    notes="I2V, silent; 5 s; resolution 480P/720P (default)/1080P; 30 fps, MP4.")
+_LIMITS["wan2.2-i2v-plus"] = replace(_wanx21_i2v, supported_sizes=("480P", "1080P"),
+    min_duration_seconds=5,
+    notes="I2V, silent; 5 s; resolution 480P/1080P (default); 30 fps, MP4.")
+_LIMITS["wan2.5-i2v-preview"] = replace(_wanx21_i2v, supported_sizes=("480P", "720P", "1080P"),
+    max_prompt_chars=1500, min_duration_seconds=5, max_duration_seconds=10, supports_audio_output=True,
+    notes="I2V with generated audio (or input.audio_url); 5 or 10 s; resolution 480P/720P/1080P (default).")
+_LIMITS["wan2.6-i2v"] = replace(_wanx21_i2v, supported_sizes=("720P", "1080P"),
+    max_prompt_chars=1500, min_duration_seconds=2, max_duration_seconds=15, supports_audio_output=True,
+    notes="I2V with generated audio (or input.audio_url); 2-15 s; resolution 720P/1080P (default); "
+          "multi-shot via shot_type.")
+_LIMITS["wan2.6-i2v-flash"] = replace(_LIMITS["wan2.6-i2v"],
+    notes="Faster Wan 2.6 I2V; parameters.audio=false renders silent video. 2-15 s; resolution 720P/1080P.")
 
 _wan3_video = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE, _VIDEO, _AUDIO),
@@ -578,22 +844,65 @@ _LIMITS["wan3.0-video"] = _wan3_video
 _LIMITS["wan3.0-video-prime"] = replace(
     _wan3_video, notes="High-speed Wan 3.0 with the standard model's capabilities. " + _wan3_video.notes,
 )
+# wan2.7-i2v (native input.media): first_frame, first+last frame, optional driving_audio for lip-sync and timing.
+_LIMITS["wan2.7-i2v"] = ModelLimits(
+    modality="video", input_modalities=(_TEXT, _IMAGE, _AUDIO),
+    max_prompt_chars=5000, max_input_images=2, min_duration_seconds=2, max_duration_seconds=15,
+    supported_sizes=("720P", "1080P"),
+    supports_first_frame=True, supports_last_frame=True, supports_reference_image=False,
+    supports_reference_video=False, supports_reference_audio=True, supports_audio_output=True,
+    notes="First frame or first+last frame, plus an optional driving audio (wav/mp3, 2-30 s) that drives lip-sync "
+          "and timing (otherwise the model adds music or effects); resolution 720P/1080P (default), the ratio "
+          "follows the frame; 2-15 s; negative prompt up to 500 chars; MP4.",
+    source_urls=("https://www.alibabacloud.com/help/en/model-studio/image-to-video-general-api-reference",
+                 "https://help.aliyun.com/en/model-studio/video-generate-edit-model"),
+)
+# HappyHorse 1.1 (native input.media): one model per mode; 3-15 s at 24 fps with sound; watermark on by default.
+_HAPPYHORSE = "https://www.alibabacloud.com/help/en/model-studio/happyhorse-api-reference/"
+_happyhorse = ModelLimits(
+    modality="video", input_modalities=(_TEXT,),
+    max_prompt_chars=5000, min_duration_seconds=3, max_duration_seconds=15, max_fps=24,
+    supported_sizes=("480P", "720P", "1080P"),
+    aspect_ratios=("16:9", "9:16", "1:1", "4:3", "3:4", "4:5", "5:4", "9:21", "21:9"),
+    supports_audio_output=True,
+    notes="Text-to-video; 480P/720P/1080P (default); 3-15 s; prompts up to 5000 characters (2500 Chinese); "
+          "the 'Happy Horse' watermark is on unless watermark=false.",
+    source_urls=("https://www.alibabacloud.com/help/en/model-studio/happyhorse-text-to-video-api-reference",
+                 _HAPPYHORSE),
+)
+_LIMITS["happyhorse-1.1-t2v"] = _happyhorse
+_LIMITS["happyhorse-1.1-i2v"] = replace(_happyhorse,
+    input_modalities=(_TEXT, _IMAGE), supports_first_frame=True, supports_last_frame=False,
+    supports_reference_image=False, max_input_images=1, aspect_ratios=(),
+    notes="Image-to-video from exactly one first frame (ratio 1:2.5-2.5:1; the output keeps it); "
+          "480P/720P/1080P; 3-15 s; watermark on by default.",
+    source_urls=("https://www.alibabacloud.com/help/en/model-studio/happyhorse-image-to-video-api-reference",
+                 _HAPPYHORSE))
+_LIMITS["happyhorse-1.1-r2v"] = replace(_happyhorse,
+    input_modalities=(_TEXT, _IMAGE), supports_reference_image=True, supports_first_frame=False,
+    supports_last_frame=False, max_input_images=9,
+    notes="Reference-to-video from 1-9 reference images cited in the prompt as [Image N] (shorter edge >= 400 px); "
+          "480P/720P/1080P; 3-15 s; watermark on by default.",
+    source_urls=("https://www.alibabacloud.com/help/en/model-studio/happyhorse-reference-to-video-api-reference",
+                 _HAPPYHORSE))
 
 # --------------------------------------------------------------------------- #
 # MiniMax (music + H3 video)
 # --------------------------------------------------------------------------- #
+# The paid Music Generation API is closed to new MiniMax accounts from 2026-08-20; existing paying users keep it.
+_MINIMAX_MUSIC_NOTE = " Not available to new MiniMax accounts from 2026-08-20."
 _LIMITS["music-3.0"] = ModelLimits(
     modality="music", input_modalities=(_TEXT, _LYRICS),
     max_prompt_chars=2000, max_duration_seconds=300, supports_lyrics=True,
     max_output_count=1, supported_sample_rates=(16000, 24000, 32000, 44100),
-    notes="Lyrics 1-3500 chars when non-instrumental; 300s is the model ceiling.",
+    notes="Lyrics 1-3500 chars when non-instrumental; 300s is the model ceiling." + _MINIMAX_MUSIC_NOTE,
     source_urls=("https://platform.minimax.io/docs/api-reference/music-generation",),
 )
 _LIMITS["music-2.6"] = ModelLimits(
     modality="music", input_modalities=(_TEXT, _LYRICS),
     max_prompt_chars=2000, supports_lyrics=True, max_output_count=1,
     supported_sample_rates=(16000, 24000, 32000, 44100),
-    notes="Constraints identical to music-3.0; no duration field exposed.",
+    notes="Constraints identical to music-3.0; no duration field exposed." + _MINIMAX_MUSIC_NOTE,
     source_urls=("https://platform.minimax.io/docs/api-reference/music-generation",),
 )
 _LIMITS["music-cover"] = ModelLimits(
@@ -601,18 +910,32 @@ _LIMITS["music-cover"] = ModelLimits(
     max_prompt_chars=300, max_duration_seconds=360, supports_lyrics=True,
     supports_reference_audio=True, max_output_count=1,
     supported_sample_rates=(16000, 24000, 32000, 44100),
-    notes="Audio-to-song cover (audio_url/base64 6s-6min <=50MB or cover_feature_id).",
+    notes="Audio-to-song cover (audio_url/base64 6s-6min <=50MB or cover_feature_id); prompt 10-300 chars, "
+          "lyrics 10-1000 (transcribed when omitted)." + _MINIMAX_MUSIC_NOTE,
     source_urls=("https://platform.minimax.io/docs/api-reference/music-generation",
                  "https://platform.minimax.io/docs/api-reference/music-cover-preprocess"),
 )
-_LIMITS["MiniMax-H3"] = ModelLimits(
+# H3 family (POST /v2/video_generation): image-to-video and reference-to-video are mutually exclusive, so the
+# adapter keeps the frames and drops the references.
+_minimax_h3 = ModelLimits(
     modality="video", input_modalities=(_TEXT, _IMAGE, _VIDEO, _AUDIO),
     max_prompt_chars=7000, min_duration_seconds=4, max_duration_seconds=15,
-    supports_reference_audio=True, supports_reference_image=True,
-    max_output_count=1, supports_first_frame=True,
-    notes="Omni video model; content[] roles pick t2v/i2v/r2v; resolution 768P|2K.",
+    supports_first_frame=True, supports_last_frame=True, supports_reference_image=True,
+    supports_reference_video=True, supports_reference_audio=True, exclusive_frames_and_references=True,
+    max_input_images=9, max_output_count=1,
+    aspect_ratios=("adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"), supported_sizes=("768P", "2K"),
+    notes="Omni video model; content[] roles pick t2v/i2v/r2v; resolution 768P|2K. References: 9 images, 3 videos "
+          "and 3 audio clips (2-15 s each, 15 s in total). Text-to-video needs a concrete ratio.",
     source_urls=("https://platform.minimax.io/docs/api-reference/video-generation-v2-create",),
 )
+_LIMITS["MiniMax-H3"] = _minimax_h3
+_LIMITS["MiniMax-H3-Highspeed"] = replace(_minimax_h3, supported_sizes=("768P",),
+    notes="Faster H3; 768P only; 4-15 s. References: 9 images, 3 videos and 3 audio clips (15 s in total).")
+_LIMITS["MiniMax-H3-Lite"] = replace(_minimax_h3, supported_sizes=("480P", "768P"),
+    notes="Lower-cost H3; 480P/768P (default 768P); 4-15 s; reference-to-video needs a concrete ratio.")
+_LIMITS["MiniMax-H3-Max"] = replace(_minimax_h3, supported_sizes=("480P", "768P"), min_duration_seconds=5,
+    notes="Speed-optimized H3; 480P/768P (default 768P); 5-15 s; extra.prompt_expansion_mode "
+          "disabled|balanced|quality.")
 
 # --------------------------------------------------------------------------- #
 # ElevenLabs (music)
@@ -634,48 +957,62 @@ _LIMITS["music_v2"] = ModelLimits(
     source_urls=("https://elevenlabs.io/docs/api-reference/music/compose",
                  "https://elevenlabs.io/docs/eleven-creative/products/music"),
 )
+_LIMITS["music_v2_5"] = replace(_LIMITS["music_v2"],
+    notes="Most advanced Eleven Music model: better quality and prompt adherence than music_v2; inpainting, audio "
+          "reference (composition_plan conditioning_ref) and composition plans (chunks of 3-120 s).",
+    source_urls=("https://elevenlabs.io/docs/api-reference/music/compose",
+                 "https://elevenlabs.io/docs/overview/models"))
 
 # --------------------------------------------------------------------------- #
 # UdioAPI (chirp)
 # --------------------------------------------------------------------------- #
-_chirp_v4 = ModelLimits(
-    modality="music", input_modalities=(_TEXT,),
-    max_prompt_chars=3000, supports_lyrics=True, max_output_count=2,
-    notes="style <=200 chars, title <=80; duration param ignored.",
-    source_urls=("https://udioapi.pro/docs/v2-generate",),
-)
-_chirp_v45 = ModelLimits(
+# Every model takes a 5000-character Custom Mode prompt (Inspiration Mode: 3000), style <= 1000 and title <= 80.
+# The current models are chirp-v6/-mini/-wild; legacy ids are still accepted but remapped: chirp-v5 and
+# chirp-v5-5 run on chirp-v6, the older ones on chirp-v6-mini.
+_chirp = ModelLimits(
     modality="music", input_modalities=(_TEXT,),
     max_prompt_chars=5000, supports_lyrics=True, max_output_count=2,
     notes="style <=1000 chars, title <=80; duration param ignored.",
     source_urls=("https://udioapi.pro/docs/v2-generate",),
 )
-_LIMITS["chirp-v4-0"] = _chirp_v4
-_LIMITS["chirp-v4-5"] = _chirp_v45
-_LIMITS["chirp-v4-5-plus"] = replace(_chirp_v45, notes="Same tier limits as chirp-v4-5; duration ignored.")
-_LIMITS["chirp-v5"] = replace(_chirp_v45, notes="style <=1000, title <=80; duration ignored (v5-5-only feature).")
-_LIMITS["chirp-v5-5"] = ModelLimits(
-    modality="music", input_modalities=(_TEXT,),
-    max_prompt_chars=5000, min_duration_seconds=10, max_duration_seconds=360,
-    supports_lyrics=True, max_output_count=2,
-    notes="Only model accepting duration (10-360s, default 20, Custom Mode only).",
-    source_urls=("https://udioapi.pro/docs/v2-generate", "https://udioapi.pro/docs/changelog"),
-)
+_LIMITS["chirp-v6"] = replace(_chirp, notes="Current flagship; style <=1000 chars, title <=80; duration ignored.")
+_LIMITS["chirp-v6-mini"] = replace(_chirp,
+    notes="Lower-cost current model (the default when model is omitted); style <=1000, title <=80.")
+_LIMITS["chirp-v6-wild"] = replace(_chirp,
+    notes="Current chirp-v6 variant (billed like chirp-v6); style <=1000, title <=80.")
+_LIMITS["chirp-v4-0"] = replace(_chirp, replacement="chirp-v6-mini",
+    notes="Legacy id, served by chirp-v6-mini; style <=1000, title <=80.")
+_LIMITS["chirp-v4-5"] = replace(_chirp, replacement="chirp-v6-mini",
+    notes="Legacy id, served by chirp-v6-mini; style <=1000, title <=80.")
+_LIMITS["chirp-v4-5-plus"] = replace(_chirp, replacement="chirp-v6-mini",
+    notes="Legacy id, served by chirp-v6-mini; style <=1000, title <=80.")
+_LIMITS["chirp-v5"] = replace(_chirp, replacement="chirp-v6",
+    notes="Legacy id, served by chirp-v6; style <=1000, title <=80; duration ignored.")
+_LIMITS["chirp-v5-5"] = replace(_chirp, replacement="chirp-v6",
+    min_duration_seconds=10, max_duration_seconds=360,
+    notes="Legacy id, served by chirp-v6; the only id accepting duration (10-360s, default 20, Custom Mode only).",
+    source_urls=("https://udioapi.pro/docs/v2-generate", "https://udioapi.pro/docs/changelog"))
 
 # --------------------------------------------------------------------------- #
 # Mureka (song)
 # --------------------------------------------------------------------------- #
+# POST /v1/song/generate takes model auto | mureka-7.6 | mureka-o2 | mureka-8 | mureka-9 | mureka-9.5; lyrics
+# <= 5000 characters, prompt <= 1024, n 1-3 (default 2).
 _mureka_song = ModelLimits(
     modality="music", input_modalities=(_TEXT, _LYRICS, _AUDIO),
     max_prompt_chars=1024, supports_lyrics=True, supports_reference_audio=True,
     supports_continuation_audio=True, max_output_count=3,
-    notes="Continuation via separate /song/extend; reference via reference_id/vocal_id/melody_id.",
-    source_urls=("https://platform.mureka.ai/docs/en/changelog.html",
-                 "https://docs.cloudsway.net/maasapi/api-reference/music/mureka/"),
+    notes="Lyrics <= 5000 chars; continuation via separate /song/extend; reference via reference_id/vocal_id/melody_id.",
+    source_urls=("https://platform.mureka.ai/docs/api/operations/post-v1-song-generate.html",
+                 "https://platform.mureka.ai/docs/en/changelog.html"),
 )
-_LIMITS["mureka-song-1"] = _mureka_song
-_LIMITS["mureka-song-1.5"] = replace(_mureka_song,
-    notes="Gateway-only alias; same upstream endpoint as mureka-song-1.")
+_LIMITS["mureka-9.5"] = replace(_mureka_song, notes="Latest Mureka model (2026-08-28). " + _mureka_song.notes)
+_LIMITS["mureka-9"] = replace(_mureka_song, notes="Mureka 9 (2026-04-09). " + _mureka_song.notes)
+_LIMITS["mureka-8"] = replace(_mureka_song, notes="Mureka 8 (2026-03-02). " + _mureka_song.notes)
+_LIMITS["mureka-7.6"] = replace(_mureka_song, notes="Mureka 7.6 (2025-12-09). " + _mureka_song.notes)
+_LIMITS["mureka-o2"] = replace(_mureka_song,
+    notes="Reasoning music model (2025-12-09); no vocal_id or melody_id. Lyrics <= 5000 chars; reference via "
+          "reference_id.")
 
 # --------------------------------------------------------------------------- #
 # ACE-Step (self-hosted / acemusic.ai cloud)
@@ -689,13 +1026,13 @@ _acestep = ModelLimits(
     supports_lyrics=True, supports_reference_audio=True,
     supports_continuation_audio=True, max_output_count=4,
     notes="src_audio_path carries reference/continuation audio (task_type=cover); audio_duration controls length.",
-    source_urls=("https://raw.githubusercontent.com/ace-step/ace-step-skills/main/skills/acestep/scripts/acestep.sh",),
+    source_urls=("https://raw.githubusercontent.com/ace-step/ace-step-skills/main/skills/acestep/scripts/acestep.sh",
+                 "https://huggingface.co/ACE-Step/acestep-v15-xl-base"),
 )
-_LIMITS["acestep-v15-turbo"] = _acestep
-_LIMITS["acestep-v15-xl-turbo"] = _acestep
-_LIMITS["acestep-v15-base"] = _acestep
-_LIMITS["acestep-v15-turbo-shift3"] = _acestep
-_LIMITS["ace-step-1.5"] = _acestep
+# Checkpoints: acestep-v15-{turbo,sft,base} (2B DiT) and acestep-v15-xl-{turbo,sft,base} (4B DiT, ACE-Step 1.5 XL).
+for _model in ("acestep-v15-turbo", "acestep-v15-sft", "acestep-v15-base", "acestep-v15-turbo-shift3",
+               "acestep-v15-xl-turbo", "acestep-v15-xl-sft", "acestep-v15-xl-base", "ace-step-1.5"):
+    _LIMITS[_model] = _acestep
 
 
 # Speech constraints checked against official APIs on 2026-10-03.
@@ -719,6 +1056,14 @@ _openai_speech = ModelLimits(
                  "https://developers.openai.com/api/docs/guides/custom-voices"),
     notes="Cloning requires eligible account access, operator opt-in and a consent recording. PCM is 24 kHz mono.",
 )
+# OpenAI deprecated every /v1/audio/speech model on 2026-10-01 (shutdown 2027-01-06). Its suggested replacement,
+# gpt-realtime-2.1-mini, runs on the Realtime API and is not served by the speech endpoint.
+_openai_speech = replace(_openai_speech,
+    deprecated_on="2026-10-01", retired_on="2027-01-06",
+    notes=_openai_speech.notes + " Shuts down on 2027-01-06; OpenAI's replacement (gpt-realtime-2.1-mini) is "
+          "Realtime-API only.",
+    source_urls=(*_openai_speech.source_urls, _OPENAI_DEPRECATIONS,
+                 "https://developers.openai.com/api/docs/guides/text-to-speech"))
 for _model in ("gpt-4o-mini-tts", "gpt-4o-mini-tts-2025-12-15"):
     _LIMITS[_model] = _openai_speech
 for _model in ("tts-1", "tts-1-hd"):
@@ -733,8 +1078,23 @@ _eleven_speech = ModelLimits(
     notes="Output encoding combinations and account plan restrictions apply; WAV wraps PCM as mono S16LE.",
 )
 for _model, _chars in (("eleven_v3", 5000), ("eleven_multilingual_v2", 10000),
-                       ("eleven_flash_v2_5", 40000), ("eleven_turbo_v2_5", 40000)):
+                       ("eleven_flash_v2_5", 40000)):
     _LIMITS[_model] = replace(_eleven_speech, max_prompt_chars=_chars)
+# ElevenLabs lists eleven_turbo_v2_5 as deprecated in favour of eleven_flash_v2_5 without a date; 2026-10-29 is
+# the day that listing was checked.
+_LIMITS["eleven_turbo_v2_5"] = replace(_eleven_speech, max_prompt_chars=40000,
+    deprecated_on="2026-10-29", replacement="eleven_flash_v2_5",
+    notes="Deprecated: functionally equivalent to eleven_flash_v2_5 with higher latency. " + _eleven_speech.notes,
+    source_urls=(*_eleven_speech.source_urls, "https://elevenlabs.io/docs/overview/models"))
+# Eleven v4 (2026-09-28) has only Stability and Similarity settings: no speed control and no SSML.
+_eleven_v4 = replace(_eleven_speech, min_speed=1.0, max_speed=1.0,
+    notes="No speed or style setting (speed stays 1.0) and no SSML; 90+ languages; audio tags. "
+          + _eleven_speech.notes,
+    source_urls=(*_eleven_speech.source_urls, "https://elevenlabs.io/docs/overview/models",
+                 "https://elevenlabs.io/docs/overview/capabilities/text-to-speech/eleven-v4"))
+_LIMITS["eleven_v4"] = replace(_eleven_v4, max_prompt_chars=10000)
+_LIMITS["eleven_v4_turbo"] = replace(_eleven_v4,
+    notes="Real-time Eleven v4 (~100 ms median inference). " + _eleven_v4.notes)
 _minimax_speech = ModelLimits(
     modality="audio", input_modalities=(_TEXT,), max_prompt_chars=9999,
     supports_voice_cloning=True, max_voice_samples=1, supports_instructions=False,

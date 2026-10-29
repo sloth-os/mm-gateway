@@ -8,7 +8,7 @@ from mm_gateway.translators.music import lyria_compat
 
 def _task(status: str = "succeeded") -> UnifiedMusicTask:
     t = UnifiedMusicTask(
-        task_id="m-1", provider="google", model="lyria-3", status=status,
+        task_id="m-1", provider="google", model="lyria-3.5", status=status,
     )
     if status == "succeeded":
         t.audio_b64 = "AAAA"
@@ -22,14 +22,14 @@ def _task(status: str = "succeeded") -> UnifiedMusicTask:
 
 
 def test_lyria_request_string_input():
-    unified = lyria_compat.from_lyria({"model": "lyria-3", "input": "a happy song"})
+    unified = lyria_compat.from_lyria({"model": "lyria-3.5", "input": "a happy song"})
     assert unified.prompt() == "a happy song"
-    assert unified.model == "lyria-3"
+    assert unified.model == "lyria-3.5"
 
 
 def test_lyria_request_parts_input_text():
     unified = lyria_compat.from_lyria({
-        "model": "lyria-3",
+        "model": "lyria-3.5",
         "input": [{"type": "text", "text": "verse one"}, {"type": "text", "text": "verse two"}],
     })
     # Multiple text parts concatenate with newlines.
@@ -41,7 +41,7 @@ def test_lyria_request_image_part_stashed_in_extra():
     # unified content[] model; the translator stashes them in extra["images"] for
     # providers that consume inline reference images.
     unified = lyria_compat.from_lyria({
-        "model": "lyria-3",
+        "model": "lyria-3.5",
         "input": [
             {"type": "text", "text": "make it upbeat"},
             {"type": "image", "mime_type": "image/png", "data": "iVBOR..."},
@@ -53,7 +53,7 @@ def test_lyria_request_image_part_stashed_in_extra():
 
 def test_lyria_request_flat_knobs():
     unified = lyria_compat.from_lyria({
-        "model": "lyria-3", "input": "x",
+        "model": "lyria-3.5", "input": "x",
         "duration": 30, "bpm": 120, "seed": 7, "is_instrumental": True,
     })
     assert unified.duration == 30
@@ -64,13 +64,13 @@ def test_lyria_request_flat_knobs():
 
 def test_lyria_response_format_audio_maps_to_wav():
     unified = lyria_compat.from_lyria({
-        "model": "lyria-3", "input": "x", "response_format": {"type": "audio"},
+        "model": "lyria-3.5", "input": "x", "response_format": {"type": "audio"},
     })
     assert unified.audio_format == "wav"
 
 
 def test_lyria_unknown_fields_go_to_extra():
-    unified = lyria_compat.from_lyria({"model": "lyria-3", "input": "x", "style": "edm"})
+    unified = lyria_compat.from_lyria({"model": "lyria-3.5", "input": "x", "style": "edm"})
     assert unified.extra["style"] == "edm"
 
 
@@ -78,7 +78,7 @@ def test_lyria_request_config_object_merges_knobs():
     # The Gemini Interactions `config` object is the abstraction over all
     # backend music functions: known knobs merge onto the unified flat fields.
     unified = lyria_compat.from_lyria({
-        "model": "lyria-3", "input": "a happy song",
+        "model": "lyria-3.5", "input": "a happy song",
         "config": {
             "negative_prompt": "drums", "duration": 30, "bpm": 120,
             "key_scale": "C major", "time_signature": "4/4",
@@ -107,7 +107,7 @@ def test_lyria_request_config_unknown_keys_go_to_extra():
     # Provider-specific knobs (ElevenLabs finetune_id, ACE-Step inference_steps,
     # Lyria lyria_config, ...) pass through to providers via extra.
     unified = lyria_compat.from_lyria({
-        "model": "lyria-3", "input": "x",
+        "model": "lyria-3.5", "input": "x",
         "config": {
             "finetune_id": "ft-123", "inference_steps": 50,
             "lyria_config": {"denoising": 0.8},
@@ -122,7 +122,7 @@ def test_lyria_request_config_overrides_flat_knobs():
     # config is the canonical (new) shape; where a knob is set in both places,
     # config wins.
     unified = lyria_compat.from_lyria({
-        "model": "lyria-3", "input": "x", "duration": 10,
+        "model": "lyria-3.5", "input": "x", "duration": 10,
         "config": {"duration": 45},
     })
     assert unified.duration == 45
@@ -131,7 +131,7 @@ def test_lyria_request_config_overrides_flat_knobs():
 def test_lyria_request_config_response_format_envelope():
     # Lyria's response_format envelope inside config maps to audio_format/quality.
     unified = lyria_compat.from_lyria({
-        "model": "lyria-3", "input": "x",
+        "model": "lyria-3.5", "input": "x",
         "config": {"response_format": {"type": "audio", "quality": "44100_128"}},
     })
     assert unified.audio_format == "wav"
@@ -141,7 +141,7 @@ def test_lyria_request_config_response_format_envelope():
 def test_lyria_request_config_and_flat_both_accepted():
     # A body mixing flat knobs (legacy) and config (new) merges both.
     unified = lyria_compat.from_lyria({
-        "model": "lyria-3", "input": "x", "bpm": 90,
+        "model": "lyria-3.5", "input": "x", "bpm": 90,
         "config": {"seed": 11},
     })
     assert unified.bpm == 90
@@ -153,7 +153,7 @@ def test_lyria_request_provider_directive_is_dropped():
     # raw body by ``routing_overrides``; it must NOT be assigned to the unified
     # ``provider: str`` field (would fail validation) nor leak into ``extra``.
     unified = lyria_compat.from_lyria(
-        {"model": "lyria-3", "input": "x", "provider": {"backend": "mm-a"}}
+        {"model": "lyria-3.5", "input": "x", "provider": {"backend": "mm-a"}}
     )
     assert unified.provider is None
     assert "provider" not in unified.extra
@@ -161,7 +161,7 @@ def test_lyria_request_provider_directive_is_dropped():
 
 def test_lyria_request_config_provider_directive_is_dropped():
     unified = lyria_compat.from_lyria(
-        {"model": "lyria-3", "input": "x", "config": {"provider": {"tag": "t"}}}
+        {"model": "lyria-3.5", "input": "x", "config": {"provider": {"tag": "t"}}}
     )
     assert unified.provider is None
     assert "provider" not in unified.extra

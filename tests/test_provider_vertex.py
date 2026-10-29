@@ -285,16 +285,24 @@ def test_supports_image_video_and_music(monkeypatch: pytest.MonkeyPatch) -> None
     assert p.supports_video is True
     assert p.supports_music is True
     assert p.image_models == [
+        "gemini-nano-banana-2.1",
+        "gemini-3-pro-image",
+        "gemini-3.1-flash-image",
+        "gemini-3.1-flash-lite-image",
+        "gemini-2.5-flash-image",
         "imagen-4.0-generate-001",
         "imagen-3.0-generate-001",
-        "gemini-2.5-flash-image",
     ]
     assert p.video_models == [
-        "veo-2.0-generate-001",
-        "veo-3.0-generate-001",
+        "veo-3.1-generate-001",
+        "veo-3.1-fast-generate-001",
+        "veo-3.1-lite-generate-001",
+        "gemini-omni-1.1-flash-preview",
         "veo-3.1-generate-preview",
+        "veo-3.0-generate-001",
+        "veo-2.0-generate-001",
     ]
-    assert p.music_models == ["lyria-3"]
+    assert p.music_models == ["lyria-3-pro-preview", "lyria-3-clip-preview"]
 
 
 # -- Lyria music (Interactions) ---------------------------------------- #
@@ -344,14 +352,14 @@ def test_vertex_music_poll_calls_interactions_create(monkeypatch: pytest.MonkeyP
     p._client_music = music_client
 
     create = asyncio.run(p.create_music_task(
-        UnifiedMusicRequest(model="lyria-3", content=[text_part("a happy song")])
+        UnifiedMusicRequest(model="lyria-3-pro-preview", content=[text_part("a happy song")])
     ))
     task = asyncio.run(p.get_music_task(create.task_id))
 
     assert len(calls) == 1
     body = calls[0]
     # Same Interactions body the google adapter builds (lyria_body).
-    assert body["model"] == "lyria-3"
+    assert body["model"] == "lyria-3-pro-preview"
     assert body["input"] == [{"type": "text", "text": "a happy song"}]
     assert task.status == "succeeded"
     assert task.audio_b64 == "UklGRiQAAABXQVZFZmV"
@@ -370,7 +378,63 @@ def test_vertex_music_fails_when_no_audio(monkeypatch: pytest.MonkeyPatch) -> No
     p._client_music = music_client
 
     create = asyncio.run(p.create_music_task(
-        UnifiedMusicRequest(model="lyria-3", content=[text_part("x")])
+        UnifiedMusicRequest(model="lyria-3-pro-preview", content=[text_part("x")])
     ))
     with pytest.raises(TaskFailedError):
         asyncio.run(p.get_music_task(create.task_id))
+
+
+# -- Gemini Omni video (Interactions) ---------------------------------- #
+
+
+def _omni_client(created: Any, polled: Any, calls: list[tuple[str, Any]]):
+    class _VideoClient:
+        class aio:
+            class interactions:
+                @staticmethod
+                async def create(**kwargs):
+                    calls.append(("create", kwargs))
+                    return created
+
+                @staticmethod
+                async def get(interaction_id, **kwargs):
+                    calls.append(("get", (interaction_id, kwargs)))
+                    return polled
+
+    return _VideoClient()
+
+
+def test_vertex_omni_runs_a_background_interaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from mm_gateway.schemas.video import UnifiedVideoRequest
+    from mm_gateway.schemas.video import image_part as vid_image
+    from mm_gateway.schemas.video import text_part as vid_text
+
+    _stub_auth(monkeypatch)
+    _capture_client(monkeypatch)
+    p = VertexProvider(_backend(credentials_json=_sa_json(), project="proj-x"))
+    calls: list[tuple[str, Any]] = []
+
+    class _Done:
+        id = "v1_vx"
+        model = "gemini-omni-1.1-flash-preview"
+
+        def model_dump(self, **kwargs):
+            return {"id": self.id, "status": "completed",
+                    "output_video": {"type": "video", "data": "TVA0", "mime_type": "video/mp4"}}
+
+    p._client_video = _omni_client(SimpleNamespace(id="v1_vx", status="in_progress"), _Done(), calls)
+    task = asyncio.run(p.create_video_task(UnifiedVideoRequest(
+        model="gemini-omni-1.1-flash-preview", ratio="9:16",
+        content=[vid_text("a dancer"), vid_image("gs://bucket/dancer.png")])))
+    assert task.task_id == "interactions/v1_vx"
+    kind, body = calls[0]
+    assert kind == "create" and body["background"] is True
+    assert body["input"][1] == {"type": "image", "uri": "gs://bucket/dancer.png"}
+    assert body["response_format"] == {"type": "video", "aspect_ratio": "9:16"}
+
+    done = asyncio.run(p.get_video_task(task.task_id))
+    assert calls[1] == ("get", ("v1_vx", {"stream": False}))
+    assert done.status == "succeeded" and done.video_urls == ["data:video/mp4;base64,TVA0"]
+    assert done.model == "gemini-omni-1.1-flash-preview"

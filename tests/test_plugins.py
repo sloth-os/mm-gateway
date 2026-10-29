@@ -926,7 +926,7 @@ def create_plugin(config):
                 "/v1/images",
                 headers=USER,
                 json={
-                    "model": "gpt-image-1",
+                    "model": "gpt-image-2",
                     "input": [{"type": "text", "text": "signed"}],
                 },
             ),

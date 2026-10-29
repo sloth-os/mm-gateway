@@ -63,7 +63,7 @@ def test_doc_grounded_limits_pinned_against_official_docs():
     veo31 = limits_for("veo-3.1-generate-preview", "video")
     assert veo31.max_output_count == 1  # Veo 3.1: 1 video; 3 ref images guide it.
     assert veo31.max_input_images == 3
-    seedream4 = limits_for("doubao-seedream-4-0-t2i-250828", "image")
+    seedream4 = limits_for("doubao-seedream-4-0-250828", "image")
     assert seedream4.max_input_images == 14  # Seedream 4.0: up to 14 ref images.
     qwen = limits_for("qwen-image-2.0-pro", "image")
     assert qwen.max_output_longest_side == 2688  # supported_sizes lists 2688x1536.
@@ -85,6 +85,82 @@ def test_doc_grounded_limits_pinned_against_official_docs():
         public = wan3.to_public_dict()
         assert public["exclusive_frames_and_references"] is True
         assert public["supports_negative_prompt"] is False
+
+
+def test_lifecycles_pinned_against_official_deprecation_notices():
+    # (model, modality, deprecated_on, retired_on, replacement) from each provider's deprecation notice.
+    cases = [
+        ("gpt-image-1", "image", "2026-04-22", "2026-10-23", "gpt-image-2.5-sunburst"),
+        ("gpt-image-1-mini", "image", "2026-06-02", "2026-12-01", "gpt-image-2.5-flare"),
+        ("dall-e-3", "image", "2025-11-14", "2026-05-12", "gpt-image-2"),
+        ("gpt-4o-mini-tts", "audio", "2026-10-01", "2027-01-06", None),
+        ("tts-1-hd", "audio", "2026-10-01", "2027-01-06", None),
+        ("imagen-4.0-generate-001", "image", "2026-06-15", "2026-08-17", "gemini-nano-banana-2.1"),
+        ("gemini-2.5-flash-image", "image", None, "2027-03-15", "gemini-3.1-flash-lite-image"),
+        ("gemini-3.1-flash-image", "image", "2026-10-06", None, "gemini-nano-banana-2.1"),
+        ("veo-2.0-generate-001", "video", "2026-06-15", "2026-06-30", "veo-3.1-generate-001"),
+        ("veo-3.1-generate-preview", "video", None, "2026-10-22", "gemini-omni-1.1-flash"),
+        ("grok-imagine-image-pro", "image", None, "2026-05-15", "grok-imagine-image-2.0"),
+        ("grok-imagine-image-quality", "image", "2026-09-02", "2026-11-02", "grok-imagine-image-2.0"),
+        ("doubao-seedream-3-0-t2i-250415", "image", "2026-04-03", "2026-05-11", "doubao-seedream-5-0-pro-260628"),
+        ("doubao-seedream-4-0-250828", "image", "2026-09-22", "2026-11-24", None),
+        ("doubao-seedance-1-0-pro-250528", "video", "2026-09-22", "2026-11-24", "doubao-seedance-2-0-mini-260615"),
+        ("doubao-seedance-1-0-lite-i2v-250428", "video", "2026-04-03", "2026-05-11",
+         "doubao-seedance-2-0-fast-260128"),
+        ("stable-video-diffusion", "video", "2025-07-24", "2025-07-24", None),
+        ("eleven_turbo_v2_5", "audio", "2026-10-29", None, "eleven_flash_v2_5"),
+    ]
+    for model, modality, deprecated_on, retired_on, replacement in cases:
+        entry = limits_for(model, modality)
+        assert (entry.deprecated_on, entry.retired_on, entry.replacement) == (
+            deprecated_on, retired_on, replacement), model
+
+
+def test_new_models_pinned_against_official_docs():
+    sunburst = limits_for("gpt-image-2.5-sunburst", "image")
+    assert sunburst.max_output_longest_side == 3840 and sunburst.max_prompt_chars == 32000
+    assert sunburst.lifecycle() == "active"
+    omni = limits_for("gemini-omni-1.1-flash", "video")
+    assert (omni.min_duration_seconds, omni.max_duration_seconds) == (3, 10)
+    assert omni.aspect_ratios == ("16:9", "9:16")
+    assert omni.supports_reference_audio is False and omni.supports_negative_prompt is False
+    assert limits_for("gemini-nano-banana-2.1", "image").max_input_images == 14
+    assert "1:8" in limits_for("gemini-nano-banana-2.1", "image").aspect_ratios
+    assert limits_for("gemini-3.1-flash-lite-image", "image").supported_sizes == ("1K",)
+    assert limits_for("veo-3.1-generate-001", "video").max_output_count == 4
+    assert limits_for("lyria-3.5", "music").max_input_images == 10
+    assert limits_for("lyria-3-clip-preview", "music").max_duration_seconds == 30
+    assert limits_for("lyria-3-pro-preview", "music").max_duration_seconds == 184
+    # "lyria-3" was never a Lyria model id: it now gets the permissive fallback.
+    assert "permissive" in limits_for("lyria-3", "music").notes
+    assert limits_for("grok-imagine-video-1.5", "video").max_input_images == 14
+    assert limits_for("grok-imagine-video", "video").max_input_images == 7
+    assert "5:2" in limits_for("grok-imagine-image-2.0", "image").aspect_ratios
+    seedance25 = limits_for("doubao-seedance-2-5-260628", "video")
+    assert (seedance25.min_duration_seconds, seedance25.max_duration_seconds) == (4, 30)
+    assert seedance25.max_input_images == 30 and seedance25.exclusive_frames_and_references is True
+    assert limits_for("doubao-seedance-2-0-mini-260615", "video").max_input_images == 9
+    assert limits_for("doubao-seedance-1-0-pro-250528", "video").supports_audio_output is False
+    seedream5 = limits_for("doubao-seedream-5-0-pro-260628", "image")
+    assert seedream5.max_input_images == 10 and seedream5.max_output_count == 1
+    assert limits_for("MiniMax-H3", "video").exclusive_frames_and_references is True
+    assert limits_for("MiniMax-H3-Max", "video").min_duration_seconds == 5
+    assert limits_for("sd3.5-flash", "image").max_prompt_chars == 10000
+    eleven_v4 = limits_for("eleven_v4", "audio")
+    assert (eleven_v4.min_speed, eleven_v4.max_speed) == (1.0, 1.0) and eleven_v4.max_prompt_chars == 10000
+    assert limits_for("music_v2_5", "music").max_duration_seconds == 600
+    assert limits_for("chirp-v4-0", "music").max_prompt_chars == 5000
+    assert limits_for("chirp-v5", "music").replacement == "chirp-v6"
+    assert limits_for("mureka-9.5", "music").max_output_count == 3
+    assert limits_for("wan2.6-t2i", "image").max_output_longest_side == 2880
+    i2v = limits_for("wan2.6-i2v", "video")
+    assert (i2v.min_duration_seconds, i2v.max_duration_seconds) == (2, 15) and i2v.supports_last_frame is False
+    assert limits_for("wan2.2-t2v-plus", "video").supports_audio_output is False
+    assert limits_for("happyhorse-1.1-r2v", "video").max_input_images == 9
+    assert (limits_for("happyhorse-1.1-t2v", "video").min_duration_seconds,
+            limits_for("happyhorse-1.1-t2v", "video").max_duration_seconds) == (3, 15)
+    assert limits_for("happyhorse-1.1-i2v", "video").aspect_ratios == ()
+    assert limits_for("wan2.7-i2v", "video").supports_reference_audio is True
 
 
 # --------------------------------------------------------------------------- #
@@ -276,20 +352,20 @@ def _registry(providers, keys=None):
 
 def test_resolve_auto_picks_a_fitting_model():
     cfg = BackendConfig(name="oai", type="openai", api_key="k")
-    prov = _StubProvider(cfg, image=["gpt-image-1"])
+    prov = _StubProvider(cfg, image=["gpt-image-2"])
     reg = _registry([prov])
     key = KeyConfig(id="t", key="")
 
     req = UnifiedImageRequest(model="auto", content=[img_text("hello")])
     provider, real_model, backend = reg.resolve_auto(req, key, modality="image")
     assert backend == "oai"
-    assert real_model == "gpt-image-1"
+    assert real_model == "gpt-image-2"
 
 
 def test_resolve_auto_skips_text_only_model_for_image_input():
     cfg = BackendConfig(name="oai", type="openai", api_key="k")
-    # Two models: dall-e-3 (text-only) and gpt-image-1 (multimodal).
-    prov = _StubProvider(cfg, image=["dall-e-3", "gpt-image-1"])
+    # Two models: stable-image-core (text-only) and gpt-image-2 (multimodal).
+    prov = _StubProvider(cfg, image=["stable-image-core", "gpt-image-2"])
     reg = _registry([prov])
     key = KeyConfig(id="t", key="")
 
@@ -297,13 +373,13 @@ def test_resolve_auto_skips_text_only_model_for_image_input():
         model="auto", content=[img_text("edit"), img_image(data="AAAA", mime_type="image/png")]
     )
     _provider, real_model, _backend = reg.resolve_auto(req, key, modality="image")
-    assert real_model == "gpt-image-1"
+    assert real_model == "gpt-image-2"
 
 
 def test_resolve_auto_raises_when_no_model_fits():
     cfg = BackendConfig(name="oai", type="openai", api_key="k")
     # Only a text-only model, but the request carries an image.
-    prov = _StubProvider(cfg, image=["dall-e-3"])
+    prov = _StubProvider(cfg, image=["stable-image-core"])
     reg = _registry([prov])
     key = KeyConfig(id="t", key="")
 
@@ -338,8 +414,8 @@ def test_resolve_auto_music_with_lyrics_routes_to_lyrics_capable_model():
 def test_resolve_auto_prefers_key_default_backend():
     a = BackendConfig(name="aaa", type="openai", api_key="k", tags=["quality"])
     b = BackendConfig(name="bbb", type="google", api_key="k", tags=["fast"])
-    prov_a = _StubProvider(a, image=["gpt-image-1"])
-    prov_b = _StubProvider(b, image=["imagen-4.0-generate-001"])
+    prov_a = _StubProvider(a, image=["gpt-image-2"])
+    prov_b = _StubProvider(b, image=["gemini-nano-banana-2.1"])
     key = KeyConfig(id="t", key="", default_image_backend="bbb")
     reg = _registry([prov_a, prov_b], keys=[key])
 
@@ -350,19 +426,19 @@ def test_resolve_auto_prefers_key_default_backend():
 
 def test_resolve_dispatches_on_auto_to_auto_router():
     cfg = BackendConfig(name="oai", type="openai", api_key="k")
-    prov = _StubProvider(cfg, image=["gpt-image-1"])
+    prov = _StubProvider(cfg, image=["gpt-image-2"])
     reg = _registry([prov])
     key = KeyConfig(id="t", key="")
 
     req = UnifiedImageRequest(model="auto", content=[img_text("hi")])
     provider, real_model, backend = reg.resolve(req.model, key, modality="image", request=req)
     assert backend == "oai"
-    assert real_model == "gpt-image-1"
+    assert real_model == "gpt-image-2"
 
 
 def test_resolve_auto_without_request_raises_validation_error():
     cfg = BackendConfig(name="oai", type="openai", api_key="k")
-    prov = _StubProvider(cfg, image=["gpt-image-1"])
+    prov = _StubProvider(cfg, image=["gpt-image-2"])
     reg = _registry([prov])
     key = KeyConfig(id="t", key="")
     with pytest.raises(Exception):  # ValidationError

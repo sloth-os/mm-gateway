@@ -261,7 +261,7 @@ def test_mureka_create_and_poll_succeeded() -> None:
             "status": "succeeded", "audio_url": "https://x.test/mk.mp3", "duration": 20,
         })
 
-    _mount(p, handler, base_url="https://platform.mureka.ai")
+    _mount(p, handler, base_url="https://api.mureka.ai")
 
     task = asyncio.run(p.create_music_task(_req(model="mureka-song-1", style="pop")))
     assert task.task_id == "mk-1"
@@ -287,7 +287,7 @@ def test_mureka_lyrics_input_routes_to_lyrics_field() -> None:
             return httpx.Response(200, json={"task_id": "mk-2"})
         return httpx.Response(200, json={"status": "running"})
 
-    _mount(p, handler, base_url="https://platform.mureka.ai")
+    _mount(p, handler, base_url="https://api.mureka.ai")
     # Multi-line text looks like lyrics -> sent as `lyrics`.
     asyncio.run(p.create_music_task(_req(prompt="verse one\nchorus here")))
     assert "lyrics" in captured["body"]
@@ -303,7 +303,7 @@ def test_mureka_failed_status_surfaces_error() -> None:
             return httpx.Response(200, json={"task_id": "mk-3"})
         return httpx.Response(200, json={"status": "failed", "fail_message": "nope"})
 
-    _mount(p, handler, base_url="https://platform.mureka.ai")
+    _mount(p, handler, base_url="https://api.mureka.ai")
     asyncio.run(p.create_music_task(_req()))
     result = asyncio.run(p.get_music_task("mk-3"))
     assert result.status == "failed"
@@ -667,7 +667,7 @@ def test_lyria_translates_inline_reference_media() -> None:
     from mm_gateway.schemas.music import image_part
 
     request = UnifiedMusicRequest(
-        model="lyria-3",
+        model="lyria-3.5",
         content=[
             text_part("a happy song"),
             image_part("data:image/png;base64,BBBB"),

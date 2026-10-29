@@ -135,6 +135,10 @@ _PRICES: dict[str, ModelPrice] = {
     "gemini-2.5-flash-image": ModelPrice(
         per_image=0.039, as_of="2026-10-01", source_urls=_GEMINI_PRICING,
     ),
+    # Lyria (standard tier): a flat price per generated song or 30-second clip.
+    "lyria-3.5": ModelPrice(per_request=0.08, as_of="2026-10-29", source_urls=_GEMINI_PRICING),
+    "lyria-3-pro-preview": ModelPrice(per_request=0.08, as_of="2026-10-29", source_urls=_GEMINI_PRICING),
+    "lyria-3-clip-preview": ModelPrice(per_request=0.04, as_of="2026-10-29", source_urls=_GEMINI_PRICING),
 }
 
 

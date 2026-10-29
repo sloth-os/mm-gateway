@@ -30,7 +30,8 @@ from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMus
 
 log = get_logger("provider.mureka")
 
-_BASE = "https://platform.mureka.ai"
+# The API host (platform.mureka.ai serves the docs and console).
+_BASE = "https://api.mureka.ai"
 
 # Candidate response field names for the task id and audio url. Mureka's query
 # response carries the result at the top level and/or nested; try each in turn.
@@ -52,7 +53,8 @@ _STATUS_MAP = {
 
 class MurekaProvider(MusicProvider):
     name = "mureka"
-    music_models: ClassVar[list[str]] = ["mureka-song-1", "mureka-song-1.5"]
+    # The ``model`` values /v1/song/generate accepts (``auto`` is left out: it is the gateway's routing keyword).
+    music_models: ClassVar[list[str]] = ["mureka-9.5", "mureka-9", "mureka-8", "mureka-7.6", "mureka-o2"]
 
     def __init__(self, backend):
         super().__init__(backend)

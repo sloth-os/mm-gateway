@@ -492,3 +492,20 @@ def test_poll_propagates_upstream_error() -> None:
     _mount(p, _poll_handler(lambda r: httpx.Response(404, text="not found")))
     with pytest.raises(ProviderRequestError):
         asyncio.run(p.get_video_task("req-1"))
+
+
+def test_video_create_forwards_include_audio() -> None:
+    p = XAIProvider(_backend())
+    bodies: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(_body(request))
+        return httpx.Response(200, json={"request_id": "req-a"})
+
+    _mount(p, handler)
+    asyncio.run(p.create_video_task(UnifiedVideoRequest(
+        model="grok-imagine-video-1.5", content=[text_part("quiet")], generate_audio=False)))
+    asyncio.run(p.create_video_task(UnifiedVideoRequest(
+        model="grok-imagine-video-1.5", content=[text_part("default")])))
+    assert bodies[0]["generate_audio"] is False
+    assert "generate_audio" not in bodies[1]

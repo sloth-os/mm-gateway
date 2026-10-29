@@ -126,7 +126,7 @@ def test_single_base_url_when_not_split(monkeypatch: pytest.MonkeyPatch) -> None
 # -- image --------------------------------------------------------------- #
 
 def test_image_generate_maps_params_and_response(provider: VolcengineProvider) -> None:
-    req = UnifiedImageRequest(model="doubao-seedream-4-0-t2i-250828", content=[image_text_part("a cat")],
+    req = UnifiedImageRequest(model="doubao-seedream-4-0-250828", content=[image_text_part("a cat")],
                               size="1024x1024", seed=7, guidance_scale=2.5, watermark=True)
     task = asyncio.run(provider.create_image_task(req))
     assert task.status == "pending" and task.task_id
@@ -137,7 +137,7 @@ def test_image_generate_maps_params_and_response(provider: VolcengineProvider) -
     assert task.provider == "volcengine"
     assert task.usage is not None and task.usage.total_tokens == 12
     kw = provider._ark.image_calls[0]
-    assert kw["model"] == "doubao-seedream-4-0-t2i-250828"
+    assert kw["model"] == "doubao-seedream-4-0-250828"
     assert kw["prompt"] == "a cat"
     assert kw["size"] == "1024x1024"
     assert kw["seed"] == 7 and kw["guidance_scale"] == 2.5 and kw["watermark"] is True
@@ -281,3 +281,30 @@ def test_poll_propagates_sdk_error(provider: VolcengineProvider) -> None:
     provider._ark.content_generation.tasks.get = boom
     with pytest.raises(ProviderRequestError):
         asyncio.run(provider.get_video_task("nope"))
+
+
+def test_seedance2_keeps_frames_and_drops_references(provider: VolcengineProvider) -> None:
+    # First frame, first+last frame and multimodal references are exclusive Seedance 2.x modes.
+    req = UnifiedVideoRequest(
+        model="doubao-seedance-2-5-260628",
+        content=[
+            text_part("animate"),
+            image_part("https://x.test/first.png", "first_frame"),
+            image_part("https://x.test/r1.png", "reference_image"),
+            video_part("https://x.test/rv.mp4"),
+            audio_part("https://x.test/ra.mp3"),
+        ],
+    )
+    asyncio.run(provider.create_video_task(req))
+    content = provider._ark.content_generation.tasks.create_calls[0]["content"]
+    assert [(c["type"], c.get("role")) for c in content] == [("text", None), ("image_url", "first_frame")]
+
+
+def test_seedance1_content_passes_through_unchanged(provider: VolcengineProvider) -> None:
+    req = UnifiedVideoRequest(
+        model="doubao-seedance-1-0-pro-250528",
+        content=[text_part("animate"), image_part("https://x.test/first.png", "first_frame"),
+                 image_part("https://x.test/r1.png", "reference_image")],
+    )
+    asyncio.run(provider.create_video_task(req))
+    assert len(provider._ark.content_generation.tasks.create_calls[0]["content"]) == 3

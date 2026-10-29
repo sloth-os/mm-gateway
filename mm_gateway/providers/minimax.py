@@ -43,6 +43,7 @@ from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._dimensions import aspect_ratio
 from mm_gateway.providers._http import _map_status, proxy_kwargs
 from mm_gateway.providers._speech_minimax import MiniMaxSpeechMixin
+from mm_gateway.providers._video_content import frames_over_references
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
@@ -72,7 +73,7 @@ _VIDEO_STATUS_MAP = {
 class MiniMaxProvider(MiniMaxSpeechMixin, MusicProvider, VideoProvider):
     name = "minimax"
     music_models: ClassVar[list[str]] = ["music-3.0", "music-2.6", "music-cover"]
-    video_models: ClassVar[list[str]] = ["MiniMax-H3"]
+    video_models: ClassVar[list[str]] = ["MiniMax-H3", "MiniMax-H3-Max", "MiniMax-H3-Highspeed", "MiniMax-H3-Lite"]
 
     def __init__(self, backend):
         super().__init__(backend)
@@ -341,10 +342,14 @@ class MiniMaxProvider(MiniMaxSpeechMixin, MusicProvider, VideoProvider):
     def _build_video_body(self, request: UnifiedVideoRequest) -> dict[str, Any]:
         # The H3 ``content[]`` shape is the unified video content shape, so the
         # typed parts pass straight through as dicts (text / image_url-with-role
-        # / video_url / audio_url).
+        # / video_url / audio_url). Image-to-video and reference-to-video are
+        # mutually exclusive: a request with a frame keeps it and drops the references.
+        parts, dropped = frames_over_references(request)
+        if dropped:
+            log.info("minimax_references_dropped_for_frames", model=request.model, dropped=dropped)
         body: dict[str, Any] = {
             "model": request.model,
-            "content": [p.model_dump(exclude_none=True) for p in request.content],
+            "content": [p.model_dump(exclude_none=True) for p in parts],
         }
         if request.duration is not None:
             body["duration"] = int(request.duration)

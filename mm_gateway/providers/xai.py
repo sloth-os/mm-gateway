@@ -57,11 +57,14 @@ def _cost_from_ticks(ticks: Any) -> float | None:
 class XAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "xai"
     image_models: ClassVar[list[str]] = [
+        "grok-imagine-image-2.0",
         "grok-imagine-image",
-        "grok-imagine-image-pro",
         "grok-imagine-image-quality",
+        "grok-imagine-image-pro",
     ]
     video_models: ClassVar[list[str]] = [
+        "grok-imagine-video-1.5",
+        "grok-imagine-video-1.5-lite",
         "grok-imagine-video",
         "grok-imagine-video-1.5-preview",
     ]
@@ -169,6 +172,9 @@ class XAIProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             body["image"] = {"url": request.first_image()}
         if request.reference_images():
             body["reference_images"] = [{"url": u} for u in request.reference_images()]
+        if request.generate_audio is not None:
+            # Videos carry a sound track by default; False renders a silent video.
+            body["generate_audio"] = request.generate_audio
         body.update(request.extra)
 
         data = await request_json(

@@ -60,20 +60,22 @@ _PROVIDER_CLASSES: dict[str, str] = {
 # Gateway-friendly model aliases -> (backend type, real_model). Lets clients call
 # a stable name like "gateway-image-pro" without pinning a backend-specific id.
 _MODEL_ALIASES: dict[str, tuple[str, str]] = {
-    "gateway-image-pro": ("openai", "gpt-image-1"),
-    "gateway-image-fast": ("openai", "gpt-image-1-mini"),
+    # Aliases follow each provider's documented successor once a target is shut down
+    # (gpt-image-1 on 2026-10-23, Imagen 4 and Veo 2/3 on the Gemini API, Seedream 3.0).
+    "gateway-image-pro": ("openai", "gpt-image-2.5-sunburst"),
+    "gateway-image-fast": ("openai", "gpt-image-2.5-flare"),
     "gateway-image-flux": ("flux", "flux-2-pro-text-to-image"),
-    "gateway-image-imagen": ("google", "imagen-4.0-generate-001"),
-    # Vertex AI serves the same Imagen/Veo ids as the AI Studio surface; distinct
+    "gateway-image-imagen": ("google", "gemini-nano-banana-2.1"),
+    # Vertex AI serves the same Gemini/Veo ids as the AI Studio surface; distinct
     # aliases let a client target the Enterprise platform host explicitly.
-    "gateway-image-vertex": ("vertex", "imagen-4.0-generate-001"),
+    "gateway-image-vertex": ("vertex", "gemini-nano-banana-2.1"),
     "gateway-image-grok": ("xai", "grok-imagine-image"),
-    "gateway-image-seedream": ("volcengine", "doubao-seedream-3-0-t2i-250415"),
+    "gateway-image-seedream": ("volcengine", "doubao-seedream-5-0-pro-260628"),
     "gateway-image-wanx": ("dashscope", "wanx2.1-t2i-turbo"),
     "gateway-image-sd": ("stability", "stable-image-core"),
-    "gateway-video-pro": ("volcengine", "doubao-seedance-1-0-pro-250528"),
-    "gateway-video-veo": ("google", "veo-2.0-generate-001"),
-    "gateway-video-vertex": ("vertex", "veo-2.0-generate-001"),
+    "gateway-video-pro": ("volcengine", "doubao-seedance-2-0-260128"),
+    "gateway-video-veo": ("google", "gemini-omni-1.1-flash"),
+    "gateway-video-vertex": ("vertex", "veo-3.1-generate-001"),
     "gateway-video-sora": ("openai", "sora-2"),
     "gateway-video-grok": ("xai", "grok-imagine-video"),
     "gateway-video-wan": ("dashscope", "wanx2.1-t2v-turbo"),
@@ -90,12 +92,12 @@ _MODEL_ALIASES: dict[str, tuple[str, str]] = {
     "gateway-audio-fast": ("elevenlabs", "eleven_flash_v2_5"),
     "gateway-audio-minimax": ("minimax", "speech-2.8-hd"),
     "gateway-audio-azure": ("azure", "azure-tts"),
-    "gateway-music-lyria": ("google", "lyria-3"),
-    "gateway-music-vertex": ("vertex", "lyria-3"),
+    "gateway-music-lyria": ("google", "lyria-3.5"),
+    "gateway-music-vertex": ("vertex", "lyria-3-pro-preview"),
     "gateway-music-elevenlabs": ("elevenlabs", "music_v2"),
     "gateway-music-minimax": ("minimax", "music-3.0"),
-    "gateway-music-udio": ("udioapi", "chirp-v5"),
-    "gateway-music-mureka": ("mureka", "mureka-song-1"),
+    "gateway-music-udio": ("udioapi", "chirp-v6"),
+    "gateway-music-mureka": ("mureka", "mureka-9.5"),
     "gateway-music-acestep": ("acestep", "ace-step-1.5"),
 }
 

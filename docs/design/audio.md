@@ -9,8 +9,8 @@ audio model identifies its hosting speech service.
 
 | Adapter | Speech call and result | Clone operation | Controls and constraints |
 |---|---|---|---|
-| OpenAI | `POST /v1/audio/speech`; binary audio | Upload a consent recording to `/v1/audio/voice_consents`, then submit `audio_sample` and its consent id to `/v1/audio/voices` | 4,096 text characters; speed 0.25–4; MP3, Opus, AAC, FLAC, WAV, PCM. Separate instructions on GPT speech models. PCM is fixed 24 kHz mono S16LE. |
-| ElevenLabs | `POST /v1/text-to-speech/{voice_id}`; binary audio | Multipart `/v1/voices/add`, with one or more `files`, returns a voice id and verification flag | Multilingual v2: 10,000 characters; Flash/Turbo v2.5: 40,000; v3: 5,000. Speed 0.7–1.2; language and seed where supported. Encoding combines codec, sample rate and bitrate. |
+| OpenAI | `POST /v1/audio/speech`; binary audio | Upload a consent recording to `/v1/audio/voice_consents`, then submit `audio_sample` and its consent id to `/v1/audio/voices` | 4,096 text characters; speed 0.25–4; MP3, Opus, AAC, FLAC, WAV, PCM. Separate instructions on GPT speech models. PCM is fixed 24 kHz mono S16LE. Every speech model is deprecated (2026-10-01) and shuts down on 2027-01-06. |
+| ElevenLabs | `POST /v1/text-to-speech/{voice_id}`; binary audio | Multipart `/v1/voices/add`, with one or more `files`, returns a voice id and verification flag | v4 and Multilingual v2: 10,000 characters; Flash/Turbo v2.5: 40,000; v3: 5,000. Speed 0.7–1.2 (v4 and v4 Turbo have no speed setting); language and seed where supported. Encoding combines codec, sample rate and bitrate. |
 | MiniMax | `POST /v1/t2a_v2`; completed hex audio or a temporary URL | Upload a file with purpose `voice_clone`, then call `/v1/voice_clone` using the uploaded file id and a gateway-generated native voice id | Under 10,000 characters; speed 0.5–2; MP3, PCM, FLAC, WAV, Opus. Rates 8/16/22.05/24/32/44.1 kHz; MP3 bitrates 32/64/128/256 kbps. |
 | Azure | Official Speech SDK `SpeechSynthesizer.speak_text_async` / `speak_ssml_async`; in-memory `audio_data` | Not exposed by this adapter | 64 KiB escaped UTF-8 synthesis message; speed 0.5–2; MP3, WAV, mono S16LE PCM, Ogg Opus. Locale control via SSML on compatible multilingual voices. |
 
@@ -23,6 +23,9 @@ access and recording checks still apply. Legacy `tts-1`/`tts-1-hd` are served
 for built-in speech but are excluded from cloning and cloned-voice reuse.
 See the official [speech API](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create)
 and [custom voice guide](https://developers.openai.com/api/docs/guides/custom-voices).
+OpenAI deprecated `gpt-4o-mini-tts`, `tts-1` and `tts-1-hd` on 2026-10-01 with a shutdown on 2027-01-06; the suggested
+replacement, `gpt-realtime-2.1-mini`, runs on the Realtime API and is not served by `/v1/audio/speech`
+([deprecations](https://developers.openai.com/api/docs/deprecations)), so the catalogue names no replacement.
 
 ElevenLabs Instant Voice Cloning accepts multiple uploaded samples. The gateway
 exposes the verification flag and keeps the clone running until its background
@@ -40,7 +43,12 @@ support that control. See [TTS](https://elevenlabs.io/docs/api-reference/text-to
 Turbo v2.5 is documented as deprecated in favor of Flash v2.5. Its 40,000
 character ceiling here is inferred from the provider's stated functional
 equivalence to Flash v2.5; Flash has an explicit published limit. The gateway's
-fast alias targets Flash, and Turbo remains available for explicit requests.
+fast alias targets Flash, and Turbo remains available for explicit requests; the
+catalogue marks it deprecated (ElevenLabs publishes no date, so the entry carries
+the day the listing was checked, 2026-10-29). Eleven v4 (`eleven_v4`, 10,000
+characters) and Eleven v4 Turbo (`eleven_v4_turbo`, no published limit) offer only
+Stability and Similarity settings, so their catalogue entries accept speed 1.0
+only ([Eleven v4](https://elevenlabs.io/docs/overview/capabilities/text-to-speech/eleven-v4)).
 
 MiniMax accepts one MP3/M4A/WAV cloning sample, 10–300 seconds long, at most
 20 MB. Unused clones expire after seven days. Voice creation fees are incurred

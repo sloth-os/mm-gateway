@@ -190,3 +190,21 @@ def test_build_no_extra_model_leaves_list_unchanged(monkeypatch):
 # Capture the real import so the monkeypatch only reroutes the stub path and
 # leaves every other import (pytest internals, etc.) intact.
 _real_import_module = importlib.import_module
+
+
+def test_builtin_aliases_follow_documented_successors():
+    """Every built-in alias names a model its provider serves; a retired target is allowed only when the
+    catalogue knows no replacement for it (Sora 2, Stable Video Diffusion)."""
+    import importlib
+
+    from mm_gateway.models.catalog import Catalog
+    from mm_gateway.registry import _MODEL_ALIASES, _PROVIDER_CLASSES
+
+    catalog = Catalog()
+    for alias, (provider_type, model) in _MODEL_ALIASES.items():
+        cls = getattr(importlib.import_module(f"mm_gateway.providers.{provider_type}"),
+                      _PROVIDER_CLASSES[provider_type])
+        modality = next(m for m in ("image", "video", "music", "audio") if model in getattr(cls, f"{m}_models"))
+        limits = catalog.limits_for(model, modality)
+        if limits.lifecycle(catalog.today()) == "retired":
+            assert limits.replacement is None, f"{alias} -> {model} is retired; use {limits.replacement}"

@@ -399,3 +399,24 @@ def test_poll_path_includes_task_id() -> None:
     _mount_video(p, handler, base_url="https://api.minimax.io")
     asyncio.run(p.get_video_task("mm-task-42"))
     assert captured["path"] == "/v2/query/video_generation/mm-task-42"
+
+
+def test_create_frames_and_references_are_exclusive() -> None:
+    # Image-to-video and reference-to-video are mutually exclusive on H3: the frame wins.
+    p = MiniMaxProvider(_backend())
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = _body(request)
+        return httpx.Response(200, json={"task_id": "t"})
+
+    _mount_video(p, handler, base_url="https://api.minimax.io")
+    asyncio.run(p.create_video_task(UnifiedVideoRequest(
+        model="MiniMax-H3-Max", duration=6,
+        content=[text_part("a cat"), image_part("https://x.test/last.png", "last_frame"),
+                 image_part("https://x.test/ref.png", "reference_image"),
+                 video_part("https://x.test/ref.mp4"), audio_part("https://x.test/ref.mp3")],
+    )))
+    assert [(c["type"], c.get("role")) for c in captured["body"]["content"]] == [
+        ("text", None), ("image_url", "last_frame")]
+    assert captured["body"]["model"] == "MiniMax-H3-Max"

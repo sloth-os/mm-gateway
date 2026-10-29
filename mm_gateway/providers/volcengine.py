@@ -27,6 +27,7 @@ from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._dimensions import aspect_ratio, pixel_size, video_resolution
 from mm_gateway.providers._http import proxy_kwargs
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
+from mm_gateway.providers._video_content import frames_over_references
 from mm_gateway.schemas.image import (
     ImageData,
     ImageUsage,
@@ -57,16 +58,20 @@ _STATUS_MAP = {
 class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "volcengine"
     image_models: ClassVar[list[str]] = [
+        "doubao-seedream-5-0-pro-260628",
+        "doubao-seedream-5-0-flash-260915",
+        "doubao-seedream-4-0-250828",
         "doubao-seedream-3-0-t2i-250415",
-        "doubao-seedream-4-0-t2i-250828",
     ]
     video_models: ClassVar[list[str]] = [
+        # Seedance 2.x — one omni model per tier; the content parts pick t2v / i2v / r2v.
+        "doubao-seedance-2-5-260628",
+        "doubao-seedance-2-0-260128",
+        "doubao-seedance-2-0-fast-260128",
+        "doubao-seedance-2-0-mini-260615",
         # Seedance 1.0 — distinct t2v / i2v model ids.
         "doubao-seedance-1-0-pro-250528",
         "doubao-seedance-1-0-lite-i2v-250428",
-        "doubao-seedance-1-0-pro-i2v-250528",
-        # Seedance 2.0 — one omni model; the content parts pick t2v / i2v / r2v.
-        "doubao-seedance-2-0-260128",
     ]
 
     def __init__(self, backend):
@@ -124,7 +129,16 @@ class VolcengineProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
         # The unified request *is* the Seedance content-array shape, so the
         # content parts pass straight through (as dicts the Ark SDK accepts).
-        content = [p.model_dump(exclude_none=True) for p in request.content]
+        # On Seedance 2.x, first frame, first+last frame and multimodal
+        # references are exclusive modes: a request with a frame keeps it and
+        # drops the references.
+        parts = list(request.content)
+        if "seedance-2" in request.model:
+            parts, dropped = frames_over_references(request)
+            if dropped:
+                log.info("volcengine_seedance_references_dropped_for_frames",
+                         model=request.model, dropped=dropped)
+        content = [p.model_dump(exclude_none=True) for p in parts]
         kwargs: dict[str, Any] = {"model": request.model, "content": content}
         if request.duration is not None:
             kwargs["duration"] = int(request.duration)

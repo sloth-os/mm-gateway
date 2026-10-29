@@ -54,7 +54,9 @@ class StabilityProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "stability"
     image_models: ClassVar[list[str]] = [
         "sd3.5-large",
+        "sd3.5-large-turbo",
         "sd3.5-medium",
+        "sd3.5-flash",
         "sdxl",
         "stable-image-core",
         "stable-image-ultra",

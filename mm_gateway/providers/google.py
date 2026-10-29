@@ -1,12 +1,14 @@
-"""Google provider — Imagen (image), Veo (video) and Lyria (music).
+"""Google provider — Gemini/Imagen (image), Gemini Omni and Veo (video) and Lyria (music).
 
-Image and video go through the ``google-genai`` SDK (``client.aio.models`` and
+Image and Veo video go through the ``google-genai`` SDK (``client.aio.models`` and
 ``client.aio.operations``). Music is served by the **Lyria 3** Interactions
 API (``POST /v1beta/interactions``), spoken directly over httpx against the
 same ``generativelanguage.googleapis.com`` host the SDK uses, authenticated
 with the ``x-goog-api-key`` header. Lyria is synchronous — a single
 Interactions call returns the audio inline — so, like ElevenLabs/MiniMax, we
 wrap it as a synthetic in-memory task for the gateway's uniform poll surface.
+Gemini Omni video uses the same surface as a background interaction: the create
+returns its id and the poll ``GET``s it (see :mod:`mm_gateway.providers._omni`).
 """
 
 from __future__ import annotations
@@ -28,15 +30,17 @@ from mm_gateway.core.exceptions import (
 from mm_gateway.observability.httplog import backend_event_hooks
 from mm_gateway.observability.logging import get_logger
 from mm_gateway.providers._genai_media import GenaiImageVideoMixin
-from mm_gateway.providers._http import proxy_kwargs
+from mm_gateway.providers._http import make_client, proxy_kwargs, request_json
 from mm_gateway.providers._lyria import (
     extract_lyria_output,
     lyria_body,
     lyria_media_type,
     lyria_request_mime,
 )
+from mm_gateway.providers._omni import TASK_PREFIX, omni_body, omni_model, omni_task
 from mm_gateway.providers._sync_image import SyncImageTaskMixin
 from mm_gateway.schemas.music import MusicUsage, UnifiedMusicRequest, UnifiedMusicTask
+from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
 
 log = get_logger("provider.google")
 
@@ -50,16 +54,22 @@ _GLM_BASE = "https://generativelanguage.googleapis.com"
 class GoogleProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, VideoProvider, MusicProvider):
     name = "google"
     image_models: ClassVar[list[str]] = [
+        "gemini-nano-banana-2.1",
+        "gemini-3-pro-image",
+        "gemini-3.1-flash-image",
+        "gemini-3.1-flash-lite-image",
+        "gemini-2.5-flash-image",
         "imagen-4.0-generate-001",
         "imagen-3.0-generate-001",
-        "gemini-2.5-flash-image",
     ]
     video_models: ClassVar[list[str]] = [
-        "veo-2.0-generate-001",
-        "veo-3.0-generate-001",
+        # Gemini Omni Flash is served by the Interactions API (see ``_omni``); the Veo ids left the Gemini API.
+        "gemini-omni-1.1-flash",
         "veo-3.1-generate-preview",
+        "veo-3.0-generate-001",
+        "veo-2.0-generate-001",
     ]
-    music_models: ClassVar[list[str]] = ["lyria-3"]
+    music_models: ClassVar[list[str]] = ["lyria-3.5", "lyria-3-pro-preview", "lyria-3-clip-preview"]
 
     def __init__(self, backend):
         super().__init__(backend)
@@ -85,6 +95,11 @@ class GoogleProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
         self._music_base = (backend.extra.get("music_base_url")
                             or backend.base_url or _GLM_BASE).rstrip("/")
         self._api_key = backend.api_key
+        # Gemini Omni video: the Interactions REST surface on the video host.
+        self._client_interactions = make_client(
+            (video_base or _GLM_BASE).rstrip("/"), timeout=120.0,
+            headers={"x-goog-api-key": backend.api_key}, proxy_url=self._proxy_url,
+        )
 
     @staticmethod
     def _build_genai_client(api_key: str, base_url: str | None, proxy_url: str | None = None):
@@ -99,6 +114,26 @@ class GoogleProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
             else types.HttpOptions(**http_kwargs)
         return genai.Client(**kwargs)
 
+    # -- Gemini Omni video (Interactions) ---------------------------------- #
+
+    async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
+        if not omni_model(request.model):
+            return await super().create_video_task(request)
+        data = await request_json(self._client_interactions, "POST", "/v1beta/interactions",
+                                  provider=self.name, json=omni_body(request))
+        if not data.get("id"):
+            raise ProviderRequestError("google interaction create returned no id", provider=self.name,
+                                       details={"upstream_body": str(data)[:500]})
+        return omni_task(f"{TASK_PREFIX}{data['id']}", self.name, request.model, data)
+
+    async def get_video_task(self, task_id: str) -> UnifiedVideoTask:
+        if not task_id.startswith(TASK_PREFIX):
+            return await super().get_video_task(task_id)
+        data = await request_json(self._client_interactions, "GET",
+                                  f"/v1beta/interactions/{task_id.removeprefix(TASK_PREFIX)}",
+                                  provider=self.name)
+        return omni_task(task_id, self.name, str(data.get("model") or ""), data)
+
     # -- Lyria music ------------------------------------------------------- #
 
     async def create_music_task(self, request: UnifiedMusicRequest) -> UnifiedMusicTask:
@@ -110,7 +145,7 @@ class GoogleProvider(SyncImageTaskMixin, GenaiImageVideoMixin, ImageProvider, Vi
             )
         task_id = f"lyria-{uuid.uuid4().hex}"
         _MUSIC_TASKS[task_id] = {
-            "model": request.model or "lyria-3",
+            "model": request.model or "lyria-3.5",
             "request": request,
             "status": "pending",
             "created_at": int(time.time()),

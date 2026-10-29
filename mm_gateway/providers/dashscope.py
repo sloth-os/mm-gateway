@@ -373,12 +373,31 @@ class _AsyncNotSupported(Exception):
 # first or last frame cannot be combined with references, so a request that carries both keeps its frames and drops
 # the references. There is no negative prompt
 # (https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-api-reference).
-_NATIVE_MEDIA_PREFIXES = ("wan3",)
+# HappyHorse 1.1 and wan2.7-i2v take the same native body with their own media types and parameters
+# (https://www.alibabacloud.com/help/en/model-studio/happyhorse-api-reference/,
+# https://www.alibabacloud.com/help/en/model-studio/image-to-video-general-api-reference).
+_NATIVE_MEDIA_PREFIXES = ("wan3", "happyhorse", "wan2.7-i2v")
 _WAN3_RESOLUTIONS = (("480P", 480), ("720P", 720), ("1080P", 1080))
 _WAN3_RATIOS = frozenset({"adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"})
 _WAN3_MAX = {"reference_image": 10, "reference_video": 5, "reference_audio": 5}
 WAN3_MIN_DURATION, WAN3_MAX_DURATION = 2, 30
 _SEED_MAX = 2147483647
+# The new T2I protocol (wan2.6-t2i) is served on the messages-shaped generation surface
+# (https://help.aliyun.com/en/model-studio/text-to-image-v2-api-reference).
+_GENERATION_T2I_PREFIXES = ("wan2.6-t2i",)
+# Image-to-video takes the first frame as img_url and a resolution tier, not a size (the output follows the image's
+# ratio); wan2.7-t2v takes a resolution tier and a ratio instead of a size
+# (https://help.aliyun.com/en/model-studio/image-to-video-api-reference,
+# https://help.aliyun.com/en/model-studio/text-to-video-api-reference).
+_RESOLUTION_TIER_PREFIXES = ("wan2.7-t2v",)
+# HappyHorse: -t2v takes the prompt alone, -i2v exactly one first_frame (the output keeps its ratio, so no ratio
+# parameter) and -r2v 1-9 reference_image items cited as [Image N]; 3-15 s; no audio or prompt_extend parameter.
+_HAPPYHORSE_RATIOS = frozenset({"16:9", "9:16", "1:1", "4:3", "3:4", "4:5", "5:4", "9:21", "21:9"})
+HAPPYHORSE_MIN_DURATION, HAPPYHORSE_MAX_DURATION = 3, 15
+_HAPPYHORSE_MAX_REFERENCES = 9
+# wan2.7-i2v: first_frame, last_frame and driving_audio (the audio drives lip-sync and timing); 720P/1080P; 2-15 s.
+_WAN27_I2V_RESOLUTIONS = (("720P", 720), ("1080P", 1080))
+WAN27_I2V_MIN_DURATION, WAN27_I2V_MAX_DURATION = 2, 15
 
 
 def native_media_model(model: str | None) -> bool:
@@ -386,14 +405,35 @@ def native_media_model(model: str | None) -> bool:
     return bool(model) and model.lower().startswith(_NATIVE_MEDIA_PREFIXES)
 
 
-def _wan3_resolution(request: UnifiedVideoRequest) -> str | None:
+def resolution_tier_model(model: str | None) -> bool:
+    """SDK-path video models sized by a ``resolution`` tier (480P/720P/1080P) rather than a ``size``."""
+    m = (model or "").lower()
+    return "-i2v" in m or m.startswith(_RESOLUTION_TIER_PREFIXES)
+
+
+def _wan3_resolution(request: UnifiedVideoRequest, tiers: tuple[tuple[str, int], ...] = _WAN3_RESOLUTIONS) -> str | None:
     if request.resolution:
         tier = request.resolution.strip().upper()
         return tier if tier.endswith("P") else f"{tier}P"
     if request.width is None or request.height is None:
         return None
     short = min(request.width, request.height)
-    return min(_WAN3_RESOLUTIONS, key=lambda t: abs(t[1] - short))[0]
+    return min(tiers, key=lambda t: abs(t[1] - short))[0]
+
+
+def _native_parameters(request: UnifiedVideoRequest, low: int, high: int, *,
+                       resolutions: tuple[tuple[str, int], ...] = _WAN3_RESOLUTIONS) -> dict[str, Any]:
+    """The ``resolution``, ``duration`` (clamped to ``[low, high]``), ``seed`` and ``watermark`` parameters."""
+    parameters: dict[str, Any] = {}
+    if resolution := _wan3_resolution(request, resolutions):
+        parameters["resolution"] = resolution
+    if request.duration is not None and request.duration > 0:
+        parameters["duration"] = max(low, min(high, int(round(request.duration))))
+    if request.seed is not None and request.seed >= 0:
+        parameters["seed"] = request.seed % (_SEED_MAX + 1)
+    if request.watermark is not None:
+        parameters["watermark"] = request.watermark
+    return parameters
 
 
 def wan3_body(request: UnifiedVideoRequest) -> dict[str, Any]:
@@ -455,6 +495,63 @@ def wan3_body(request: UnifiedVideoRequest) -> dict[str, Any]:
     return {"model": request.model, "input": payload, "parameters": parameters}
 
 
+def happyhorse_body(request: UnifiedVideoRequest) -> dict[str, Any]:
+    """The native HappyHorse request body of ``request`` (the model id's suffix picks the mode)."""
+    model = request.model.lower()
+    images = [p.root.image_url.url for p in request.content if isinstance(p.root, VideoImagePart)]
+    media: list[dict[str, str]] = []
+    if model.endswith("-i2v") and (first := request.first_image()):
+        media = [{"type": "first_frame", "url": first}]
+    elif model.endswith("-r2v"):
+        # Every image of a reference-to-video request is a reference, cited in the prompt as [Image N].
+        media = [{"type": "reference_image", "url": url} for url in images[:_HAPPYHORSE_MAX_REFERENCES]]
+    parameters = _native_parameters(request, HAPPYHORSE_MIN_DURATION, HAPPYHORSE_MAX_DURATION)
+    if not model.endswith("-i2v") and (ratio := aspect_ratio(request)) in _HAPPYHORSE_RATIOS:
+        parameters["ratio"] = ratio
+    parameters.update(request.extra)
+    payload: dict[str, Any] = {"prompt": request.prompt() or ""}
+    if media:
+        payload["media"] = media
+    return {"model": request.model, "input": payload, "parameters": parameters}
+
+
+def wan27_i2v_body(request: UnifiedVideoRequest) -> dict[str, Any]:
+    """The native wan2.7-i2v request body: a first frame, an optional last frame and an optional driving audio.
+
+    Reference images and videos have no wan2.7-i2v counterpart and are dropped (``first_clip`` continuation is not
+    a gateway role); the output keeps the frame's ratio.
+    """
+    media: list[dict[str, str]] = []
+    for role in ("first_frame", "last_frame"):
+        url = next((p.root.image_url.url for p in request.content
+                    if isinstance(p.root, VideoImagePart) and p.root.role == role), None)
+        if url:
+            media.append({"type": role, "url": url})
+    if audios := request.reference_audios():
+        media.append({"type": "driving_audio", "url": audios[0]})
+    parameters = _native_parameters(request, WAN27_I2V_MIN_DURATION, WAN27_I2V_MAX_DURATION,
+                                    resolutions=_WAN27_I2V_RESOLUTIONS)
+    if request.prompt_extend is not None:
+        parameters["prompt_extend"] = request.prompt_extend
+    parameters.update(request.extra)
+    payload: dict[str, Any] = {"prompt": request.prompt() or ""}
+    if request.negative_prompt:
+        payload["negative_prompt"] = request.negative_prompt
+    if media:
+        payload["media"] = media
+    return {"model": request.model, "input": payload, "parameters": parameters}
+
+
+def native_video_body(request: UnifiedVideoRequest) -> dict[str, Any]:
+    """The native body for ``request.model``: HappyHorse, wan2.7-i2v or Wan 3.x."""
+    model = request.model.lower()
+    if model.startswith("happyhorse"):
+        return happyhorse_body(request)
+    if model.startswith("wan2.7-i2v"):
+        return wan27_i2v_body(request)
+    return wan3_body(request)
+
+
 class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     name = "dashscope"
     # DashScope exposes both a synchronous inline API (``sync_call`` /
@@ -468,20 +565,47 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
     image_models: ClassVar[list[str]] = [
         "wanx2.1-t2i-turbo",
         "wanx2.1-t2i-plus",
-        "wanx2.1-t2i-flash",
+        "wan2.2-t2i-flash",
+        "wan2.2-t2i-plus",
+        "wan2.5-t2i-preview",
         # Qwen-Image — the native async task path (async_call + wait) is the
         # unrestricted route; sync_call's docstring restricts it to wan2.2-t2i-*.
+        "qwen-image-3.0-pro",
+        "qwen-image-3.0",
         "qwen-image-2.0-pro",
-        # Wan2.x-image generation family — served on the multimodal-generation
-        # surface (messages-shaped), not the image-synthesis surface. Operators
-        # may also pin other ``*-image`` slugs via DASHSCOPE_IMAGE_MODEL.
+        "qwen-image-2.0",
+        # Wan2.x-image generation family and wan2.6-t2i (the new T2I protocol) —
+        # served on the multimodal-generation surface (messages-shaped), not the
+        # image-synthesis surface. Operators may also pin other ``*-image``
+        # slugs via DASHSCOPE_IMAGE_MODEL.
+        "wan2.7-image-pro",
         "wan2.7-image",
         "wan2.6-image",
+        "wan2.6-t2i",
     ]
     video_models: ClassVar[list[str]] = [
+        # Wan 3.x, HappyHorse and wan2.7-i2v — the native ``input.media`` body (see ``native_video_body``).
+        "wan3.0-video",
+        "wan3.0-video-prime",
+        "happyhorse-1.1-t2v",
+        "happyhorse-1.1-i2v",
+        "happyhorse-1.1-r2v",
+        "wan2.7-i2v",
+        # Text-to-video: wan2.7 takes a resolution tier and ratio, the legacy
+        # protocol (wan2.6 and earlier) an exact size.
+        "wan2.7-t2v",
+        "wan2.6-t2v",
+        "wan2.5-t2v-preview",
+        "wan2.2-t2v-plus",
         "wanx2.1-t2v-turbo",
-        "wanx2.1-i2v-turbo",
         "wanx2.1-t2v-plus",
+        # Image-to-video: img_url plus a resolution tier.
+        "wan2.6-i2v",
+        "wan2.6-i2v-flash",
+        "wan2.5-i2v-preview",
+        "wan2.2-i2v-flash",
+        "wan2.2-i2v-plus",
+        "wanx2.1-i2v-turbo",
         "wanx2.1-i2v-plus",
     ]
 
@@ -558,14 +682,17 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         (messages-shaped ``AioImageGeneration``) rather than the
         image-synthesis surface (``AioImageSynthesis``).
 
-        The synthesis surface only serves wanx2.1-t2i-* / qwen-image-*; the
-        Wan2.x-image generation family (``wan2.7-image``, ``wan2.6-image``,
-        and operator-pinned ``wan*-image`` slugs) lives on the generation
-        surface, and routing them through synthesis returns
-        ``400 InvalidParameter: url error``.
+        The synthesis surface only serves the legacy T2I protocol (wan2.5-t2i
+        and earlier) / qwen-image-*; the Wan2.x-image generation family
+        (``wan2.7-image``, ``wan2.7-image-pro``, ``wan2.6-image``, and
+        operator-pinned ``wan*-image`` slugs) and the new T2I protocol
+        (``wan2.6-t2i``) live on the generation surface, and routing them
+        through synthesis returns ``400 InvalidParameter: url error``.
         """
         m = (model or "").lower()
-        return m.endswith("-image") and "t2i" not in m
+        if "t2i" in m:
+            return m.startswith(_GENERATION_T2I_PREFIXES)
+        return m.endswith("-image") or (m.startswith("wan") and "-image-" in m)
 
     @staticmethod
     def _image_kwargs(request: UnifiedImageRequest) -> dict[str, Any]:
@@ -964,10 +1091,16 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
             "model": request.model,
             "prompt": request.prompt() or "",
         }
-        if size := pixel_size(request, "*"):
-            kwargs["size"] = size
-        if ratio := aspect_ratio(request):
-            kwargs["ratio"] = ratio
+        if resolution_tier_model(request.model):
+            if resolution := _wan3_resolution(request):
+                kwargs["resolution"] = resolution
+            if "-i2v" not in request.model.lower() and (ratio := aspect_ratio(request)):
+                kwargs["ratio"] = ratio
+        else:
+            if size := pixel_size(request, "*"):
+                kwargs["size"] = size
+            if ratio := aspect_ratio(request):
+                kwargs["ratio"] = ratio
         if request.duration is not None:
             kwargs["duration"] = int(request.duration)
         if request.seed is not None:
@@ -1011,13 +1144,13 @@ class DashScopeProvider(SyncImageTaskMixin, ImageProvider, VideoProvider):
         )
 
     async def _create_native_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
-        """Submit a Wan 3.x task with the native body (``input.media`` + ``parameters``).
+        """Submit a Wan 3.x, HappyHorse or wan2.7-i2v task with the native body (``input.media`` + ``parameters``).
 
         The SDK's ``AioVideoSynthesis`` only knows ``img_url``: last frames, reference images, videos and audio, the
         ``audio`` switch and the resolution tier never reached the model. The poll stays the hand-rolled
         ``get_video_task``.
         """
-        body = wan3_body(request)
+        body = native_video_body(request)
         base = (self._video_base or "https://dashscope.aliyuncs.com/api/v1").rstrip("/")
         url = f"{base}/services/aigc/video-generation/video-synthesis"
         try:

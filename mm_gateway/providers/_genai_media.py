@@ -18,20 +18,36 @@ so an operator can pin image and video at different endpoints) and
 from __future__ import annotations
 
 import base64
+import mimetypes
 import time
 from typing import Any
 
+import httpx
 from google.genai import types
 
 from mm_gateway.core.exceptions import ProviderRequestError
 from mm_gateway.providers._dimensions import aspect_ratio, video_resolution
+from mm_gateway.providers._http import proxy_kwargs
 from mm_gateway.schemas.image import (
     ImageData,
+    ImageImagePart,
     ImageUsage,
     UnifiedImageRequest,
     UnifiedImageResponse,
 )
 from mm_gateway.schemas.video import UnifiedVideoRequest, UnifiedVideoTask
+
+
+def _content_image(part: ImageImagePart) -> types.Part:
+    """A ``generate_content`` part for an input image: inline bytes for base64 or a data URL, else its URI."""
+    if part.data:
+        return types.Part.from_bytes(data=base64.b64decode(part.data), mime_type=part.mime_type or "image/png")
+    url = part.url or ""
+    if url.startswith("data:"):
+        header, _, data = url.partition(",")
+        return types.Part.from_bytes(data=base64.b64decode(data),
+                                     mime_type=header[5:].split(";", 1)[0] or "image/png")
+    return types.Part.from_uri(file_uri=url, mime_type=part.mime_type or mimetypes.guess_type(url)[0] or "image/png")
 
 
 class GenaiImageVideoMixin:
@@ -87,9 +103,15 @@ class GenaiImageVideoMixin:
         image_config = types.ImageConfig()
         if ratio := aspect_ratio(request):
             image_config.aspect_ratio = ratio
+        if request.resolution:
+            # Gemini 3 image sizes are uppercase tokens (1K, 2K, 4K); lowercase ones are rejected.
+            image_config.image_size = request.resolution.strip().upper()
         config = types.GenerateContentConfig(response_modalities=["IMAGE"], image_config=image_config)
+        # The input images (references to edit or compose; up to 14 on Gemini 3) follow the prompt.
+        images = [_content_image(p) for p in request.input_images()]
+        contents: Any = [request.prompt() or "", *images] if images else request.prompt() or ""
         resp = await self._client.aio.models.generate_content(
-            model=request.model, contents=request.prompt() or "", config=config
+            model=request.model, contents=contents, config=config
         )
         data: list[ImageData] = []
         for cand in resp.candidates or []:
@@ -102,12 +124,35 @@ class GenaiImageVideoMixin:
             provider=self.name, usage=ImageUsage(),
         )
 
+    async def _video_image(self, url: str) -> types.Image:
+        """A Veo input image: inline bytes for a data URL, ``gcs_uri`` for ``gs://``, else the fetched bytes.
+
+        ``types.Image`` takes bytes or a Cloud Storage URI only, so an http(s) image is downloaded through the
+        backend's outbound proxy.
+        """
+        if url.startswith("data:"):
+            header, _, data = url.partition(",")
+            return types.Image(image_bytes=base64.b64decode(data),
+                               mime_type=header[5:].split(";", 1)[0] or "image/png")
+        if url.startswith("gs://"):
+            return types.Image(gcs_uri=url, mime_type=mimetypes.guess_type(url)[0] or "image/png")
+        try:
+            async with httpx.AsyncClient(timeout=60.0, **proxy_kwargs(getattr(self, "_proxy_url", None))) as c:
+                resp = await c.get(url)
+                resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ProviderRequestError(f"{self.name} could not fetch input image {url}: {exc}",
+                                       provider=self.name, status_code=400) from exc
+        mime = resp.headers.get("content-type", "").split(";", 1)[0]
+        return types.Image(image_bytes=resp.content,
+                           mime_type=mime or mimetypes.guess_type(url)[0] or "image/png")
+
     async def create_video_task(self, request: UnifiedVideoRequest) -> UnifiedVideoTask:
         source_fields: dict[str, Any] = {}
         if request.prompt():
             source_fields["prompt"] = request.prompt()
         if request.first_image():
-            source_fields["image"] = types.Image(image_uri=request.first_image())
+            source_fields["image"] = await self._video_image(request.first_image())
         source = types.GenerateVideosSource(**source_fields)
 
         cfg: dict[str, Any] = {}
@@ -124,7 +169,13 @@ class GenaiImageVideoMixin:
         if request.negative_prompt:
             cfg["negative_prompt"] = request.negative_prompt
         if request.last_image():
-            cfg["last_frame"] = types.Image(image_uri=request.last_image())
+            cfg["last_frame"] = await self._video_image(request.last_image())
+        if references := request.reference_images():
+            # Veo 3.1 takes up to three "asset" reference images (subjects to keep consistent).
+            cfg["reference_images"] = [
+                types.VideoGenerationReferenceImage(image=await self._video_image(url), reference_type="ASSET")
+                for url in references
+            ]
         cfg.update(request.extra)
         config = types.GenerateVideosConfig(**cfg)
 
@@ -141,8 +192,9 @@ class GenaiImageVideoMixin:
         )
 
     async def get_video_task(self, task_id: str) -> UnifiedVideoTask:
-        # Reconstruct a handle for the LRO so we can poll by name.
-        op = types.Operation(name=task_id)  # type: ignore[arg-type]
+        # Reconstruct a handle for the LRO so we can poll by name (``types.Operation`` is an abstract base; the
+        # SDK's operations.get supports GenerateVideosOperation).
+        op = types.GenerateVideosOperation(name=task_id)
         try:
             op = await self._client_video.aio.operations.get(op)
         except Exception as exc:

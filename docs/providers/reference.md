@@ -34,12 +34,15 @@ any explicit proxy — HTTP or SOCKS — through `aiohttp-socks`. See the README
   real api.openai.com both share one host, so the two clients collapse to the
   same base (or `None`, the SDK default) unless an operator pins them apart.
 - **Image**: `client.images.generate(model, prompt, n, size, quality, response_format, style, background, output_format, user, ...)`.
-  - Models: `gpt-image-1`, `gpt-image-1-mini`, `gpt-image-2`, `dall-e-2`, `dall-e-3`.
+  - Models: `gpt-image-2.5-sunburst`, `gpt-image-2.5-flare` (2026-09-08 snapshots), `gpt-image-2`; `gpt-image-1`
+    (shut down 2026-10-23), `gpt-image-1-mini` (shuts down 2026-12-01), `dall-e-2`/`dall-e-3` (shut down 2026-05-12)
+    stay in the catalogue as retired or deprecated
+    ([deprecations](https://developers.openai.com/api/docs/deprecations)).
   - GPT-image models **always** return `data[].b64_json`; `dall-e-2/3` return `data[].url` (default) or `b64_json`.
   - `response.data[i].b64_json | .url`; `usage` only for gpt-image.
 - **Edit**: `client.images.edit(image=<file>, mask=, model, prompt, ...)` — multipart.
 - **Video (Sora)**: `client.videos.create(model, prompt, seconds="4|8|12", size, input_reference=)` → `Video{id,status,progress}`. Poll `client.videos.retrieve(id)` until `completed`/`failed`, then `client.videos.download_content(id)` → MP4 bytes.
-  - Models: `sora-2`, `sora-2-pro`.
+  - Models: `sora-2`, `sora-2-pro` — the Videos API was removed on 2026-09-24 (retired in the catalogue).
 
 ## google-genai — `google-genai` v2.19.0
 
@@ -53,13 +56,28 @@ any explicit proxy — HTTP or SOCKS — through `aiohttp-socks`. See the README
   apart. Music (Lyria) stays on its own REST base `_music_base`
   (`music_base_url` → `base_url` → SDK default), independent of both.
 - **Image (Imagen)**: `client.aio.models.generate_images(model, prompt, config=GenerateImagesConfig(...))`.
-  - Models: `imagen-4.0-generate-001`, `imagen-3.0-generate-001`.
+  - Models: `imagen-4.0-generate-001` (shut down on the Gemini API on 2026-08-17), `imagen-3.0-generate-001`
+    (Vertex, retired 2026-06-30).
   - Response: `resp.generated_images[i].image.image_bytes` (bytes; **no URL** on dev API).
-- **Image (Gemini native)**: `generate_content(model="gemini-2.5-flash-image", contents=, config=GenerateContentConfig(response_modalities=["IMAGE"]))`. Image bytes in `part.inline_data.data`.
-- **Video (Veo)**: `client.aio.models.generate_videos(model, source=GenerateVideosSource(prompt=|image=), config=GenerateVideosConfig(...))` → long-running op. Poll `client.aio.operations.get(op)` until `op.done`. Result: `op.result.generated_videos[0].video.uri`; fetch bytes via `client.aio.files.download(file=video)`.
-  - Models: `veo-2.0-generate-001`, `veo-3.0-generate-001`, `veo-3.1-generate-preview`.
+- **Image (Gemini native)**: `generate_content(model=, contents=[prompt, *images], config=GenerateContentConfig(response_modalities=["IMAGE"], image_config=ImageConfig(aspect_ratio=, image_size=)))`. Input images ride as `Part.from_bytes` (base64 / data URLs) or `Part.from_uri`; `image_size` is the request's `resolution` upper-cased (`1K`/`2K`/`4K`). Image bytes in `part.inline_data.data`.
+  - Models: `gemini-nano-banana-2.1` (up to 14 references, 1K/2K/4K), `gemini-3-pro-image`, `gemini-3.1-flash-image`
+    (deprecated 2026-10-06), `gemini-3.1-flash-lite-image` (1K), `gemini-2.5-flash-image` (shuts down 2027-03-15).
+- **Video (Veo)**: `client.aio.models.generate_videos(model, source=GenerateVideosSource(prompt=|image=), config=GenerateVideosConfig(last_frame=, reference_images=[VideoGenerationReferenceImage(reference_type="ASSET")], ...))` → long-running op. Images are `types.Image(image_bytes=|gcs_uri=)`: data URLs are decoded, `gs://` passes through and http(s) images are fetched through the outbound proxy. Poll `client.aio.operations.get(GenerateVideosOperation(name=))` until `op.done`. Result: `op.result.generated_videos[0].video.uri`; fetch bytes via `client.aio.files.download(file=video)`.
+  - Models: `veo-2.0-generate-001`, `veo-3.0-generate-001` (shut down 2026-06-30), `veo-3.1-generate-preview`
+    (left the Gemini API on 2026-10-22; replacement `gemini-omni-1.1-flash`).
+- **Video (Gemini Omni Flash)**: the Interactions API, not `generate_videos`
+  ([guide](https://ai.google.dev/gemini-api/docs/omni)). `POST /v1beta/interactions` with
+  `{model, input: [text, image..., video...], response_format: {type: "video", aspect_ratio, resolution, duration},
+  background: true, store: true, generation_config: {video_config: {task}}}` over httpx (`x-goog-api-key`) on the video
+  host; the gateway task id is `interactions/{id}` and the poll `GET`s `/v1beta/interactions/{id}`. A completed
+  interaction carries the MP4 inline (`steps[].content[]` `{type: "video", data}`), returned as a `data:` URL.
+  - Inputs, in source order: first frame, last frame, reference images, videos (`task` `image_to_video` with frames,
+    `reference_to_video` with references only). Audio parts and `negative_prompt` are dropped (unsupported).
+  - `aspect_ratio` `16:9`/`9:16`; `resolution` `360p`/`720p`/`1080p`/`4k` (nearest to the short side); `duration`
+    clamped to 3–10 s and sent as `"Ns"`.
+  - Models: `gemini-omni-1.1-flash`.
 - **Music (Lyria 3)**: REST `POST {music_base}/v1beta/interactions` over a per-request `httpx.AsyncClient(timeout=240.0)` — the Interactions surface. Auth = api_key in the `x-goog-api-key` header (matching the google-genai SDK). `music_base` = `backend.extra["music_base_url"]` or `backend.base_url` or `https://generativelanguage.googleapis.com`.
-  - Models: `lyria-3`.
+  - Models: `lyria-3.5` (default), `lyria-3-pro-preview` (previous generation), `lyria-3-clip-preview` (30 s clips).
   - Body: `{model, input: parts[], response_format?, generation_config?}` (top-level fields; there is no `config` wrapper on this surface). Canonical text, image, and audio parts become native input parts. Data URLs are decoded into inline `{type, mime_type, data}` blocks; ordinary references remain URL blocks. `response_format={"type":"audio","mime_type":...}` selects the container when `audio_format` is set. `generation_config` carries `seed` plus the translated negative prompt, guidance, and output count (best-effort).
   - Synchronous — a single call returns audio inline. Wrapped as a synthetic in-memory task (id `lyria-{uuid4.hex}`) that moves `pending -> running -> succeeded` on the first poll, like ElevenLabs/MiniMax.
   - Response: `steps[].content[]` (or `model_output[].content[]`) blocks — `{type:"audio", data}` (base64) and `{type:"text", text}` (lyrics); top-level `output_audio`/`audio` and `output_text`/`text` fallbacks. `audio_media_type` derived from the requested format (`audio/wav` / `audio/mpeg` / `audio/{format}`), defaulting to `audio/wav`. `usage = MusicUsage(duration=int(request.duration))` when duration set.
@@ -114,10 +132,14 @@ differs.
 - **Image (Imagen)** & **Video (Veo)**: identical to the google adapter
   above — `client.aio.models.generate_images(...)` /
   `client.aio.models.generate_videos(...)` + operation poll.
-  - Image models: `imagen-4.0-generate-001`, `imagen-3.0-generate-001`,
-    `gemini-2.5-flash-image`.
-  - Video models: `veo-2.0-generate-001`, `veo-3.0-generate-001`,
-    `veo-3.1-generate-preview`.
+  - Image models: `gemini-nano-banana-2.1`, `gemini-3-pro-image`, `gemini-3.1-flash-image`,
+    `gemini-3.1-flash-lite-image`, `gemini-2.5-flash-image`; Imagen (`imagen-4.0-generate-001`,
+    `imagen-3.0-generate-001`) retired on Vertex on 2026-06-30.
+  - Video models: `veo-3.1-generate-001`, `veo-3.1-fast-generate-001` (GA; retirement 2026-11-17 or later),
+    `veo-3.1-lite-generate-001` (preview); Veo 2.0/3.0 retired on 2026-06-30
+    ([model versions](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions)).
+  - `gemini-omni-1.1-flash-preview` (global) goes through the SDK's `client.aio.interactions.create(**omni_body)` and
+    `client.aio.interactions.get(id, stream=False)` — the same background interaction as the AI Studio adapter.
 - **Music (Lyria 3)**: the SDK's Interactions surface
   (`client.aio.interactions.create(...)` → REST `POST /v1beta/interactions`),
   the same wire shape the google adapter uses, authenticated with the ADC
@@ -127,7 +149,7 @@ differs.
   `pending -> running -> succeeded` on the first poll. The body is built by
   `lyria_body()` and the output extracted by `extract_lyria_output()` (both
   accept either the raw JSON dict or the pydantic `Interaction` model).
-  - Models: `lyria-3`. Alias `gateway-music-vertex`.
+  - Models: `lyria-3-pro-preview` (up to 184 s; default), `lyria-3-clip-preview` (30 s). Alias `gateway-music-vertex`.
   - Default audio output is MP3; `audio_format` `mp3`/`wav`/`ogg_opus` map to
     `audio/mpeg`/`audio/wav`/`audio/ogg` (the gateway convention every other
     music provider follows).
@@ -147,13 +169,15 @@ differs.
   api.x.ai both share one host, so the two clients collapse unless an operator
   pins them apart.
 - **Image**: `await client.image.sample(prompt, model, image_format="url|base64", aspect_ratio, resolution)` → `.url` / `.base64` / `.image` (bytes).
-  - Models: `grok-imagine-image`, `-pro`, `-quality`. Legacy `grok-2-image-1212` via REST `POST https://api.x.ai/v1/images/generations` only.
-- **Video**: `client.video.start(prompt, model, ...)` → `request_id`; poll `client.video.get(request_id)` until `DONE`. Models: `grok-imagine-video`, `grok-imagine-video-1.5-preview`. Result `.url` (24h TTL). Params: `duration`, `aspect_ratio`, `resolution`, `image_url` (i2v).
+  - Models: `grok-imagine-image-2.0` (recommended; 1k/2k, quality low/medium, 21:9 and 5:2), `grok-imagine-image`,
+    `grok-imagine-image-quality` (retires 2026-11-02, then served by 2.0 at low quality), `grok-imagine-image-pro`
+    (retired 2026-05-15). Legacy `grok-2-image-1212` via REST `POST https://api.x.ai/v1/images/generations` only.
+- **Video**: `client.video.start(prompt, model, ...)` → `request_id`; poll `client.video.get(request_id)` until `DONE`. Models: `grok-imagine-video-1.5` (alias `-preview`; 1080p t2v/i2v, 14 reference images), `grok-imagine-video-1.5-lite`, `grok-imagine-video` (720p, 7 reference images). Result `.url` (24h TTL). Params: `duration` (1–15 s), `aspect_ratio`, `resolution`, `image` (i2v), `reference_images`, `generate_audio` (from `include_audio`; `false` renders silent video).
 
 ## volcengine-ark — `volcenginesdkarkruntime` (env `ARK_API_KEY`)
 
 - **Client**: `from volcenginesdkarkruntime import AsyncArk; AsyncArk(api_key=, base_url=)`; base default `https://ark.cn-beijing.volces.com/api/v3`.
-- **Image** (Seedream, OpenAI-compat): `client.images.generate(model, prompt, size, response_format, seed, guidance_scale, watermark, ...)`. Models: `doubao-seedream-3-0-t2i-250415`, `doubao-seedream-4-0-t2i-250828`. Response `data[].url|b64_json`.
+- **Image** (Seedream, OpenAI-compat): `client.images.generate(model, prompt, size, response_format, seed, guidance_scale, watermark, image=[...], ...)`. Models: `doubao-seedream-5-0-pro-260628`, `doubao-seedream-5-0-flash-260915` (up to 10 references, one image, 1K/1.5K/2K), `doubao-seedream-4-0-250828` (offline 2026-11-24), `doubao-seedream-3-0-t2i-250415` (offline since 2026-05-11). Response `data[].url|b64_json`. Lifecycle: the [model deprecation notice](https://docs.volcengine.com/docs/82379/1350667).
 - **Video (Seedance 1.0 & 2.0)** — the typed `content_generation.tasks` resource (a wrapper around the same REST API used to require raw httpx):
   - **Create**: `await client.content_generation.tasks.create(*, model, content, safety_identifier=, callback_url=, return_last_frame=, service_tier=, execution_expires_after=, priority=, generate_audio=, draft=, camera_fixed=, watermark=, seed=, resolution=, ratio=, duration=, frames=, tools=)` → `ContentGenerationTaskID{id, safety_identifier}`. POSTs `/contents/generations/tasks`.
     - `content` is a list of typed parts (the parts — not the model id — choose t2v / i2v / r2v):
@@ -162,7 +186,13 @@ differs.
       - `{type:"video_url", video_url:{url}, role}` — Seedance 2.0 reference video (`role:"reference_video"`).
       - `{type:"audio_url", audio_url:{url}, role}` — Seedance 2.0 reference audio (`role:"reference_audio"`).
       - `{type:"draft_task", draft_task:{id}}` — resume a draft task.
-    - 2.0 example model: `doubao-seedance-2-0-260128`. Typical 2.0 params: `generate_audio=True, ratio="16:9", duration=11, watermark=True`.
+    - 2.x models: `doubao-seedance-2-5-260628` (4–30 s; 30 images, 10 videos, 10 audio clips),
+      `doubao-seedance-2-0-260128` (up to 4k), `doubao-seedance-2-0-fast-260128`, `doubao-seedance-2-0-mini-260615`
+      (4–15 s; 9 images, 3 videos, 3 audio clips). First frame, first+last frame and multimodal references are exclusive
+      modes, so a 2.x request with a frame keeps it and drops its references (logged as
+      `volcengine_seedance_references_dropped_for_frames`). Typical 2.0 params: `generate_audio=True, ratio="16:9", duration=11, watermark=True`.
+    - 1.0: `doubao-seedance-1-0-pro-250528` (silent, 2–12 s; offline 2026-11-24), `doubao-seedance-1-0-lite-i2v-250428`
+      (offline since 2026-05-11).
   - **Poll**: `await client.content_generation.tasks.get(*, task_id)` → `ContentGenerationTask`. GETs `/contents/generations/tasks/{task_id}`.
     - Fields: `id, model, safety_identifier, status, error, content, usage, created_at, updated_at, generate_audio, duration, ratio, resolution, seed, revised_prompt, service_tier, draft, draft_task_id, tools, frames, framespersecond, subdivisionlevel, fileformat, priority, execution_expires_after`.
     - `status` ∈ `running | failed | queued | succeeded | cancelled`.
@@ -208,10 +238,19 @@ differs.
   `BaseAioApi.call`, no `X-DashScope-Async: enable`) when the backend rejects
   async task submission (403 / `AccessDenied` / "does not support asynchronous
   calls"); the gateway wraps both as a synthetic in-memory task.
-  - Models: `wanx2.1-t2i-turbo`, `wanx2.1-t2i-plus`, `wanx2.1-t2i-flash`,
-    `qwen-image-2.0-pro`.
-- **Video (Wan 2.x)**: `AioVideoSynthesis.async_call(model, prompt, size, duration, img_url, prompt_extend)` → task; poll `AioVideoSynthesis.fetch(task_id)`; result `output.video_url` (single temp OSS URL).
-  - Models: `wanx2.1-t2v-turbo`, `wanx2.1-i2v-turbo`, `wanx2.1-t2v-plus`, `wanx2.1-i2v-plus`.
+  - Models: `wanx2.1-t2i-turbo`, `wanx2.1-t2i-plus`, `wan2.2-t2i-flash`, `wan2.2-t2i-plus`, `wan2.5-t2i-preview`
+    (the legacy T2I protocol), `qwen-image-3.0-pro`, `qwen-image-3.0`, `qwen-image-2.0-pro`, `qwen-image-2.0`.
+  - The messages-shaped generation surface (`AioImageGeneration`) serves `wan*-image*` (`wan2.7-image-pro`,
+    `wan2.7-image`, `wan2.6-image`) and the new T2I protocol (`wan2.6-t2i`).
+- **Video (Wan 2.x)**: `AioVideoSynthesis.async_call(model, prompt, size | resolution, ratio, duration, img_url, prompt_extend)` → task; poll `AioVideoSynthesis.fetch(task_id)`; result `output.video_url` (single temp OSS URL).
+  - Text-to-video, legacy protocol (an exact `size` W*H): `wan2.6-t2v` (2–15 s, audio), `wan2.5-t2v-preview` (5/10 s,
+    audio), `wan2.2-t2v-plus`, `wanx2.1-t2v-turbo`, `wanx2.1-t2v-plus` (5 s, silent)
+    ([reference](https://www.alibabacloud.com/help/en/model-studio/legacy-wan-text-to-video-api-reference)).
+  - `wan2.7-t2v`: a `resolution` tier (`720P`/`1080P`) and `ratio` instead of `size`; 2–15 s.
+  - Image-to-video: `img_url` plus a `resolution` tier (nearest to the requested short side), no `size` or `ratio`
+    (the output follows the image): `wan2.6-i2v`, `wan2.6-i2v-flash`, `wan2.5-i2v-preview`, `wan2.2-i2v-flash`,
+    `wan2.2-i2v-plus`, `wanx2.1-i2v-turbo`, `wanx2.1-i2v-plus`
+    ([reference](https://help.aliyun.com/en/model-studio/image-to-video-api-reference)).
 - **Video (Wan 3.x, `wan3*`)**: the native body, posted with `X-DashScope-Async: enable` to
   `<video base>/services/aigc/video-generation/video-synthesis` (the SDK only sends `img_url`):
   `{model, input: {prompt, media: [{type, url}]}, parameters: {resolution, ratio, duration, audio, seed,
@@ -226,6 +265,13 @@ differs.
     `duration` clamped to 2–30 s (`-1`: the model chooses); `audio` from `include_audio`; `seed` within
     `[0, 2147483647]`; `prompt_extend` from `enhance_prompt`; `parameters.extra` is merged last. There is **no
     negative prompt**: clients write exclusions in the prompt.
+  - The same native body serves **HappyHorse 1.1** (`happyhorse-1.1-t2v`: prompt only; `-i2v`: exactly one
+    `first_frame`, no `ratio`; `-r2v`: every image as a `reference_image`, at most 9, cited as `[Image N]`; 3–15 s;
+    `resolution`, `ratio`, `duration`, `seed`, `watermark` only —
+    [reference](https://www.alibabacloud.com/help/en/model-studio/happyhorse-api-reference/)) and **`wan2.7-i2v`**
+    (`first_frame`, `last_frame` and the first `reference_audio` as `driving_audio`; 720P/1080P, 2–15 s,
+    `prompt_extend`, `input.negative_prompt` —
+    [reference](https://www.alibabacloud.com/help/en/model-studio/image-to-video-general-api-reference)).
   - Models: `wan3.0-video`, `wan3.0-video-prime` (the faster one): 2–30 s, 30 fps, sound by default, up to 8
     shots in one prompt (`Shot N [start-end s]: …`, 2–5 s each,
     [prompt guide](https://www.alibabacloud.com/help/en/model-studio/wan3-video-generation-prompt-guide)).
@@ -240,12 +286,14 @@ differs.
 
 - **Client**: prefer REST `https://api.stability.ai/v2beta/...` via httpx (env `STABILITY_API_KEY`).
 - **Sync vs async URL**: two `httpx.AsyncClient` instances — image (SD3/SDXL/Core/Ultra) on `base_url` (the `STABILITY_IMAGE_BASE_URL` sync endpoint) and video (SVD) on `backend.extra["video_base_url"]` (the `STABILITY_VIDEO_BASE_URL` async endpoint, set by `config.py` when it differs from the image one). For the real api.stability.ai both share one host, so the two clients collapse unless an operator pins them apart.
-- **Image**: `POST /v2beta/stable-image/generate/sd3` (multipart: `prompt`, `model`, `seed`, `aspect_ratio`, `output_format`). Models: `sd3.5-large`, `sd3.5-medium`, `stable-image-core`, `sdxl`. Returns `image` (base64) + `finish_reason`.
-- **Video (SVD)**: `POST /v2beta/stable-video-generation` (multipart: `image`, `motion_bucket_id`, `fps`, `seed`). Async seed → poll for result (raw MP4 bytes).
+- **Image**: `POST /v2beta/stable-image/generate/sd3` (multipart: `prompt`, `model`, `seed`, `aspect_ratio`, `output_format`). Models: `sd3.5-large`, `sd3.5-large-turbo`, `sd3.5-medium`, `sd3.5-flash`, `stable-image-core`, `stable-image-ultra`, `sdxl`. Returns `image` (base64) + `finish_reason`.
+- **Video (SVD)**: `POST /v2beta/stable-video-generation` (multipart: `image`, `motion_bucket_id`, `fps`, `seed`). Async seed → poll for result (raw MP4 bytes). Stability discontinued this API on 2025-07-24, so the SVD models are retired in the catalogue ([release notes](https://docs.stability.ai/release-notes)).
 
 ## elevenlabs — `elevenlabs` v2.62.0 (SDK)
 
 - **Speech and Instant Voice Cloning** use REST `/v1/text-to-speech/{voice_id}`
+  (models `eleven_v4`, `eleven_v4_turbo`, `eleven_v3`, `eleven_multilingual_v2`, `eleven_flash_v2_5`, and the
+  deprecated `eleven_turbo_v2_5`)
   and multipart `/v1/voices/add`. Gateway presets map to private native ids;
   clones retain credential affinity and background verification state. Neutral
   formats/rates/bitrates become encoding strings; WAV wraps PCM samples.
@@ -253,7 +301,7 @@ differs.
 
 - **Client**: `from elevenlabs import AsyncElevenLabs; AsyncElevenLabs(api_key=, base_url=|None, timeout=240.0)` (env `ELEVENLABS_MUSIC_API_KEY`/`ELEVENLABS_MUSIC_BASE_URL`, legacy `ELEVENLABS_API_KEY`/`ELEVENLABS_BASE_URL`). Required: `backend.api_key` else `ProviderNotConfiguredError("elevenlabs")`. No default base_url — `None` falls back to the SDK default.
 - **Music**: `client.music.compose(...)` — an async generator that streams audio bytes from a single `POST /v1/music`. No task id to poll; the adapter mints a synthetic in-memory task (id `el-{uuid4.hex}`) that moves `pending -> running -> succeeded` as the stream completes on the first poll.
-  - Models: `music_v1`, `music_v2` (default `music_v2`).
+  - Models: `music_v1`, `music_v2` (default `music_v2`), `music_v2_5`.
   - `compose` kwargs: `prompt`, `model_id`, `output_format`, `music_length_ms` (= public duration seconds converted to ms and clamped to `[3000, 600000]`), `seed`, `force_instrumental`, section-duration adherence, and provenance signing.
   - `output_format` combines the neutral file format, sample rate, and bitrate as the SDK's `{codec}_{sample_rate}_{bitrate}` string. A bare file format uses the SDK's `auto` choice.
   - Forwarded extra knobs: `finetune_id`, `respect_sections_durations`, `store_for_inpainting`, `sign_with_c_2_pa`.
@@ -284,7 +332,10 @@ differs.
   - Audio delivery: `output_format == "url"` and `data.audio` starts with `http` → `audio_urls=[audio]`; else hex-decoded via `bytes.fromhex` and re-base64 into `audio_b64`. `_MIME_BY_FORMAT = {mp3:audio/mpeg, wav:audio/wav, pcm:audio/pcm}` (default `audio/mpeg`).
   - Errors: `httpx.HTTPError` → `ProviderRequestError(502)`; HTTP ≥400 → `ProviderRequestError` via `_map_status`; `base_resp.status_code != 0` → `TaskFailedError`; no audio → `TaskFailedError`; unknown task id → 404.
 - **Video (H3)**: genuine two-phase async REST — `POST /v2/video_generation` → `{task_id}`, then `GET /v2/query/video_generation/{task_id}` → `{task:{status, content:{url, cover_url}}}`. The H3 `content[]` shape (typed `text` / `image_url`-with-role / `video_url` / `audio_url` parts) *is* the unified video schema's content shape, so the parts pass straight through.
-  - Model: `MiniMax-H3` (one omni model; the content parts pick t2v / i2v / first-frame / reference / audio).
+  - Models: `MiniMax-H3` (768P/2K), `MiniMax-H3-Max` (5–15 s, 480P/768P), `MiniMax-H3-Highspeed` (768P),
+    `MiniMax-H3-Lite` (480P/768P) — omni models; the content parts pick t2v / i2v / first-frame / reference / audio.
+    Image-to-video and reference-to-video are mutually exclusive, so a request with a frame keeps it and drops its
+    references (logged as `minimax_references_dropped_for_frames`).
   - Body (`_build_video_body`): `model`, `content` = `[p.model_dump(exclude_none=True) for p in request.content]`, then optional `duration` (int seconds), `resolution` (verbatim H3 token such as `768P`/`2K` — not derived from width/height), `ratio` (from `aspect_ratio(request)`), and a pass-through of provider-specific knobs the caller stashed in `request.extra` (e.g. `prompt_optimizer`, `watermark`).
   - Create: `POST /v2/video_generation` → reads `task_id`; honours a `base_resp.status_code != 0` error envelope when present; no `task_id` → `ProviderRequestError("minimax video create returned no task_id", 502)`. Returns a `pending` `UnifiedVideoTask`.
   - Poll: `GET /v2/query/video_generation/{task_id}` → `task`. Status mapping (`_VIDEO_STATUS_MAP`): `queued` → `pending`, `running`/`processing` → `running`, `succeeded` → `succeeded`, `failed` → `failed`, `cancelled` → `cancelled` (unknown status defaults to `running`). On `succeeded` reads `task.content.url` → `video_urls=[url]` and `task.content.cover_url` → `cover_url`; `succeeded` with no url → `failed` (defensive). On `failed`/`cancelled` the error comes from `task.error.message`/`task.error.code` (or the raw status). `task.model` → `model`.
@@ -296,7 +347,8 @@ differs.
 - **Music**: Genuine two-phase async REST mirroring Suno's shape.
   - **Create**: `POST /api/v2/generate` body from `_build_body` → `{workId}` (or `data.task_id`); the upstream workId *is* the gateway task id (no synthetic store). Missing → `ProviderRequestError("udioapi create returned no workId")`.
   - **Poll**: `GET /api/v2/feed?workId=...` → `data.response_data[]` tracks; picks the first `complete` track else the last track. No tracks yet → `running` (queued).
-  - Models: `chirp-v4-0`, `chirp-v4-5`, `chirp-v4-5-plus`, `chirp-v5`, `chirp-v5-5`.
+  - Models: `chirp-v6`, `chirp-v6-mini`, `chirp-v6-wild`; the legacy `chirp-v4-0`, `chirp-v4-5`, `chirp-v4-5-plus`,
+    `chirp-v5`, `chirp-v5-5` are still accepted but served by chirp-v6 (v5, v5-5) or chirp-v6-mini (the rest).
   - Body (`_build_body`): custom mode (when style, title, or negative prompt is present) uses native `prompt`, `style`, `title`, and `tags`; otherwise inspiration mode uses `gpt_description_prompt`. Neutral instrumental, vocal gender, style strength, novelty, and reference-audio strength map to the corresponding native controls.
   - Status mapping (`_STAGE_TO_STATUS`): track `status` `text`/`first` → `running`, `complete` → `succeeded`; `data.type` upper `FAIL` → `failed`; `track.fail_message`/`error_message` → `failed`.
   - Audio delivery = URL; on `complete` reads `track.audio_url` → `audio_urls=[url]`, `audio_media_type="audio/mpeg"`; `complete` with no URL → `failed` (moderation). `track.duration` → `MusicUsage(duration)`.
@@ -304,11 +356,12 @@ differs.
 
 ## mureka — REST over `https://platform.mureka.ai`
 
-- **Client**: `make_client(backend.base_url or "https://platform.mureka.ai", timeout=180.0, headers={Authorization: Bearer {api_key}})` (env `MUREKA_MUSIC_API_KEY`/`MUREKA_MUSIC_BASE_URL`, legacy `MUREKA_API_KEY`/`MUREKA_BASE_URL`). Required: `backend.api_key` else `ProviderNotConfiguredError("mureka")`.
+- **Client**: `make_client(backend.base_url or "https://api.mureka.ai", timeout=180.0, headers={Authorization: Bearer {api_key}})` (env `MUREKA_MUSIC_API_KEY`/`MUREKA_MUSIC_BASE_URL`, legacy `MUREKA_API_KEY`/`MUREKA_BASE_URL`). Required: `backend.api_key` else `ProviderNotConfiguredError("mureka")`.
 - **Music**: Genuine two-phase async REST. The official docs render schemas client-side, so the adapter is tolerant of response field names via candidate fallbacks.
   - **Create**: `POST /v1/song/generate` body from `_build_body` → a task id read via `_first(data, _TASK_ID_FIELDS) or _first(data.data, _TASK_ID_FIELDS)` where `_TASK_ID_FIELDS = ("task_id", "taskId", "id")`; the upstream id is the gateway task id. Missing → `ProviderRequestError("mureka create returned no task_id")`.
   - **Poll**: `GET /v1/song/query/{task_id}` → `{status, audio_url, ...}`. `status` read from `data.status` or `data.task_status` (default `running`).
-  - Models: `mureka-song-1`, `mureka-song-1.5`.
+  - Models: `mureka-9.5`, `mureka-9`, `mureka-8`, `mureka-7.6`, `mureka-o2` — the `model` values `/v1/song/generate`
+    accepts besides `auto` (lyrics <= 5000 chars, prompt <= 1024, `n` <= 3).
   - Body (`_build_body`): `model`, descriptive `prompt`, structured `lyrics`, `title`, style/negative tags, `instrumental`, `bpm`, integer duration, and seed. Neutral voice maps to `voice_id`; file format, sample rate, and bitrate form native `audio_config`.
   - Status mapping (`_STATUS_MAP`): `queued`/`pending` → `pending`, `running`/`processing` → `running`, `succeeded`/`success`/`completed` → `succeeded`, `failed`/`error` → `failed`.
   - Audio delivery = URL; on `succeeded` reads audio via `_first(data, _AUDIO_FIELDS)` where `_AUDIO_FIELDS = ("audio_url", "audioUrl", "url")` → `audio_urls=[audio]`, `audio_media_type="audio/mpeg"`; no URL → `failed` (error from `fail_message` or `"mureka task completed with no audio URL"`). `duration` from `data.duration` or `data.extra.duration` → `MusicUsage(duration)`. On `failed`, error from `fail_message`/`error`/`"mureka task failed"`.
@@ -327,6 +380,7 @@ differs.
   - **Create (completion)**: `_create_completion_task` stores `{model, request, status:"pending"}` and returns a `pending` `UnifiedMusicTask`.
   - **Poll (completion)**: `_get_completion_task` — on first poll builds the body (`_build_completion_body`) and `POST /v1/chat/completions`; terminal results are cached so subsequent polls return the cached task. `choices[0].finish_reason == "error"` → `failed` (error from `_completion_error`: `detail`/`error.message`). Audio is read from `choices[0].message.audio[].audio_url.url` (a `data:audio/mpeg;base64,...` data URL → `audio_b64` via `_data_url_b64`); no audio → `failed`. `message.content` (string) → `task.lyrics`. `usage.duration`/`metas.duration` → `MusicUsage(duration)`. HTTP ≥400 → `ProviderRequestError`; non-JSON → `TaskFailedError`.
   - **Completion body (`_build_completion_body`)**: `model` (prefixed `acemusic/` when it has no `/`; default `acemusic/acestep-v15-turbo`), `messages=[{role:"user", content}]` where content is the string `"<prompt>{p}</prompt>\n<lyrics>{l}</lyrics>"` for text-only or a parts array `[{type:text,text},{type:input_audio,input_audio:{data,format}}]` when source audio is given (via `_completion_message`/`_decode_audio_input`), `stream:false`, `thinking`/`use_format`/`use_cot_caption`/`use_cot_language` `True`, and `audio_config={format, vocal_language?, duration?, bpm?, key_scale?, time_signature?}`; optional `guidance_scale`/`seed`/`batch_size`; `sample_mode`/`task_type`/`audio_cover_strength`/`repainting_start`/`repainting_end` forward from `extra`.
-  - Models: `acestep-v15-turbo`, `acestep-v15-xl-turbo`, `acestep-v15-base`, `acestep-v15-turbo-shift3`, `ace-step-1.5`.
+  - Models: `acestep-v15-turbo`, `acestep-v15-xl-turbo`, `acestep-v15-base`, `acestep-v15-sft`, `acestep-v15-xl-base`,
+    `acestep-v15-xl-sft`, `acestep-v15-turbo-shift3`, `ace-step-1.5`.
   - Audio delivery = inline base64 (native: bytes fetched via `_fetch_audio`; completion: data-URL payload via `_data_url_b64`); native fallback to `audio_urls=[absolute path]` on fetch failure. `_media_type_for` maps `flac`→`audio/flac`, `mp3`→`audio/mpeg`, `opus`→`audio/ogg`, `aac`→`audio/aac`, `wav`/`wav32`→`audio/wav`, default `audio/mpeg`. Native `parsed[0].metas.duration` → `MusicUsage(duration)`; `parsed[0].lyrics` → `task.lyrics`. No result → `failed`; no file/audio → `failed`.
   - Errors: `httpx.HTTPError`/transport error → `ProviderRequestError(502)`; HTTP ≥400 → `ProviderRequestError` via `_map_status`; create with no task_id → `ProviderRequestError`; audio-fetch HTTP ≥400 → `ProviderRequestError`; non-JSON completion response → `TaskFailedError`.

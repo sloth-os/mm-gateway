@@ -41,6 +41,8 @@ _STAGE_TO_STATUS = {"text": "running", "first": "running", "complete": "succeede
 class UdioApiProvider(MusicProvider):
     name = "udioapi"
     music_models: ClassVar[list[str]] = [
+        "chirp-v6", "chirp-v6-mini", "chirp-v6-wild",
+        # Legacy ids: still accepted, remapped upstream (v5 / v5-5 -> chirp-v6, the rest -> chirp-v6-mini).
         "chirp-v4-0", "chirp-v4-5", "chirp-v4-5-plus", "chirp-v5", "chirp-v5-5",
     ]
 

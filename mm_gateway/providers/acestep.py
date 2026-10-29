@@ -77,6 +77,9 @@ class AceStepProvider(MusicProvider):
         "acestep-v15-turbo",
         "acestep-v15-xl-turbo",
         "acestep-v15-base",
+        "acestep-v15-sft",
+        "acestep-v15-xl-base",
+        "acestep-v15-xl-sft",
         "acestep-v15-turbo-shift3",
         "ace-step-1.5",
     ]

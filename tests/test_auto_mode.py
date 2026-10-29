@@ -1,10 +1,10 @@
 """Auto mode: native-audio routing, model lifecycle, fallbacks, cost ordering,
 cost caps, budgets and the ledger, estimates and usage (docs/design/auto-mode.md).
 
-Scripted video providers serve real catalogue ids (``veo-2.0-generate-001`` is
-silent, ``veo-3.1-generate-preview`` renders audio and is priced,
-``sora-2`` was retired on 2026-09-24) so the built-in limits, lifecycle and
-price catalogues drive the decisions under test.
+Scripted video providers serve real catalogue ids (``wan2.2-t2v-plus`` is
+silent and renders exactly 5 s, ``veo-3.1-generate-preview`` renders audio and
+is priced, ``sora-2`` was retired on 2026-09-24) so the built-in limits,
+lifecycle and price catalogues drive the decisions under test.
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def test_sora_2_is_retired_from_2026_09_24():
 
 
 def test_native_audio_flags_follow_the_providers_documentation():
-    assert limits_for("veo-2.0-generate-001", "video").supports_audio_output is False
+    assert limits_for("wan2.2-t2v-plus", "video").supports_audio_output is False
     assert limits_for("veo-3.1-generate-preview", "video").supports_audio_output is True
     assert limits_for("doubao-seedance-2-0-260128", "video").supports_audio_output is True
     assert limits_for("wanx2.1-t2v-turbo", "video").supports_audio_output is False
@@ -260,14 +260,14 @@ keys:
 
 
 def test_include_audio_never_routes_to_a_silent_model():
-    silent = Scripted("silent", ["veo-2.0-generate-001"])
+    silent = Scripted("silent", ["wan2.2-t2v-plus"])
     loud = Scripted("loud", ["veo-3.1-generate-preview"])
     reg = _registry([silent, loud])
     plan = _plan(reg, _video(audio=True))
     assert [c.model for c in plan.candidates] == ["veo-3.1-generate-preview"]
-    assert {(e.model, e.reason) for e in plan.excluded} == {("veo-2.0-generate-001", "limits")}
-    # Without native audio the configuration order wins again.
-    assert _plan(reg, _video(audio=None)).candidates[0].model == "veo-2.0-generate-001"
+    assert {(e.model, e.reason) for e in plan.excluded} == {("wan2.2-t2v-plus", "limits")}
+    # Without native audio (and within the silent model's 5 s) the configuration order wins again.
+    assert _plan(reg, _video(audio=None, duration=5)).candidates[0].model == "wan2.2-t2v-plus"
 
 
 def test_retired_models_are_skipped_and_deprecated_ones_rank_last():
@@ -331,7 +331,7 @@ def test_same_model_fallback_tries_other_backends_of_the_pinned_model():
     a = Scripted("a", ["veo-3.1-generate-preview"],
                  [ProviderRequestError("429", status_code=429, provider="a")])
     b = Scripted("b", ["veo-3.1-generate-preview"])
-    c = Scripted("c", ["veo-2.0-generate-001"])
+    c = Scripted("c", ["wan2.2-t2v-plus"])
     task = asyncio.run(_service(_registry([a, b, c])).create(
         _video("veo-3.1-generate-preview"), key=KeyConfig(id="t", key=""),
         routing=RoutingDirective(fallback="same_model")))
@@ -344,9 +344,9 @@ def test_same_model_fallback_tries_other_backends_of_the_pinned_model():
 def test_any_fallback_moves_to_another_model_after_the_pinned_one_fails():
     a = Scripted("a", ["veo-3.1-generate-preview"],
                  [ProviderRequestError("503", status_code=503, provider="a")])
-    b = Scripted("b", ["veo-2.0-generate-001"])
+    b = Scripted("b", ["wan2.2-t2v-plus"])
     task = asyncio.run(_service(_registry([a, b])).create(
-        _video("veo-3.1-generate-preview"), key=KeyConfig(id="t", key=""),
+        _video("veo-3.1-generate-preview", duration=5), key=KeyConfig(id="t", key=""),
         routing=RoutingDirective(fallback="any")))
     assert task.provider == "b"
     assert task.routing["fallback_reason"] == "provider_unavailable"
@@ -355,7 +355,7 @@ def test_any_fallback_moves_to_another_model_after_the_pinned_one_fails():
 def test_client_errors_never_fall_back():
     a = Scripted("a", ["veo-3.1-generate-preview"],
                  [GatewayError("bad prompt", code="invalid_request_error", status_code=400)])
-    b = Scripted("b", ["veo-2.0-generate-001"])
+    b = Scripted("b", ["wan2.2-t2v-plus"])
     with pytest.raises(GatewayError):
         asyncio.run(_service(_registry([a, b])).create(_video(), key=KeyConfig(id="t", key="")))
     assert b.calls == []
@@ -580,7 +580,7 @@ def _poll(client: TestClient, url: str) -> dict:
 
 
 def test_task_resource_reports_routing_and_the_estimated_cost():
-    app = _app([Scripted("silent", ["veo-2.0-generate-001"]),
+    app = _app([Scripted("silent", ["wan2.2-t2v-plus"]),
                 Scripted("loud", ["veo-3.1-generate-preview"])])
     with TestClient(app) as client:
         created = client.post("/v1/videos", json={
@@ -622,7 +622,7 @@ def test_fallback_stamps_the_served_model():
 def test_estimate_endpoint_explains_the_route_without_creating_a_task():
     loud = Scripted("loud", ["veo-3.1-generate-preview"])
     fast = Scripted("fast", ["veo-3.1-fast-generate-preview"])
-    app = _app([Scripted("openai-video", ["sora-2"]), Scripted("silent", ["veo-2.0-generate-001"]),
+    app = _app([Scripted("openai-video", ["sora-2"]), Scripted("silent", ["wan2.2-t2v-plus"]),
                 loud, fast])
     with TestClient(app) as client:
         res = client.post("/v1/videos/estimate", json={
@@ -638,7 +638,7 @@ def test_estimate_endpoint_explains_the_route_without_creating_a_task():
     assert by_model["veo-3.1-generate-preview"]["reason"] == "max_cost"
     assert by_model["sora-2"] == {"model": "sora-2", "lifecycle": "retired", "admissible": False,
                                   "reason": "retired"}
-    assert by_model["veo-2.0-generate-001"]["reason"] == "limits"
+    assert by_model["wan2.2-t2v-plus"]["reason"] == "limits"
     assert loud.calls == [] and fast.calls == []
 
 

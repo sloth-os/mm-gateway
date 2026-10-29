@@ -86,8 +86,8 @@ that accept reference audio and render audio remain candidates.
 Two more flags tell a client how to shape a request: `exclusive_frames_and_references: true` (a `first_frame` or
 `last_frame` cannot be combined with reference images, videos or audio in one request: the adapter keeps the frames
 and drops the references, so the client chooses the mode) and `supports_negative_prompt: false` (the model has no
-negative prompt field: `negative_prompt` is dropped and exclusions belong in the prompt). Both are documented for
-Wan 3.0.
+negative prompt field: `negative_prompt` is dropped and exclusions belong in the prompt). The first is documented for
+Wan 3.0, Seedance 2.x and MiniMax H3, the second for Wan 3.0 and Gemini Omni Flash.
 
 ## Capabilities: multi-shot and enhancement
 

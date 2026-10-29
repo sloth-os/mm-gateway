@@ -45,7 +45,7 @@ _CODEC_BY_FORMAT = {"wav": "wav", "mp3": "mp3", "ogg": "ogg", "aac": "aac"}
 
 class ElevenLabsProvider(ElevenLabsSpeechMixin, MusicProvider):
     name = "elevenlabs"
-    music_models: ClassVar[list[str]] = ["music_v1", "music_v2"]
+    music_models: ClassVar[list[str]] = ["music_v1", "music_v2", "music_v2_5"]
 
     def __init__(self, backend):
         super().__init__(backend)
